@@ -1,0 +1,21 @@
+# Binary
+/gent
+
+# SQLite databases
+*.db
+*.db-wal
+*.db-shm
+
+# Unix sockets
+*.sock
+
+# Go build cache
+/vendor/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
