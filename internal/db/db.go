@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"gent/internal/model"
+
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/stepangranat/gent/internal/model"
 )
 
 // DB wraps a SQLite connection and provides all persistence operations.
@@ -260,13 +261,13 @@ type scanner interface {
 
 func scanInstance(s scanner) (*model.ProcessInstance, error) {
 	var (
-		inst        model.ProcessInstance
-		queueRaw    string
-		ctxRaw      string
-		nextRetry   sql.NullString
-		statusStr   string
-		createdStr  string
-		updatedStr  string
+		inst       model.ProcessInstance
+		queueRaw   string
+		ctxRaw     string
+		nextRetry  sql.NullString
+		statusStr  string
+		createdStr string
+		updatedStr string
 	)
 	err := s.Scan(
 		&inst.ID, &inst.ProcessName, &inst.ProcessVersion,

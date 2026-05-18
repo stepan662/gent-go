@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/stepangranat/gent/internal/api"
-	"github.com/stepangranat/gent/internal/db"
-	"github.com/stepangranat/gent/internal/engine"
+	"gent/internal/api"
+	"gent/internal/db"
+	"gent/internal/engine"
 )
 
 func main() {

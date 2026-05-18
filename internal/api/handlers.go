@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/stepangranat/gent/internal/db"
-	"github.com/stepangranat/gent/internal/model"
+	"gent/internal/db"
+	"gent/internal/model"
 )
 
 // Handlers holds business logic for all API operations.
@@ -76,21 +76,14 @@ type Reply struct {
 
 // Handle dispatches an incoming Envelope and returns a Reply.
 // This is the single entry-point used by all transports (HTTP, TCP, UDS).
+// Actions are defined in actions.go — add a new entry there to register a new action.
 func (h *Handlers) Handle(env Envelope) Reply {
-	switch env.Action {
-	case "put_definition":
-		return h.putDefinition(env.Payload)
-	case "start_instance":
-		return h.startInstance(env.Payload)
-	case "get_instance":
-		return h.getInstance(env.ID)
-	case "list_definitions":
-		return h.listDefinitions()
-	case "list_instances":
-		return h.listInstances(env.Payload)
-	default:
-		return errReply(fmt.Errorf("unknown action %q", env.Action))
+	for i := range registry {
+		if registry[i].Name == env.Action {
+			return registry[i].handle(h, env)
+		}
 	}
+	return errReply(fmt.Errorf("unknown action %q", env.Action))
 }
 
 func (h *Handlers) putDefinition(raw json.RawMessage) Reply {

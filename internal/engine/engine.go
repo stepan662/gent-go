@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/stepangranat/gent/internal/db"
-	"github.com/stepangranat/gent/internal/model"
-	"github.com/stepangranat/gent/internal/transport"
+	"gent/internal/db"
+	"gent/internal/model"
+	"gent/internal/transport"
 )
 
 // Engine is the main orchestration loop. It polls SQLite for pending instances

@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/stepangranat/gent/internal/model"
+	"gent/internal/model"
 )
 
 // Request is the message the engine sends to a service.

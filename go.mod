@@ -1,4 +1,4 @@
-module github.com/stepangranat/gent
+module gent
 
 go 1.25
 

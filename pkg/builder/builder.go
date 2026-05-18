@@ -20,7 +20,7 @@ package builder
 import (
 	"fmt"
 
-	"github.com/stepangranat/gent/internal/model"
+	"gent/internal/model"
 )
 
 // ProcessBuilder constructs a ProcessDefinition using method chaining.
