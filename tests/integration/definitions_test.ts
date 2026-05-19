@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from "jsr:@std/assert";
+import { expect, test } from "bun:test";
 import { client } from "../helpers/client.ts";
 
 const validDef = {
@@ -16,25 +16,22 @@ const validDef = {
   ],
 };
 
-Deno.test("PUT /definitions — registers a new definition", async () => {
+test("PUT /definitions — registers a new definition", async () => {
   const { data, error } = await client.PUT("/definitions", { body: validDef });
 
-  assertEquals(error, undefined, `unexpected error: ${JSON.stringify(error)}`);
-  assertEquals(data?.name, validDef.name);
+  expect(error).toBeUndefined();
+  expect(data?.name).toBe(validDef.name);
 });
 
-Deno.test("GET /definitions — lists registered definitions", async () => {
+test("GET /definitions — lists registered definitions", async () => {
   await client.PUT("/definitions", { body: validDef });
 
   const { data, error } = await client.GET("/definitions");
-  assertEquals(error, undefined);
-
-  const defs = data!;
-  const found = defs.some((d) => d.name === validDef.name);
-  assertEquals(found, true, `definition ${validDef.name} not found in list`);
+  expect(error).toBeUndefined();
+  expect(data!.some((d) => d.name === validDef.name)).toBe(true);
 });
 
-Deno.test("PUT /definitions — rejects task step without endpoint", async () => {
+test("PUT /definitions — rejects task step without endpoint", async () => {
   const { data, error } = await client.PUT("/definitions", {
     body: {
       name: "bad",
@@ -50,11 +47,11 @@ Deno.test("PUT /definitions — rejects task step without endpoint", async () =>
     },
   });
 
-  assertEquals(error, undefined);
-  assertEquals(data?.name, "bad");
+  expect(error).toBeUndefined();
+  expect(data?.name).toBe("bad");
 });
 
-Deno.test("PUT /definitions — rejects unknown step type", async () => {
+test("PUT /definitions — rejects unknown step type", async () => {
   const { data, error } = await client.PUT("/definitions", {
     body: {
       name: "bad",
@@ -63,26 +60,24 @@ Deno.test("PUT /definitions — rejects unknown step type", async () => {
     },
   });
 
-  assertNotEquals(error, undefined);
-  assertEquals(data, undefined);
+  expect(error).toBeDefined();
+  expect(data).toBeUndefined();
 });
 
-Deno.test("PUT /definitions — accepts valid definition", async () => {
+test("PUT /definitions — accepts valid definition", async () => {
   const { data, error } = await client.PUT("/definitions", {
     body: {
       name: "valid",
       version: 1,
       input_schema: {
         type: "object",
-        properties: {
-          foo: { type: "string" },
-        },
+        properties: { foo: { type: "string" } },
         required: ["foo"],
       },
       steps: [{ type: "task", id: "t1" }],
     },
   });
 
-  assertNotEquals(error, undefined);
-  assertEquals(data, undefined);
+  expect(error).toBeDefined();
+  expect(data).toBeUndefined();
 });

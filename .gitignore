@@ -21,3 +21,4 @@
 *.swp
 openapi.json
 tests/generated/
+tests/node_modules/

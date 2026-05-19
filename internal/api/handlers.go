@@ -27,9 +27,9 @@ type PutDefinitionReq struct {
 }
 
 type StartInstanceReq struct {
-	Process string          `json:"process"`
-	Version *int            `json:"version"` // nil = latest
-	Input   *map[string]any `json:"input,omitempty"`
+	Process string `json:"process"`
+	Version *int   `json:"version"` // nil = latest
+	Input   *any   `json:"input,omitempty"`
 }
 
 type StartInstanceResp struct {
@@ -126,12 +126,12 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 		return errReply(err)
 	}
 
-	input := req.Input
-	if input == nil {
-		input = &map[string]any{}
+	var input any
+	if req.Input != nil {
+		input = *req.Input
 	}
 
-	if err := def.ValidateInput(*input); err != nil {
+	if err := def.ValidateInput(input); err != nil {
 		return errReply(fmt.Errorf("input validation: %w", err))
 	}
 

@@ -20,13 +20,13 @@ type actionDef struct {
 	Tags    []string
 
 	// Req is a zero-value of the request body type (nil = no body).
-	Req interface{}
+	Req any
 
 	// PathQuery is a struct with path/query tagged fields for OpenAPI parameter generation.
-	PathQuery interface{}
+	PathQuery any
 
 	// Resp is a zero-value of the response data type.
-	Resp interface{}
+	Resp any
 
 	// fromHTTP extracts an Envelope from an HTTP request.
 	// nil = default: decode body as JSON payload.
@@ -99,7 +99,7 @@ var registry = func() []actionDef {
 					},
 				},
 			},
-			Resp: map[string]interface{}{"name": "order_pipeline", "version": 1, "saved": true},
+			Resp: map[string]any{"name": "order_pipeline", "version": 1, "saved": true},
 			handle: func(h *Handlers, env Envelope) Reply {
 				return h.putDefinition(env.Payload)
 			},
@@ -124,11 +124,10 @@ var registry = func() []actionDef {
 			Path:    "/instances",
 			Summary: "Start a new process instance (omit version to use latest)",
 			Tags:    []string{"Instances"},
-			Req: StartInstanceReq{
-				Process: "order_pipeline",
-				Version: &v1,
-				Input:   &map[string]any{"order_id": 42},
-			},
+			Req: func() StartInstanceReq {
+				input := any(map[string]any{"order_id": 42})
+				return StartInstanceReq{Process: "order_pipeline", Version: &v1, Input: &input}
+			}(),
 			Resp: StartInstanceResp{
 				ID: "550e8400-e29b-41d4-a716-446655440000", Process: "order_pipeline",
 				Version: 1, Status: model.StatusRunning,
@@ -146,7 +145,7 @@ var registry = func() []actionDef {
 			PathQuery: struct {
 				Status string `query:"status" enum:"running,completed,failed" description:"Filter by status"`
 			}{},
-			Resp:    []InstanceStatusResp{},
+			Resp: []InstanceStatusResp{},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
 				b, _ := json.Marshal(ListInstancesReq{Status: r.URL.Query().Get("status")})
 				return Envelope{Action: "list_instances", Payload: b}, nil

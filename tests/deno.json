@@ -1,9 +1,0 @@
-{
-  "tasks": {
-    "test": "deno test --allow-net --allow-env integration/",
-    "generate": "deno run -A npm:openapi-typescript@7 ../openapi.json -o generated/api.ts"
-  },
-  "imports": {
-    "openapi-fetch": "npm:openapi-fetch@^0.17.0"
-  }
-}

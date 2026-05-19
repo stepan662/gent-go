@@ -1,0 +1,15 @@
+{
+  "name": "gent-tests",
+  "type": "module",
+  "scripts": {
+    "test": "bun test integration/",
+    "generate": "openapi-typescript ../openapi.json -o generated/api.ts"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "openapi-typescript": "^7.13.0"
+  }
+}

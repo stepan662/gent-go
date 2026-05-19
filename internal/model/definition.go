@@ -89,7 +89,7 @@ func checkSchemaDoc(field string, schema map[string]any) error {
 }
 
 // ValidateInput checks input data against InputSchema. No-op if InputSchema is nil.
-func (d *ProcessDefinition) ValidateInput(input map[string]any) error {
+func (d *ProcessDefinition) ValidateInput(input any) error {
 	return validateSchema(d.InputSchema, input)
 }
 
@@ -98,7 +98,7 @@ func (s *Step) ValidateOutput(output map[string]any) error {
 	return validateSchema(s.OutputSchema, output)
 }
 
-func validateSchema(schema map[string]any, data map[string]any) error {
+func validateSchema(schema map[string]any, data any) error {
 	if len(schema) == 0 {
 		return nil
 	}
