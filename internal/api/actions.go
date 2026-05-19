@@ -85,7 +85,7 @@ var registry = func() []actionDef {
 					},
 					{
 						Type: model.StepTypeConditional, ID: "check_payment",
-						Condition: "context.charged == true",
+						Condition: "outputs.charge.charged == true",
 						Then: []*model.Step{{
 							Type: model.StepTypeTask, ID: "ship",
 							Transport: model.TransportHTTP, Endpoint: "http://localhost:9002/ship",

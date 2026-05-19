@@ -13,11 +13,34 @@ import (
 //	"context.amount > 1000 && context.user_verified"
 type Evaluator struct{}
 
+func evalEnv(contextData map[string]interface{}) map[string]interface{} {
+	env := map[string]interface{}{
+		"input":   contextData["input"],
+		"outputs": contextData["outputs"],
+	}
+	if env["outputs"] == nil {
+		env["outputs"] = map[string]interface{}{}
+	}
+	return env
+}
+
+// EvalAny evaluates an expression and returns the result as any value.
+func (Evaluator) EvalAny(expression string, contextData map[string]interface{}) (any, error) {
+	env := evalEnv(contextData)
+	program, err := expr.Compile(expression, expr.Env(env))
+	if err != nil {
+		return nil, fmt.Errorf("compile expression %q: %w", expression, err)
+	}
+	result, err := expr.Run(program, env)
+	if err != nil {
+		return nil, fmt.Errorf("eval expression %q: %w", expression, err)
+	}
+	return result, nil
+}
+
 // Eval evaluates the expression string against contextData and returns the boolean result.
 func (Evaluator) Eval(expression string, contextData map[string]interface{}) (bool, error) {
-	env := map[string]interface{}{
-		"context": contextData,
-	}
+	env := evalEnv(contextData)
 
 	program, err := expr.Compile(expression, expr.Env(env), expr.AsBool())
 	if err != nil {

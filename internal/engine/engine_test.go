@@ -15,12 +15,12 @@ func TestEvaluator(t *testing.T) {
 		want    bool
 		wantErr bool
 	}{
-		{"context.ok == true", map[string]interface{}{"ok": true}, true, false},
-		{"context.ok == true", map[string]interface{}{"ok": false}, false, false},
-		{"context.amount > 100", map[string]interface{}{"amount": 200}, true, false},
-		{"context.amount > 100", map[string]interface{}{"amount": 50}, false, false},
-		{"context.a == true && context.b == true", map[string]interface{}{"a": true, "b": true}, true, false},
-		{"context.a == true && context.b == true", map[string]interface{}{"a": true, "b": false}, false, false},
+		{"outputs.step.ok == true", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"ok": true}}}, true, false},
+		{"outputs.step.ok == true", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"ok": false}}}, false, false},
+		{"outputs.step.amount > 100", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"amount": 200}}}, true, false},
+		{"outputs.step.amount > 100", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"amount": 50}}}, false, false},
+		{"input.a == true && input.b == true", map[string]interface{}{"input": map[string]any{"a": true, "b": true}}, true, false},
+		{"input.a == true && input.b == true", map[string]interface{}{"input": map[string]any{"a": true, "b": false}}, false, false},
 		{"invalid %%% expr", nil, false, true},
 	}
 
@@ -52,14 +52,14 @@ func TestStepQueueConditional(t *testing.T) {
 	conditional := &model.Step{
 		Type:      model.StepTypeConditional,
 		ID:        "check",
-		Condition: "context.paid == true",
+		Condition: "outputs.pay.paid == true",
 		Then:      []*model.Step{shipStep},
 		Else:      []*model.Step{refundStep},
 	}
 
 	inst := &model.ProcessInstance{
 		StepQueue:   []*model.Step{conditional, followUp},
-		ContextData: map[string]interface{}{"paid": true},
+		ContextData: map[string]interface{}{"outputs": map[string]any{"pay": map[string]any{"paid": true}}},
 	}
 
 	eval := Evaluator{}

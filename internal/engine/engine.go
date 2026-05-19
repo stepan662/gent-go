@@ -115,10 +115,15 @@ func (e *Engine) execTask(ctx context.Context, inst *model.ProcessInstance, step
 	taskCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	data, err := e.buildTaskData(inst, step)
+	if err != nil {
+		return e.failInstance(inst, fmt.Sprintf("step %q params: %v", step.ID, err))
+	}
+
 	req := transport.Request{
 		InstanceID: inst.ID,
 		StepID:     step.ID,
-		Data:       inst.ContextData,
+		Data:       data,
 	}
 
 	e.log.Debug("executing step", "id", inst.ID, "step", step.ID, "transport", step.Transport)
@@ -135,10 +140,11 @@ func (e *Engine) execTask(ctx context.Context, inst *model.ProcessInstance, step
 		return e.failInstance(inst, fmt.Sprintf("step %q output validation: %v", step.ID, err))
 	}
 
-	// Merge response output into context.
-	for k, v := range resp.Output {
-		inst.ContextData[k] = v
+	// Store output under outputs.<step_id> for unambiguous addressing.
+	if inst.ContextData["outputs"] == nil {
+		inst.ContextData["outputs"] = map[string]any{}
 	}
+	inst.ContextData["outputs"].(map[string]any)[step.ID] = resp.Output
 
 	// Step succeeded: pop it from the queue.
 	inst.StepQueue = inst.StepQueue[1:]
@@ -165,6 +171,21 @@ func (e *Engine) handleStepError(inst *model.ProcessInstance, step *model.Step, 
 		return e.db.UpdateInstance(inst)
 	}
 	return e.failInstance(inst, fmt.Sprintf("step %q failed after %d retries: %s", step.ID, maxRetries, errMsg))
+}
+
+func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (map[string]any, error) {
+	if len(step.Params) == 0 {
+		return inst.ContextData, nil
+	}
+	result := make(map[string]any, len(step.Params))
+	for name, expression := range step.Params {
+		val, err := e.eval.EvalAny(expression, inst.ContextData)
+		if err != nil {
+			return nil, fmt.Errorf("param %q: %w", name, err)
+		}
+		result[name] = val
+	}
+	return result, nil
 }
 
 func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error {
