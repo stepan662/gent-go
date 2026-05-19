@@ -131,6 +131,10 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 		input = &map[string]any{}
 	}
 
+	if err := def.ValidateInput(*input); err != nil {
+		return errReply(fmt.Errorf("input validation: %w", err))
+	}
+
 	inst := &model.ProcessInstance{
 		ID:             uuid.NewString(),
 		ProcessName:    def.Name,

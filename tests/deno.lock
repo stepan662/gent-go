@@ -3,6 +3,7 @@
   "specifiers": {
     "jsr:@std/assert@*": "1.0.15",
     "jsr:@std/internal@^1.0.12": "1.0.12",
+    "npm:openapi-fetch@*": "0.17.0",
     "npm:openapi-fetch@0.17": "0.17.0",
     "npm:openapi-typescript@7": "7.13.0_typescript@5.9.3"
   },

@@ -131,6 +131,10 @@ func (e *Engine) execTask(ctx context.Context, inst *model.ProcessInstance, step
 		return e.handleStepError(inst, step, resp.Error)
 	}
 
+	if err := step.ValidateOutput(resp.Output); err != nil {
+		return e.failInstance(inst, fmt.Sprintf("step %q output validation: %v", step.ID, err))
+	}
+
 	// Merge response output into context.
 	for k, v := range resp.Output {
 		inst.ContextData[k] = v

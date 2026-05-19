@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "jsr:@std/assert";
+import { assertEquals, assertExists, assertNotEquals } from "jsr:@std/assert";
 import { client } from "../helpers/client.ts";
 
 const processName = `test_proc_${crypto.randomUUID()}`;
@@ -9,6 +9,13 @@ async function ensureDefinition() {
     body: {
       name: processName,
       version: 1,
+      input_schema: {
+        type: "object",
+        properties: {
+          order_id: { type: "number" },
+        },
+        required: ["order_id"],
+      },
       steps: [
         {
           type: "task" as const,
@@ -40,11 +47,13 @@ Deno.test("POST /instances — starts a new instance", async () => {
 Deno.test("GET /instances/{id} — returns instance status", async () => {
   await ensureDefinition();
 
-  const { data: startData } = await client.POST("/instances", {
-    body: { process: processName },
+  const instance = await client.POST("/instances", {
+    body: { process: processName, input: { order_id: 1 } },
   });
 
-  const id = startData!.id;
+  assertEquals(instance.error, undefined);
+
+  const id = instance.data!.id;
 
   const { data, error } = await client.GET("/instances/{id}", {
     params: { path: { id } },
@@ -54,9 +63,10 @@ Deno.test("GET /instances/{id} — returns instance status", async () => {
 });
 
 Deno.test("GET /instances/{id} — returns error for unknown ID", async () => {
-  const { data } = await client.GET("/instances/{id}", {
+  const { data, error } = await client.GET("/instances/{id}", {
     params: { path: { id: "00000000-0000-0000-0000-000000000000" } },
   });
+  assertNotEquals(error, undefined);
   assertEquals(data?.context, undefined);
 });
 
@@ -64,4 +74,15 @@ Deno.test("GET /instances — lists instances", async () => {
   const { data, error } = await client.GET("/instances");
   assertEquals(error, undefined);
   assertEquals(Array.isArray(data), true);
+});
+
+Deno.test("GET /instances/{id} — fails when input is invalid", async () => {
+  await ensureDefinition();
+
+  const { data, error } = await client.POST("/instances", {
+    body: { process: processName, input: { order_id: "hi" } },
+  });
+
+  assertNotEquals(error, undefined);
+  assertEquals(data, undefined);
 });

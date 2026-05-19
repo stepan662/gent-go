@@ -7,33 +7,31 @@ import (
 	"gent/internal/model"
 )
 
-// queryParam describes a single HTTP query parameter for docs and routing.
-type queryParam struct {
-	Name     string
-	Desc     string
-	Required bool
-	Enum     []string
-}
-
 // actionDef is the single source of truth for one API action.
 // It drives three things simultaneously:
 //   - HTTP routing (Method + Path)
 //   - TCP/UDS envelope dispatch (Name)
-//   - Swagger documentation (Summary, Tags, Req, Resp, QueryParams)
+//   - OpenAPI documentation (schemas reflected from Go types)
 type actionDef struct {
-	Name        string
-	Method      string
-	Path        string
-	Summary     string
-	Tags        []string
-	QueryParams []queryParam
-	// Req is a concrete example of the request body (nil = no body).
+	Name    string
+	Method  string
+	Path    string
+	Summary string
+	Tags    []string
+
+	// Req is a zero-value of the request body type (nil = no body).
 	Req interface{}
-	// Resp is a concrete example of the response data field.
+
+	// PathQuery is a struct with path/query tagged fields for OpenAPI parameter generation.
+	PathQuery interface{}
+
+	// Resp is a zero-value of the response data type.
 	Resp interface{}
+
 	// fromHTTP extracts an Envelope from an HTTP request.
 	// nil = default: decode body as JSON payload.
 	fromHTTP func(r *http.Request) (Envelope, error)
+
 	// handle is the actual handler, shared by HTTP, TCP, and UDS.
 	handle func(h *Handlers, env Envelope) Reply
 }
@@ -66,11 +64,24 @@ var registry = func() []actionDef {
 			Req: model.ProcessDefinition{
 				Name:    "order_pipeline",
 				Version: 1,
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"order_id": map[string]any{"type": "integer"},
+					},
+					"required": []string{"order_id"},
+				},
 				Steps: []*model.Step{
 					{
 						Type: model.StepTypeTask, ID: "charge",
 						Transport: model.TransportHTTP, Endpoint: "http://localhost:9001/charge",
 						TimeoutMs: 5000, Retries: 3,
+						OutputSchema: map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"charged": map[string]any{"type": "boolean"},
+							},
+						},
 					},
 					{
 						Type: model.StepTypeConditional, ID: "check_payment",
@@ -127,14 +138,14 @@ var registry = func() []actionDef {
 			},
 		},
 		{
-			Name:   "list_instances",
-			Method: http.MethodGet,
-			Path:   "/instances",
-			QueryParams: []queryParam{
-				{Name: "status", Desc: "Filter by status", Enum: []string{"running", "completed", "failed"}},
-			},
+			Name:    "list_instances",
+			Method:  http.MethodGet,
+			Path:    "/instances",
 			Summary: "List process instances",
 			Tags:    []string{"Instances"},
+			PathQuery: struct {
+				Status string `query:"status" enum:"running,completed,failed" description:"Filter by status"`
+			}{},
 			Resp:    []InstanceStatusResp{},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
 				b, _ := json.Marshal(ListInstancesReq{Status: r.URL.Query().Get("status")})
@@ -150,6 +161,9 @@ var registry = func() []actionDef {
 			Path:    "/instances/{id}",
 			Summary: "Get status of a process instance",
 			Tags:    []string{"Instances"},
+			PathQuery: struct {
+				ID string `path:"id" format:"uuid"`
+			}{},
 			Resp: InstanceStatusResp{
 				ID: "550e8400-e29b-41d4-a716-446655440000", Process: "order_pipeline",
 				Version: 1, Status: model.StatusCompleted,

@@ -19,7 +19,6 @@ const validDef = {
 Deno.test("PUT /definitions — registers a new definition", async () => {
   const { data, error } = await client.PUT("/definitions", { body: validDef });
 
-  console.log({ data, error });
   assertEquals(error, undefined, `unexpected error: ${JSON.stringify(error)}`);
   assertEquals(data?.name, validDef.name);
 });
@@ -61,6 +60,26 @@ Deno.test("PUT /definitions — rejects unknown step type", async () => {
       name: "bad",
       version: 1,
       steps: [{ type: "parallel", id: "p1" }],
+    },
+  });
+
+  assertNotEquals(error, undefined);
+  assertEquals(data, undefined);
+});
+
+Deno.test("PUT /definitions — accepts valid definition", async () => {
+  const { data, error } = await client.PUT("/definitions", {
+    body: {
+      name: "valid",
+      version: 1,
+      input_schema: {
+        type: "object",
+        properties: {
+          foo: { type: "string" },
+        },
+        required: ["foo"],
+      },
+      steps: [{ type: "task", id: "t1" }],
     },
   });
 

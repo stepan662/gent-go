@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -75,8 +76,8 @@ func addOperation(r *openapi31.Reflector, a actionDef) {
 	}
 
 	// Path and query parameters — struct with path/query tagged fields.
-	if a.QueryParams != nil {
-		op.AddReqStructure(a.QueryParams)
+	if a.PathQuery != nil {
+		op.AddReqStructure(a.PathQuery)
 	}
 
 	// Response data — reflect zero value of the type.
@@ -87,7 +88,9 @@ func addOperation(r *openapi31.Reflector, a actionDef) {
 		})
 	}
 
-	_ = r.AddOperation(op)
+	if err := r.AddOperation(op); err != nil {
+		panic(fmt.Sprintf("openapi: %s %s: %v", a.Method, a.Path, err))
+	}
 }
 
 // zeroOf returns a zero value of the same type as v.
