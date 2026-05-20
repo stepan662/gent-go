@@ -29,6 +29,9 @@ test-unit:
 swagger:
 	$(BUILD_FLAGS) go run ./cmd/gentspec
 
+schema:
+	$(BUILD_FLAGS) go run ./cmd/gentschema $(ARGS)
+
 client: swagger
 	cd tests && bun run generate
 

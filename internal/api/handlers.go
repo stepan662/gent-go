@@ -93,6 +93,9 @@ func (h *Handlers) putDefinition(raw json.RawMessage) Reply {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return errReply(fmt.Errorf("decode: %w", err))
 	}
+	if err := req.Normalize(); err != nil {
+		return errReply(err)
+	}
 	if err := req.Validate(); err != nil {
 		return errReply(err)
 	}

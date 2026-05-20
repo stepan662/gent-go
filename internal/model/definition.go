@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 
+	"gent/internal/schema"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/xeipuuv/gojsonschema"
 )
@@ -52,6 +54,38 @@ type ProcessDefinition struct {
 	Version     int            `json:"version"              validate:"min=1"`
 	Steps       []*Step        `json:"steps"                validate:"required,min=1,dive"`
 	InputSchema map[string]any `json:"input_schema,omitempty"`
+}
+
+// Normalize normalizes InputSchema and all step OutputSchemas in-place using the
+// schema package (flattens $defs to root, removes unused definitions, rewrites $refs).
+func (d *ProcessDefinition) Normalize() error {
+	if len(d.InputSchema) > 0 {
+		normalized, err := schema.Normalize(d.InputSchema)
+		if err != nil {
+			return fmt.Errorf("input_schema: %w", err)
+		}
+		d.InputSchema = normalized
+	}
+	return normalizeStepSchemas(d.Steps)
+}
+
+func normalizeStepSchemas(steps []*Step) error {
+	for _, s := range steps {
+		if len(s.OutputSchema) > 0 {
+			normalized, err := schema.Normalize(s.OutputSchema)
+			if err != nil {
+				return fmt.Errorf("step %q output_schema: %w", s.ID, err)
+			}
+			s.OutputSchema = normalized
+		}
+		if err := normalizeStepSchemas(s.Then); err != nil {
+			return err
+		}
+		if err := normalizeStepSchemas(s.Else); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Validate checks the definition and all its steps against the struct tag rules,
