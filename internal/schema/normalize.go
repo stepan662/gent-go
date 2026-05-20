@@ -2,8 +2,11 @@
 //
 // Supported subset:
 //   - $defs at any nesting level (collected and flattened to root)
-//   - $ref must start with "#/$defs/" — absolute, internal only
-//   - No external refs, no relative paths, no $anchor
+//   - $ref must start with "#/$defs/<name>" or "#<anchor>" — absolute, internal only
+//   - $anchor is supported but scoped to its $id resource per the JSON Schema spec;
+//     an anchor inside a $defs entry that carries $id is only reachable from within
+//     that resource, not from the root via "#anchorName"
+//   - No external refs, no relative paths
 //
 // Normalizer guarantees on output:
 //   - $defs appear only at the root
@@ -18,6 +21,7 @@ import (
 
 type normContext struct {
 	definitions map[string]*Def
+	anchors     map[string]*Def // anchor name -> Def
 	references  []*Ref
 }
 
@@ -48,15 +52,27 @@ func (e ErrUnsupportedRef) Error() string {
 func Normalize(schema map[string]any) (map[string]any, error) {
 	ctx := &normContext{
 		definitions: make(map[string]*Def),
+		anchors:     make(map[string]*Def),
 		references:  make([]*Ref, 0),
 	}
 
-	// Phase 1: collect all definitions and references from the whole tree.
-	walkTree(schema, nil, func(node map[string]any, path []string) {
+	// Phase 1: collect all definitions, anchors, and references from the whole tree.
+	walkTree(schema, nil, func(node map[string]any, path []string, depth int) {
 		if len(path) >= 2 && path[len(path)-2] == "$defs" {
 			key := strings.Join(path, "/")
 			if _, exists := ctx.definitions[key]; !exists {
-				ctx.definitions[key] = &Def{OriginalName: path[len(path)-1], Schema: node}
+				def := &Def{OriginalName: path[len(path)-1], Schema: node}
+				ctx.definitions[key] = def
+				if anchor, ok := node["$anchor"].(string); ok && depth == 0 {
+					ctx.anchors[anchor] = def
+				}
+			}
+		} else if anchor, ok := node["$anchor"].(string); ok && depth == 0 {
+			key := strings.Join(append(cp(path), "$anchor", anchor), "/")
+			if _, exists := ctx.definitions[key]; !exists {
+				def := &Def{OriginalName: anchor, Schema: node}
+				ctx.definitions[key] = def
+				ctx.anchors[anchor] = def
 			}
 		}
 		if refVal, ok := node["$ref"].(string); ok {
@@ -66,24 +82,26 @@ func Normalize(schema map[string]any) (map[string]any, error) {
 
 	// Phase 2: resolve each ref to its target definition and mark it as used.
 	for _, ref := range ctx.references {
-		targetPath, err := resolveRefPath(ref.RefValue)
+		def, err := ctx.resolveRef(ref.RefValue)
 		if err != nil {
 			return nil, err
 		}
-		if def := ctx.resolveDef(targetPath); def != nil {
+		if def != nil {
 			def.Used = true
 		}
 	}
 
 	// Phase 3: clean $defs and $id from every node in the tree.
-	walkTree(schema, nil, func(node map[string]any, _ []string) {
+	walkTree(schema, nil, func(node map[string]any, _ []string, _ int) {
 		delete(node, "$id")
 		delete(node, "$defs")
+		delete(node, "$anchor")
 	})
 	for _, def := range ctx.definitions {
-		walkTree(def.Schema, nil, func(node map[string]any, _ []string) {
+		walkTree(def.Schema, nil, func(node map[string]any, _ []string, _ int) {
 			delete(node, "$id")
 			delete(node, "$defs")
+			delete(node, "$anchor")
 		})
 	}
 
@@ -99,8 +117,8 @@ func Normalize(schema map[string]any) (map[string]any, error) {
 
 	// Rewrite $ref values to the new flat paths.
 	for _, ref := range ctx.references {
-		targetPath, _ := resolveRefPath(ref.RefValue)
-		if def := ctx.resolveDef(targetPath); def != nil && def.Used {
+		def, _ := ctx.resolveRef(ref.RefValue)
+		if def != nil && def.Used {
 			ref.Schema["$ref"] = "#/$defs/" + def.NewName
 		}
 	}
@@ -111,37 +129,64 @@ func Normalize(schema map[string]any) (map[string]any, error) {
 	return schema, nil
 }
 
-// walkTree calls fn(node, path) for the given node and all nested schema nodes,
-// covering every JSON Schema keyword that can contain sub-schemas.
-func walkTree(schema map[string]any, path []string, fn func(map[string]any, []string)) {
-	if schema == nil {
-		return
+// walkTree calls fn(node, path, resourceDepth) for the given node and all nested
+// schema nodes, covering every JSON Schema keyword that can contain sub-schemas.
+// resourceDepth counts how many $id boundaries have been crossed from the root;
+// it starts at 0 and increments each time a non-root node carries $id.
+func walkTree(schema map[string]any, path []string, fn func(map[string]any, []string, int)) {
+	var walk func(map[string]any, []string, int)
+	walk = func(s map[string]any, p []string, depth int) {
+		if s == nil {
+			return
+		}
+		if _, hasID := s["$id"].(string); hasID && len(p) > 0 {
+			depth++
+		}
+		fn(s, p, depth)
+		for _, key := range []string{"$defs", "properties"} {
+			if next, ok := s[key].(map[string]any); ok {
+				for name, v := range next {
+					if sub, ok := v.(map[string]any); ok {
+						walk(sub, append(cp(p), key, name), depth)
+					}
+				}
+			}
+		}
+		for _, key := range []string{"items", "not", "additionalProperties", "if", "then", "else"} {
+			if sub, ok := s[key].(map[string]any); ok {
+				walk(sub, append(cp(p), key), depth)
+			}
+		}
+		for _, key := range []string{"oneOf", "anyOf", "allOf", "prefixItems"} {
+			if arr, ok := s[key].([]any); ok {
+				for i, item := range arr {
+					if sub, ok := item.(map[string]any); ok {
+						walk(sub, append(cp(p), key, fmt.Sprintf("%d", i)), depth)
+					}
+				}
+			}
+		}
 	}
-	fn(schema, path)
+	walk(schema, path, 0)
+}
 
-	for _, key := range []string{"$defs", "properties"} {
-		if next, ok := schema[key].(map[string]any); ok {
-			for name, v := range next {
-				if sub, ok := v.(map[string]any); ok {
-					walkTree(sub, append(cp(path), key, name), fn)
-				}
-			}
-		}
+// resolveRef resolves a $ref value to a Def. Supports both:
+//   - "#/$defs/<name>" — path-based ref
+//   - "#<anchor>"      — anchor-based ref (no slash after #)
+func (ctx *normContext) resolveRef(ref string) (*Def, error) {
+	if strings.HasPrefix(ref, "#/$defs/") {
+		path := strings.TrimPrefix(ref, "#/")
+		return ctx.resolveDef(path), nil
 	}
-	for _, key := range []string{"items", "not", "additionalProperties", "if", "then", "else"} {
-		if sub, ok := schema[key].(map[string]any); ok {
-			walkTree(sub, append(cp(path), key), fn)
+	if strings.HasPrefix(ref, "#") && !strings.HasPrefix(ref, "#/") {
+		anchor := strings.TrimPrefix(ref, "#")
+		def := ctx.anchors[anchor]
+		if def == nil {
+			return nil, ErrUnsupportedRef{Ref: ref}
 		}
+		return def, nil
 	}
-	for _, key := range []string{"oneOf", "anyOf", "allOf", "prefixItems"} {
-		if arr, ok := schema[key].([]any); ok {
-			for i, item := range arr {
-				if sub, ok := item.(map[string]any); ok {
-					walkTree(sub, append(cp(path), key, fmt.Sprintf("%d", i)), fn)
-				}
-			}
-		}
-	}
+	return nil, ErrUnsupportedRef{Ref: ref}
 }
 
 // resolveDef finds a definition by its absolute path, falling back to suffix
@@ -157,15 +202,6 @@ func (ctx *normContext) resolveDef(path string) *Def {
 		}
 	}
 	return nil
-}
-
-// resolveRefPath returns the path component after "#/" from a $ref value.
-// Only refs starting with "#/$defs/" are accepted.
-func resolveRefPath(ref string) (string, error) {
-	if !strings.HasPrefix(ref, "#/$defs/") {
-		return "", ErrUnsupportedRef{Ref: ref}
-	}
-	return strings.TrimPrefix(ref, "#/"), nil
 }
 
 func getUniqueName(name string, existing map[string]any) string {

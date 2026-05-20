@@ -448,3 +448,139 @@ func TestNormalize_additionalPropertiesRef(t *testing.T) {
 		t.Error("Unused should be pruned")
 	}
 }
+
+// --- $anchor tests ---
+
+func TestNormalize_anchorOnDefEntry(t *testing.T) {
+	// $anchor on a $defs entry: ref via "#anchor" should work same as "#/$defs/Name".
+	in := schema(t, `{
+		"properties": {
+			"a": {"$ref": "#my-type"}
+		},
+		"$defs": {
+			"MyType": {"$anchor": "my-type", "type": "string"}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs, ok := out["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("expected $defs at root")
+	}
+	if _, ok := defs["MyType"]; !ok {
+		t.Error("MyType should be in root $defs")
+	}
+	myType := defs["MyType"].(map[string]any)
+	if myType["$anchor"] != nil {
+		t.Error("$anchor should be removed from output")
+	}
+	props := out["properties"].(map[string]any)
+	aRef := props["a"].(map[string]any)["$ref"].(string)
+	if aRef != "#/$defs/MyType" {
+		t.Errorf("expected $ref rewritten to #/$defs/MyType, got %q", aRef)
+	}
+}
+
+func TestNormalize_anchorOnInlineSchema(t *testing.T) {
+	// $anchor on an inline schema (not in $defs) — should be extracted to root $defs.
+	in := schema(t, `{
+		"properties": {
+			"a": {"$anchor": "inline-type", "type": "integer"},
+			"b": {"$ref": "#inline-type"}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs, ok := out["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("expected $defs at root")
+	}
+	if _, ok := defs["inline-type"]; !ok {
+		t.Error("inline-type should be extracted to root $defs")
+	}
+	props := out["properties"].(map[string]any)
+	bRef := props["b"].(map[string]any)["$ref"].(string)
+	if bRef != "#/$defs/inline-type" {
+		t.Errorf("expected ref rewritten, got %q", bRef)
+	}
+}
+
+func TestNormalize_anchorUnused(t *testing.T) {
+	// An anchored def that is never referenced should be pruned.
+	in := schema(t, `{
+		"type": "object",
+		"$defs": {
+			"Used":   {"type": "string"},
+			"Unused": {"$anchor": "unused-anchor", "type": "integer"}
+		},
+		"properties": {"a": {"$ref": "#/$defs/Used"}}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs := out["$defs"].(map[string]any)
+	if _, ok := defs["Used"]; !ok {
+		t.Error("Used should be kept")
+	}
+	if _, ok := defs["Unused"]; ok {
+		t.Error("Unused should be pruned even though it has an anchor")
+	}
+}
+
+func TestNormalize_anchorInsideIDScopedDef_pathRefWorks(t *testing.T) {
+	// A $defs entry with $id introduces a sub-resource. Its $anchor is scoped to
+	// that resource and is NOT reachable via "#anchorName" from the root, but a
+	// path-based ref "#/$defs/Name" still resolves it normally.
+	in := schema(t, `{
+		"properties": {
+			"a": {"$ref": "#/$defs/ScopedDef"}
+		},
+		"$defs": {
+			"ScopedDef": {
+				"$id": "https://example.com/scoped",
+				"$anchor": "scoped-type",
+				"type": "string"
+			}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs, ok := out["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("expected $defs at root")
+	}
+	if _, ok := defs["ScopedDef"]; !ok {
+		t.Error("ScopedDef should be in root $defs")
+	}
+	scopedDef := defs["ScopedDef"].(map[string]any)
+	if scopedDef["$id"] != nil {
+		t.Error("$id should be removed from output")
+	}
+	if scopedDef["$anchor"] != nil {
+		t.Error("$anchor should be removed from output")
+	}
+	props := out["properties"].(map[string]any)
+	if got := props["a"].(map[string]any)["$ref"].(string); got != "#/$defs/ScopedDef" {
+		t.Errorf("expected $ref rewritten to #/$defs/ScopedDef, got %q", got)
+	}
+}
+
+func TestNormalize_anchorCrossIDBoundaryRejected(t *testing.T) {
+	// An anchor inside a $id sub-resource is not visible to the root resource.
+	// A ref "#anchorName" that crosses the $id boundary must be rejected.
+	in := schema(t, `{
+		"properties": {
+			"a": {"$ref": "#scoped-type"}
+		},
+		"$defs": {
+			"ScopedDef": {
+				"$id": "https://example.com/scoped",
+				"$anchor": "scoped-type",
+				"type": "string"
+			}
+		}
+	}`)
+	_, err := Normalize(in)
+	if err == nil {
+		t.Fatal("expected error for anchor ref crossing $id boundary, got nil")
+	}
+}
