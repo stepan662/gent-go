@@ -260,6 +260,131 @@ func TestProcessDefinition_Validate(t *testing.T) {
 	}
 }
 
+func TestProcessDefinition_ValidateInput_Nullable(t *testing.T) {
+	schema := map[string]any{
+		"type":     "object",
+		"required": []any{"id"},
+		"properties": map[string]any{
+			"id":      map[string]any{"type": "integer"},
+			"comment": map[string]any{"type": []any{"string", "null"}},
+		},
+	}
+	def := ProcessDefinition{
+		Name: "p", Version: 1,
+		InputSchema: schema,
+		Steps:       []*Step{{Type: StepTypeTask, ID: "s", Transport: TransportHTTP, Endpoint: "http://x"}},
+	}
+
+	tests := []struct {
+		name    string
+		input   any
+		wantErr bool
+	}{
+		{
+			name:  "required field present, nullable field absent",
+			input: map[string]any{"id": 1},
+		},
+		{
+			name:  "required field present, nullable field is null",
+			input: map[string]any{"id": 1, "comment": nil},
+		},
+		{
+			name:  "required field present, nullable field has value",
+			input: map[string]any{"id": 1, "comment": "hello"},
+		},
+		{
+			name:    "required field missing",
+			input:   map[string]any{"comment": "hello"},
+			wantErr: true,
+		},
+		{
+			name:    "required field is null (non-nullable)",
+			input:   map[string]any{"id": nil},
+			wantErr: true,
+		},
+		{
+			name:    "nullable field has wrong type",
+			input:   map[string]any{"id": 1, "comment": 42},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := def.ValidateInput(tt.input)
+			if tt.wantErr && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestStep_ValidateOutput_Nullable(t *testing.T) {
+	step := &Step{
+		Type:      StepTypeTask,
+		ID:        "charge",
+		Transport: TransportHTTP,
+		Endpoint:  "http://x",
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"charged"},
+			"properties": map[string]any{
+				"charged": map[string]any{"type": "boolean"},
+				"receipt": map[string]any{"type": []any{"string", "null"}},
+			},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		output  map[string]any
+		wantErr bool
+	}{
+		{
+			name:   "required field present, nullable field absent",
+			output: map[string]any{"charged": true},
+		},
+		{
+			name:   "required field present, nullable field is null",
+			output: map[string]any{"charged": true, "receipt": nil},
+		},
+		{
+			name:   "required field present, nullable field has value",
+			output: map[string]any{"charged": true, "receipt": "REC-001"},
+		},
+		{
+			name:    "required field missing",
+			output:  map[string]any{"receipt": "REC-001"},
+			wantErr: true,
+		},
+		{
+			name:    "required field is null (non-nullable)",
+			output:  map[string]any{"charged": nil},
+			wantErr: true,
+		},
+		{
+			name:    "nullable field has wrong type",
+			output:  map[string]any{"charged": true, "receipt": 123},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := step.ValidateOutput(tt.output)
+			if tt.wantErr && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func containsStr(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsSubstr(s, sub))
 }
