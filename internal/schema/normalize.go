@@ -16,6 +16,7 @@ package schema
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -40,11 +41,22 @@ type Ref struct {
 	Schema   map[string]any
 }
 
-// ErrUnsupportedRef is returned when a $ref is outside the supported subset.
+// ErrUnsupportedRef is returned when a $ref value is structurally outside the
+// supported subset (e.g. an external URL or a relative JSON Pointer).
 type ErrUnsupportedRef struct{ Ref string }
 
 func (e ErrUnsupportedRef) Error() string {
-	return fmt.Sprintf("unsupported $ref %q: only \"#/$defs/<name>\" refs are supported", e.Ref)
+	return fmt.Sprintf("unsupported $ref %q: must be \"#/$defs/<name>\" or \"#<anchor>\"", e.Ref)
+}
+
+// ErrUnresolvedAnchor is returned when a "#<anchor>" ref names an anchor that
+// is not registered in the root resource — either it was never defined, or it
+// lives inside a nested $id sub-resource and is therefore out of scope.
+type ErrUnresolvedAnchor struct{ Ref string }
+
+func (e ErrUnresolvedAnchor) Error() string {
+	anchor := strings.TrimPrefix(e.Ref, "#")
+	return fmt.Sprintf("unresolved $ref %q: anchor %q is not defined in the root resource", e.Ref, anchor)
 }
 
 // Normalize flattens all $defs to the root, removes unused definitions,
@@ -106,11 +118,18 @@ func Normalize(schema map[string]any) (map[string]any, error) {
 	}
 
 	// Build root $defs from used definitions, resolving name collisions.
-	rootDefs := make(map[string]any)
-	for _, def := range ctx.definitions {
-		if !def.Used {
-			continue
+	// Sort by key so that shallower defs (shorter path) get the clean name and
+	// deeper ones get the _1 suffix — deterministic across runs.
+	defKeys := make([]string, 0, len(ctx.definitions))
+	for k, def := range ctx.definitions {
+		if def.Used {
+			defKeys = append(defKeys, k)
 		}
+	}
+	sort.Strings(defKeys)
+	rootDefs := make(map[string]any)
+	for _, k := range defKeys {
+		def := ctx.definitions[k]
 		def.NewName = getUniqueName(def.OriginalName, rootDefs)
 		rootDefs[def.NewName] = def.Schema
 	}
@@ -182,7 +201,7 @@ func (ctx *normContext) resolveRef(ref string) (*Def, error) {
 		anchor := strings.TrimPrefix(ref, "#")
 		def := ctx.anchors[anchor]
 		if def == nil {
-			return nil, ErrUnsupportedRef{Ref: ref}
+			return nil, ErrUnresolvedAnchor{Ref: ref}
 		}
 		return def, nil
 	}

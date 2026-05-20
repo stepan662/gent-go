@@ -132,8 +132,6 @@ test("lifecycle — conditional routes to correct branch", async () => {
     params: { path: { id: d1!.id } },
   });
 
-  console.log(JSON.stringify(r1, null, 2));
-
   expect((r1?.context?.outputs as any)?.then_step?.branch).toBe("then");
 
   const { data: d2 } = await client.POST("/instances", {
