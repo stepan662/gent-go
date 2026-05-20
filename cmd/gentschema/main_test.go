@@ -19,6 +19,9 @@ func TestGenerate_NoSchemas(t *testing.T) {
 	if len(out.Tasks) != 0 {
 		t.Errorf("tasks should be empty, got %v", out.Tasks)
 	}
+	if len(out.Defs) != 0 {
+		t.Errorf("$defs should be empty, got %v", out.Defs)
+	}
 }
 
 func TestGenerate_ProcessInput(t *testing.T) {
@@ -31,7 +34,8 @@ func TestGenerate_ProcessInput(t *testing.T) {
 			"required": ["order_id"]
 		}
 	}`)
-	assertJSON(t, out.ProcessInput, `{
+	assertJSON(t, out.ProcessInput, `{"$ref": "#/$defs/input"}`)
+	assertJSON(t, out.Defs["input"], `{
 		"type": "object",
 		"properties": { "order_id": { "type": "integer" } },
 		"required": ["order_id"]
@@ -53,7 +57,8 @@ func TestGenerate_TaskOutput(t *testing.T) {
 			{ "type": "task", "id": "notify", "transport": "http", "endpoint": "http://x" }
 		]
 	}`)
-	assertJSON(t, out.Tasks["charge"].Output, `{
+	assertJSON(t, out.Tasks["charge"].Output, `{"$ref": "#/$defs/charge_output"}`)
+	assertJSON(t, out.Defs["charge_output"], `{
 		"type": "object",
 		"properties": { "charged": { "type": "boolean" } }
 	}`)
@@ -79,20 +84,20 @@ func TestGenerate_NestedSteps(t *testing.T) {
 			}]
 		}]
 	}`)
-	assertJSON(t, out.Tasks["ship"].Output, `{
+	assertJSON(t, out.Tasks["ship"].Output, `{"$ref": "#/$defs/ship_output"}`)
+	assertJSON(t, out.Defs["ship_output"], `{
 		"type": "object",
 		"properties": { "tracking": { "type": "string" } }
 	}`)
-	assertJSON(t, out.Tasks["refund"].Output, `{
-		"type": "object",
-		"properties": { "refunded": { "type": "boolean" } }
-	}`)
+	assertJSON(t, out.Tasks["refund"].Output, `{"$ref": "#/$defs/refund_output"}`)
 	if _, ok := out.Tasks["check"]; ok {
 		t.Error("conditional step should not appear in tasks")
 	}
 }
 
-func TestGenerate_NormalizesRefs(t *testing.T) {
+func TestGenerate_InnerDefsPromotedToRoot(t *testing.T) {
+	// input_schema has its own $defs/Address — after flattenNamedSchemas these
+	// should be promoted to the root $defs with scoped names.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [{"type":"task","id":"s1","transport":"http","endpoint":"http://x"}],
@@ -109,13 +114,48 @@ func TestGenerate_NormalizesRefs(t *testing.T) {
 			}
 		}
 	}`)
-	assertJSON(t, out.ProcessInput, `{
+	assertJSON(t, out.ProcessInput, `{"$ref": "#/$defs/input"}`)
+	// input schema at root $defs — no inner $defs, $ref rewritten to root
+	assertJSON(t, out.Defs["input"], `{
 		"type": "object",
-		"$defs": {
-			"Address": { "type": "object", "properties": { "street": { "type": "string" } } }
-		},
 		"properties": { "addr": { "$ref": "#/$defs/Address" } }
 	}`)
+	assertJSON(t, out.Defs["Address"], `{
+		"type": "object",
+		"properties": { "street": { "type": "string" } }
+	}`)
+}
+
+func TestGenerate_InnerDefsConflictRenamed(t *testing.T) {
+	// Both input_schema and charge output_schema have an inner $defs/Item.
+	// After promotion both should be in root $defs under distinct names.
+	out := runGenerate(t, `{
+		"name": "p", "version": 1,
+		"input_schema": {
+			"type": "object",
+			"$defs": { "Item": { "type": "string" } },
+			"properties": { "x": { "$ref": "#/$defs/Item" } }
+		},
+		"steps": [{
+			"type": "task", "id": "charge",
+			"transport": "http", "endpoint": "http://x",
+			"output_schema": {
+				"type": "object",
+				"$defs": { "Item": { "type": "integer" } },
+				"properties": { "y": { "$ref": "#/$defs/Item" } }
+			}
+		}]
+	}`)
+	// Both "Item" defs must exist in root $defs under different names.
+	var itemCount int
+	for k := range out.Defs {
+		if k == "Item" || strings.HasPrefix(k, "Item_") {
+			itemCount++
+		}
+	}
+	if itemCount != 2 {
+		t.Errorf("expected 2 Item defs in $defs, found %d (keys: %v)", itemCount, defKeys(out))
+	}
 }
 
 func TestGenerate_UnusedDefsRemoved(t *testing.T) {
@@ -134,11 +174,12 @@ func TestGenerate_UnusedDefsRemoved(t *testing.T) {
 			}
 		}]
 	}`)
-	assertJSON(t, out.Tasks["charge"].Output, `{
-		"type": "object",
-		"$defs": { "Used": { "type": "string" } },
-		"properties": { "x": { "$ref": "#/$defs/Used" } }
-	}`)
+	if out.Defs["Used"] == nil {
+		t.Error("Used def should be present in $defs")
+	}
+	if out.Defs["Unused"] != nil {
+		t.Error("Unused def should have been removed")
+	}
 }
 
 func TestGenerate_Context_FirstTaskNoInput(t *testing.T) {
@@ -171,7 +212,7 @@ func TestGenerate_Context_WithProcessInput(t *testing.T) {
 	assertJSON(t, out.Tasks["charge"].Context, `{
 		"type": "object",
 		"properties": {
-			"input": { "type": "object", "properties": { "order_id": { "type": "integer" } } },
+			"input": { "$ref": "#/$defs/input" },
 			"outputs": { "type": "object" }
 		}
 	}`)
@@ -193,19 +234,17 @@ func TestGenerate_Context_PrecedingTaskOutput(t *testing.T) {
 			}
 		]
 	}`)
-	// charge is first — no preceding tasks
 	assertJSON(t, out.Tasks["charge"].Context, `{
 		"type": "object",
 		"properties": { "outputs": { "type": "object" } }
 	}`)
-	// notify sees charge's output
 	assertJSON(t, out.Tasks["notify"].Context, `{
 		"type": "object",
 		"properties": {
 			"outputs": {
 				"type": "object",
 				"properties": {
-					"charge": { "type": "object", "properties": { "charged": { "type": "boolean" } } }
+					"charge": { "$ref": "#/$defs/charge_output" }
 				}
 			}
 		}
@@ -213,7 +252,6 @@ func TestGenerate_Context_PrecedingTaskOutput(t *testing.T) {
 }
 
 func TestGenerate_Context_TaskWithNoOutputSkippedInContext(t *testing.T) {
-	// "log" has no output_schema — it should not appear in notify's context outputs
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -232,7 +270,6 @@ func TestGenerate_Context_TaskWithNoOutputSkippedInContext(t *testing.T) {
 }
 
 func TestGenerate_Context_ConditionalBranchUnion(t *testing.T) {
-	// After a conditional, the next task sees the union of both branches.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -261,28 +298,24 @@ func TestGenerate_Context_ConditionalBranchUnion(t *testing.T) {
 			}
 		]
 	}`)
-	// ship sees only charge before it
 	assertJSON(t, out.Tasks["ship"].Context, `{
 		"type": "object",
 		"properties": {
 			"outputs": {
 				"type": "object",
-				"properties": {
-					"charge": { "type": "object", "properties": { "charged": { "type": "boolean" } } }
-				}
+				"properties": { "charge": { "$ref": "#/$defs/charge_output" } }
 			}
 		}
 	}`)
-	// notify sees charge + union of ship/refund
 	assertJSON(t, out.Tasks["notify"].Context, `{
 		"type": "object",
 		"properties": {
 			"outputs": {
 				"type": "object",
 				"properties": {
-					"charge":  { "type": "object", "properties": { "charged":  { "type": "boolean" } } },
-					"ship":    { "type": "object", "properties": { "tracking": { "type": "string"  } } },
-					"refund":  { "type": "object", "properties": { "refunded": { "type": "boolean" } } }
+					"charge": { "$ref": "#/$defs/charge_output" },
+					"ship":   { "$ref": "#/$defs/ship_output" },
+					"refund": { "$ref": "#/$defs/refund_output" }
 				}
 			}
 		}

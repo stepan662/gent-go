@@ -17,21 +17,26 @@ import (
 	"os"
 
 	"gent/internal/model"
+	"gent/internal/schema"
 )
 
 // TaskSchemas holds the schemas associated with a single task step.
+// Output and Context are inline JSON Schemas; Output is a $ref into $defs.
 type TaskSchemas struct {
 	Input   map[string]any `json:"input,omitempty"`
 	Output  map[string]any `json:"output,omitempty"`
 	Context map[string]any `json:"context,omitempty"`
 }
 
-// SchemaFile is the top-level output written to the JSON file.
+// SchemaFile is the top-level output. $defs collects every named schema so
+// that code generators (e.g. json-schema-to-typescript) can emit one type per
+// entry. All other schema fields are $ref pointers into $defs.
 type SchemaFile struct {
 	Process      string                 `json:"process"`
 	Version      int                    `json:"version"`
 	ProcessInput map[string]any         `json:"process_input,omitempty"`
 	Tasks        map[string]TaskSchemas `json:"tasks,omitempty"`
+	Defs         map[string]any         `json:"$defs,omitempty"`
 }
 
 func main() {
@@ -82,36 +87,88 @@ func Generate(def *model.ProcessDefinition) (SchemaFile, error) {
 		return SchemaFile{}, err
 	}
 	result := SchemaFile{Process: def.Name, Version: def.Version}
+
+	// Collect named schemas: "input" for process input, "<id>_output" per task.
+	named := make(map[string]map[string]any)
 	if len(def.InputSchema) > 0 {
-		result.ProcessInput = def.InputSchema
+		named["input"] = def.InputSchema
 	}
+	collectNamedOutputs(def.Steps, named)
+
+	if len(named) > 0 {
+		defs, err := flattenNamedSchemas(named)
+		if err != nil {
+			return SchemaFile{}, err
+		}
+		result.Defs = defs
+	}
+
+	if named["input"] != nil {
+		result.ProcessInput = schemaRef("input")
+	}
+
 	tasks := make(map[string]TaskSchemas)
-	collectTaskSchemas(def.Steps, tasks)
-	buildContexts(def.Steps, nil, tasks, def.InputSchema)
+	collectTaskRefs(def.Steps, tasks)
+	buildContexts(def.Steps, nil, tasks, result.ProcessInput)
 	if len(tasks) > 0 {
 		result.Tasks = tasks
 	}
 	return result, nil
 }
 
-// collectTaskSchemas walks steps recursively and collects input/output schemas
-// of every task step into out, keyed by the step ID.
-func collectTaskSchemas(steps []*model.Step, out map[string]TaskSchemas) {
+// collectNamedOutputs walks steps recursively and adds each task's OutputSchema
+// to named under the key "<id>_output".
+func collectNamedOutputs(steps []*model.Step, named map[string]map[string]any) {
 	for _, s := range steps {
 		if s.Type == model.StepTypeTask && len(s.OutputSchema) > 0 {
-			out[s.ID] = TaskSchemas{Output: s.OutputSchema}
+			named[s.ID+"_output"] = s.OutputSchema
 		}
-		collectTaskSchemas(s.Then, out)
-		collectTaskSchemas(s.Else, out)
+		collectNamedOutputs(s.Then, named)
+		collectNamedOutputs(s.Else, named)
 	}
+}
+
+// collectTaskRefs walks steps recursively and populates out with a $ref output
+// for every task that has an OutputSchema.
+func collectTaskRefs(steps []*model.Step, out map[string]TaskSchemas) {
+	for _, s := range steps {
+		if s.Type == model.StepTypeTask && len(s.OutputSchema) > 0 {
+			out[s.ID] = TaskSchemas{Output: schemaRef(s.ID + "_output")}
+		}
+		collectTaskRefs(s.Then, out)
+		collectTaskRefs(s.Else, out)
+	}
+}
+
+// flattenNamedSchemas builds a container schema with all named schemas as $defs,
+// each tagged with $id so that schema.Normalize scopes their internal $refs
+// correctly. After normalisation the flat root $defs map is returned.
+//
+// Using $id means Normalize handles naming conflicts between inner $defs of
+// different schemas automatically, exactly as it does for nested sub-resources.
+func flattenNamedSchemas(named map[string]map[string]any) (map[string]any, error) {
+	defs := make(map[string]any, len(named))
+	refs := make([]any, 0, len(named))
+	for name, s := range named {
+		entry := deepCopy(s)
+		entry["$id"] = name
+		defs[name] = entry
+		refs = append(refs, schemaRef(name))
+	}
+	// allOf refs ensure every def is reachable from the root so Normalize
+	// does not prune them as unused.
+	container := map[string]any{"$defs": defs, "allOf": refs}
+	normalised, err := schema.Normalize(container)
+	if err != nil {
+		return nil, err
+	}
+	rootDefs, _ := normalised["$defs"].(map[string]any)
+	return rootDefs, nil
 }
 
 // buildContexts walks the step tree in execution order, sets Context on each
 // task entry in tasks, and returns the IDs of all tasks that could have run
-// by the end of steps (used when merging conditional branches).
-//
-// accumulated holds the IDs of all tasks that could have run before the
-// current position, regardless of whether they have an output schema.
+// by the end of steps.
 func buildContexts(steps []*model.Step, accumulated []string, tasks map[string]TaskSchemas, processInput map[string]any) []string {
 	for _, s := range steps {
 		switch s.Type {
@@ -130,8 +187,8 @@ func buildContexts(steps []*model.Step, accumulated []string, tasks map[string]T
 	return accumulated
 }
 
-// contextSchema builds a JSON Schema describing the context available to a task:
-// the process input (if any) and the outputs of all preceding tasks (if any).
+// contextSchema builds a JSON Schema for the context available to a task:
+// the process input (if any, as a $ref) and $ref outputs of all preceding tasks.
 func contextSchema(preceding []string, tasks map[string]TaskSchemas, processInput map[string]any) map[string]any {
 	props := make(map[string]any)
 	if len(processInput) > 0 {
@@ -149,6 +206,17 @@ func contextSchema(preceding []string, tasks map[string]TaskSchemas, processInpu
 	}
 	props["outputs"] = outputs
 	return map[string]any{"type": "object", "properties": props}
+}
+
+func schemaRef(name string) map[string]any {
+	return map[string]any{"$ref": "#/$defs/" + name}
+}
+
+func deepCopy(m map[string]any) map[string]any {
+	b, _ := json.Marshal(m)
+	var out map[string]any
+	json.Unmarshal(b, &out)
+	return out
 }
 
 func sliceCopy(s []string) []string {

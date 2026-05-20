@@ -31,6 +31,22 @@ func runGenerateErr(t *testing.T, defJSON string) error {
 	return err
 }
 
+func schemaKeys(out main.SchemaFile) []string {
+	keys := make([]string, 0, len(out.Tasks))
+	for k := range out.Tasks {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func defKeys(out main.SchemaFile) []string {
+	keys := make([]string, 0, len(out.Defs))
+	for k := range out.Defs {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func assertJSON(t *testing.T, got any, wantJSON string) {
 	t.Helper()
 	ga, err := json.MarshalIndent(got, "", "  ")
