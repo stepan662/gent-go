@@ -2,6 +2,7 @@ package schema
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -92,6 +93,8 @@ func TestNormalize_pruneUnused(t *testing.T) {
 	}`)
 	out := mustNormalize(t, in)
 
+	fmt.Println(toJSON(t, out))
+
 	defs := out["$defs"].(map[string]any)
 	if _, ok := defs["Used"]; !ok {
 		t.Error("Used should be kept")
@@ -137,5 +140,179 @@ func TestNormalize_relativeRefRejected(t *testing.T) {
 	_, err := Normalize(in)
 	if err == nil {
 		t.Fatal("expected error for relative ref")
+	}
+}
+
+func TestNormalize_nestedDefs(t *testing.T) {
+	in := schema(t, `{
+		"type": "object",
+		"properties": {
+			"order": {"$ref": "#/$defs/Order"}
+		},
+		"$defs": {
+			"Order": {
+				"type": "object",
+				"properties": {"item": {"$ref": "#/$defs/Order/$defs/Item"}},
+				"$defs": {
+					"Item": {"type": "object", "properties": {"name": {"type": "string"}}}
+				}
+			}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	fmt.Println(toJSON(t, out))
+
+	defs, ok := out["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("expected $defs at root")
+	}
+	if _, ok := defs["Order"]; !ok {
+		t.Error("expected Order in root $defs")
+	}
+	if _, ok := defs["Item"]; !ok {
+		t.Error("expected Item in root $defs")
+	}
+}
+
+func TestNormalize_namesConflict(t *testing.T) {
+	in := schema(t, `{
+		"type": "object",
+		"properties": {
+			"order": {"$ref": "#/$defs/Order"}
+		},
+		"$defs": {
+			"Order": {
+				"type": "object",
+				"properties": {"item": {"$ref": "#/$defs/Order/$defs/Order"}},
+				"$defs": {
+					"Order": {"type": "object", "properties": {"name": {"type": "string"}}}
+				}
+			}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	fmt.Println(toJSON(t, out))
+
+	defs, ok := out["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("expected $defs at root")
+	}
+	if _, ok := defs["Order"]; !ok {
+		t.Error("expected Order in root $defs")
+	}
+	if _, ok := defs["Order_1"]; !ok {
+		t.Error("expected Order_1 in root $defs")
+	}
+}
+
+func TestNormalize_idRemovedAndDefsFlattened(t *testing.T) {
+	// A $defs entry with $id and nested $defs — $id should be stripped and
+	// the nested defs should land at root.
+	in := schema(t, `{
+		"type": "object",
+		"properties": {
+			"order": {"$ref": "#/$defs/Order"}
+		},
+		"$defs": {
+			"Order": {
+				"$id": "Order",
+				"type": "object",
+				"properties": {"item": {"$ref": "#/$defs/Item"}},
+				"$defs": {
+					"Item": {"type": "string"}
+				}
+			}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs, ok := out["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("expected $defs at root")
+	}
+	if _, ok := defs["Order"]; !ok {
+		t.Error("expected Order in root $defs")
+	}
+	if _, ok := defs["Item"]; !ok {
+		t.Error("expected Item in root $defs")
+	}
+	order := defs["Order"].(map[string]any)
+	if order["$id"] != nil {
+		t.Error("$id should be removed from Order")
+	}
+	if order["$defs"] != nil {
+		t.Error("nested $defs should be removed from Order")
+	}
+}
+
+func TestNormalize_recursiveSchema(t *testing.T) {
+	// Klasická rekurzivní struktura: Uzel (Node), který má vlastnost "children",
+	// která odkazuje na pole Uzlů, nebo přímo na další Uzel.
+	in := schema(t, `{
+		"type": "object",
+		"properties": {
+			"tree": {"$ref": "#/$defs/Node"}
+		},
+		"$defs": {
+			"Node": {
+				"type": "object",
+				"properties": {
+					"value": {"type": "string"},
+					"parent": {"$ref": "#/$defs/Node"}
+				}
+			}
+		}
+	}`)
+
+	// Spuštění normalizace
+	out, err := Normalize(in)
+
+	fmt.Println(toJSON(t, out))
+
+	if err != nil {
+		t.Fatalf("Normalize failed: %v", err)
+	}
+
+	defs, ok := out["$defs"].(map[string]any)
+	if !ok {
+		t.Fatal("expected $defs at root")
+	}
+
+	// Ověření, že Node zůstal zachován a jeho vnitřní ref se správně přepsal
+	if _, ok := defs["Node"]; !ok {
+		t.Error("expected Node in root $defs")
+	}
+}
+
+func TestNormalize_nestedDefsWithInternalRef(t *testing.T) {
+	in := schema(t, `{
+		"type": "object",
+		"properties": {
+			"order": {"$ref": "#/$defs/Order"}
+		},
+		"$defs": {
+			"Order": {
+				"type": "object",
+				"properties": {
+					"item": {"$ref": "#/$defs/Order/$defs/Item"}
+				},
+				"$defs": {
+					"Item": {
+						"type": "object",
+						"properties": {
+							"self": {"$ref": "#/$defs/Order/$defs/Item"}
+						}
+					}
+				}
+			}
+		}
+	}`)
+
+	fmt.Println(toJSON(t, in))
+	_, err := Normalize(in)
+	if err != nil {
+		t.Fatalf("Tento test selže na: %v", err)
 	}
 }
