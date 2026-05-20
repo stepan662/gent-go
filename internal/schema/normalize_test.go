@@ -316,3 +316,135 @@ func TestNormalize_nestedDefsWithInternalRef(t *testing.T) {
 		t.Fatalf("Tento test selže na: %v", err)
 	}
 }
+
+func TestNormalize_itemsRef(t *testing.T) {
+	in := schema(t, `{
+		"type": "array",
+		"items": {"$ref": "#/$defs/Item"},
+		"$defs": {
+			"Item": {"type": "string"},
+			"Unused": {"type": "integer"}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs := out["$defs"].(map[string]any)
+	if _, ok := defs["Item"]; !ok {
+		t.Error("Item should be kept (referenced via items)")
+	}
+	if _, ok := defs["Unused"]; ok {
+		t.Error("Unused should be pruned")
+	}
+}
+
+func TestNormalize_prefixItemsRef(t *testing.T) {
+	in := schema(t, `{
+		"type": "array",
+		"prefixItems": [
+			{"$ref": "#/$defs/First"},
+			{"type": "string"}
+		],
+		"$defs": {
+			"First": {"type": "integer"},
+			"Unused": {"type": "boolean"}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs := out["$defs"].(map[string]any)
+	if _, ok := defs["First"]; !ok {
+		t.Error("First should be kept (referenced via prefixItems)")
+	}
+	if _, ok := defs["Unused"]; ok {
+		t.Error("Unused should be pruned")
+	}
+}
+
+func TestNormalize_oneOfRef(t *testing.T) {
+	in := schema(t, `{
+		"oneOf": [
+			{"$ref": "#/$defs/A"},
+			{"$ref": "#/$defs/B"}
+		],
+		"$defs": {
+			"A": {"type": "string"},
+			"B": {"type": "integer"},
+			"Unused": {"type": "boolean"}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs := out["$defs"].(map[string]any)
+	if _, ok := defs["A"]; !ok {
+		t.Error("A should be kept (referenced via oneOf)")
+	}
+	if _, ok := defs["B"]; !ok {
+		t.Error("B should be kept (referenced via oneOf)")
+	}
+	if _, ok := defs["Unused"]; ok {
+		t.Error("Unused should be pruned")
+	}
+}
+
+func TestNormalize_allOfAnyOfRef(t *testing.T) {
+	in := schema(t, `{
+		"allOf": [{"$ref": "#/$defs/Base"}],
+		"anyOf": [{"$ref": "#/$defs/Extra"}, {"type": "null"}],
+		"$defs": {
+			"Base":   {"type": "object"},
+			"Extra":  {"type": "string"},
+			"Unused": {"type": "boolean"}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs := out["$defs"].(map[string]any)
+	if _, ok := defs["Base"]; !ok {
+		t.Error("Base should be kept (referenced via allOf)")
+	}
+	if _, ok := defs["Extra"]; !ok {
+		t.Error("Extra should be kept (referenced via anyOf)")
+	}
+	if _, ok := defs["Unused"]; ok {
+		t.Error("Unused should be pruned")
+	}
+}
+
+func TestNormalize_notRef(t *testing.T) {
+	in := schema(t, `{
+		"not": {"$ref": "#/$defs/Forbidden"},
+		"$defs": {
+			"Forbidden": {"type": "string"},
+			"Unused":    {"type": "integer"}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs := out["$defs"].(map[string]any)
+	if _, ok := defs["Forbidden"]; !ok {
+		t.Error("Forbidden should be kept (referenced via not)")
+	}
+	if _, ok := defs["Unused"]; ok {
+		t.Error("Unused should be pruned")
+	}
+}
+
+func TestNormalize_additionalPropertiesRef(t *testing.T) {
+	in := schema(t, `{
+		"type": "object",
+		"additionalProperties": {"$ref": "#/$defs/Value"},
+		"$defs": {
+			"Value":  {"type": "string"},
+			"Unused": {"type": "integer"}
+		}
+	}`)
+	out := mustNormalize(t, in)
+
+	defs := out["$defs"].(map[string]any)
+	if _, ok := defs["Value"]; !ok {
+		t.Error("Value should be kept (referenced via additionalProperties)")
+	}
+	if _, ok := defs["Unused"]; ok {
+		t.Error("Unused should be pruned")
+	}
+}
