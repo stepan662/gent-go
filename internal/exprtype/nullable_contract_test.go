@@ -177,6 +177,121 @@ func TestAmbiguousTypeContract(t *testing.T) {
 	}
 }
 
+// TestConditionalNullNarrowing verifies that InferType narrows the type of a
+// nullable variable inside the branches of a null-check ternary:
+//
+//   - "x == nil ? a : b" → in b, x is treated as non-null
+//   - "x != nil ? a : b" → in a, x is treated as non-null
+//   - the branch where x is known to be null must still reject unsafe operators
+//
+// All three nullable notations are exercised for each case.
+func TestConditionalNullNarrowing(t *testing.T) {
+	valid := []struct {
+		name string
+		expr string
+		base string
+	}{
+		// == nil: else branch has non-null x
+		{"eq_nil_else_gt",     "x == nil ? false : x > 0",  "integer"},
+		{"eq_nil_else_add",    "x == nil ? 0 : x + 1",      "integer"},
+		{"eq_nil_else_concat", `x == nil ? "" : x + "!"`,   "string"},
+		{"eq_nil_else_not",    "x == nil ? true : !x",      "boolean"},
+		// != nil: then branch has non-null x
+		{"ne_nil_then_gt",     "x != nil ? x > 0 : false",  "integer"},
+		{"ne_nil_then_add",    "x != nil ? x + 1 : 0",      "integer"},
+		// commuted nil position
+		{"nil_eq_else_gt",     "nil == x ? false : x > 0",  "integer"},
+		{"nil_ne_then_gt",     "nil != x ? x > 0 : false",  "integer"},
+	}
+
+	invalid := []struct {
+		name string
+		expr string
+		base string
+	}{
+		// == nil: then branch has null x → unsafe operators must fail
+		{"eq_nil_then_add", "x == nil ? x + 1 : 0",   "integer"},
+		// != nil: else branch has null x → unsafe operators must fail
+		{"ne_nil_else_gt",  "x != nil ? false : x > 0", "integer"},
+	}
+
+	notations := []string{"type_array", "anyOf", "oneOf"}
+
+	for _, tc := range valid {
+		for _, notation := range notations {
+			t.Run(tc.name+"/"+notation, func(t *testing.T) {
+				infer(t, tc.expr, nullableSchema(tc.base, notation))
+			})
+		}
+	}
+
+	for _, tc := range invalid {
+		for _, notation := range notations {
+			t.Run(tc.name+"/"+notation, func(t *testing.T) {
+				inferErr(t, tc.expr, nullableSchema(tc.base, notation), "")
+			})
+		}
+	}
+}
+
+// TestConditionalNullNarrowingResultType checks that the inferred schema of a
+// null-guarded ternary is the concrete non-null type, not a nullable union.
+func TestConditionalNullNarrowingResultType(t *testing.T) {
+	cases := []struct {
+		name     string
+		expr     string
+		base     string
+		wantJSON string
+	}{
+		{"eq_nil_bool_else_cmp", "x == nil ? false : x > 0", "integer", `{"type":"boolean"}`},
+		{"eq_nil_zero_else_x",   "x == nil ? 0 : x",         "integer", `{"type":"integer"}`},
+		{"ne_nil_x_else_zero",   "x != nil ? x : 0",         "integer", `{"type":"integer"}`},
+	}
+
+	notations := []string{"type_array", "anyOf", "oneOf"}
+
+	for _, tc := range cases {
+		for _, notation := range notations {
+			t.Run(tc.name+"/"+notation, func(t *testing.T) {
+				assertSchema(t, infer(t, tc.expr, nullableSchema(tc.base, notation)), tc.wantJSON)
+			})
+		}
+	}
+}
+
+// TestConditionalLiteralNarrowing verifies that equality against a non-nil
+// literal narrows the subject to the literal's type in the matching branch:
+//
+//   - "x == <lit> ? a : b" → in a, x has the literal's type
+//   - "x != <lit> ? a : b" → in b, x has the literal's type
+func TestConditionalLiteralNarrowing(t *testing.T) {
+	cases := []struct {
+		name     string
+		expr     string
+		base     string
+		notation string
+	}{
+		// string literal — then branch
+		{"eq_str_then_concat/type_array", `x == "hi" ? x + "!" : ""`,   "string", "type_array"},
+		{"eq_str_then_concat/anyOf",      `x == "hi" ? x + "!" : ""`,   "string", "anyOf"},
+		{"eq_str_then_concat/oneOf",      `x == "hi" ? x + "!" : ""`,   "string", "oneOf"},
+		// string literal — else branch
+		{"ne_str_else_concat/type_array", `x != "hi" ? "" : x + "!"`,   "string", "type_array"},
+		{"ne_str_else_concat/anyOf",      `x != "hi" ? "" : x + "!"`,   "string", "anyOf"},
+		{"ne_str_else_concat/oneOf",      `x != "hi" ? "" : x + "!"`,   "string", "oneOf"},
+		// integer literal — then branch
+		{"eq_int_then_add/type_array",    "x == 5 ? x + 1 : 0",         "integer", "type_array"},
+		{"eq_int_then_add/anyOf",         "x == 5 ? x + 1 : 0",         "integer", "anyOf"},
+		{"eq_int_then_add/oneOf",         "x == 5 ? x + 1 : 0",         "integer", "oneOf"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			infer(t, tc.expr, nullableSchema(tc.base, tc.notation))
+		})
+	}
+}
+
 // TestNumericUnionContract verifies that expressions work correctly when the
 // operand schema is an all-numeric union (anyOf/oneOf with integer and number
 // variants). Both layers must agree with expr-lang and must NOT error.
