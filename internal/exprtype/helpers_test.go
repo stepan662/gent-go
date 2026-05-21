@@ -18,15 +18,10 @@ func ctx(t *testing.T, s string) map[string]any {
 	return m
 }
 
-// defs parses a JSON string into a $defs map.
-func defs(t *testing.T, s string) map[string]any {
-	return ctx(t, s)
-}
-
 // infer calls InferType and fails the test on error.
-func infer(t *testing.T, expr string, contextSchema map[string]any, defsMap map[string]any) map[string]any {
+func infer(t *testing.T, expr string, schema map[string]any) map[string]any {
 	t.Helper()
-	got, err := exprtype.InferType(expr, contextSchema, defsMap)
+	got, err := exprtype.InferType(expr, schema)
 	if err != nil {
 		t.Fatalf("InferType(%q): %v", expr, err)
 	}
@@ -34,9 +29,9 @@ func infer(t *testing.T, expr string, contextSchema map[string]any, defsMap map[
 }
 
 // inferErr calls InferType and expects an error.
-func inferErr(t *testing.T, expr string, contextSchema map[string]any, defsMap map[string]any) error {
+func inferErr(t *testing.T, expr string, schema map[string]any) error {
 	t.Helper()
-	_, err := exprtype.InferType(expr, contextSchema, defsMap)
+	_, err := exprtype.InferType(expr, schema)
 	if err == nil {
 		t.Fatalf("InferType(%q): expected error, got nil", expr)
 	}

@@ -7,31 +7,31 @@ import (
 // --- Literals ---
 
 func TestInfer_IntegerLiteral(t *testing.T) {
-	assertSchema(t, infer(t, "42", nil, nil), `{"type":"integer"}`)
+	assertSchema(t, infer(t, "42", nil), `{"type":"integer"}`)
 }
 
 func TestInfer_FloatLiteral(t *testing.T) {
-	assertSchema(t, infer(t, "3.14", nil, nil), `{"type":"number"}`)
+	assertSchema(t, infer(t, "3.14", nil), `{"type":"number"}`)
 }
 
 func TestInfer_StringLiteral(t *testing.T) {
-	assertSchema(t, infer(t, `"hello"`, nil, nil), `{"type":"string"}`)
+	assertSchema(t, infer(t, `"hello"`, nil), `{"type":"string"}`)
 }
 
 func TestInfer_BoolLiteral(t *testing.T) {
-	assertSchema(t, infer(t, "true", nil, nil), `{"type":"boolean"}`)
-	assertSchema(t, infer(t, "false", nil, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "true", nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "false", nil), `{"type":"boolean"}`)
 }
 
 func TestInfer_NilLiteral(t *testing.T) {
-	assertSchema(t, infer(t, "nil", nil, nil), `{"type":"null"}`)
+	assertSchema(t, infer(t, "nil", nil), `{"type":"null"}`)
 }
 
 // --- Field access ---
 
 func TestInfer_TopLevelField(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input", c, nil), `{
+	assertSchema(t, infer(t, "input", c), `{
 		"type": "object",
 		"properties": {
 			"order_id": {"type":"integer"},
@@ -44,33 +44,33 @@ func TestInfer_TopLevelField(t *testing.T) {
 
 func TestInfer_NestedField_Integer(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.order_id", c, nil), `{"type":"integer"}`)
+	assertSchema(t, infer(t, "input.order_id", c), `{"type":"integer"}`)
 }
 
 func TestInfer_NestedField_Number(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.amount", c, nil), `{"type":"number"}`)
+	assertSchema(t, infer(t, "input.amount", c), `{"type":"number"}`)
 }
 
 func TestInfer_NestedField_Boolean(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "outputs.charge.charged", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "outputs.charge.charged", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_NestedField_DeepPath(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "outputs.charge.fee", c, nil), `{"type":"number"}`)
+	assertSchema(t, infer(t, "outputs.charge.fee", c), `{"type":"number"}`)
 }
 
 func TestInfer_FieldNotFound(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	inferErr(t, "input.missing", c, nil)
+	inferErr(t, "input.missing", c)
 }
 
 func TestInfer_FieldOnNonObject(t *testing.T) {
 	c := ctx(t, richContextJSON)
 	// order_id is integer, not an object — accessing .x should fail
-	inferErr(t, "input.order_id.x", c, nil)
+	inferErr(t, "input.order_id.x", c)
 }
 
 // --- $ref resolution ---
@@ -80,17 +80,17 @@ func TestInfer_RefResolution(t *testing.T) {
 		"type": "object",
 		"properties": {
 			"input": { "$ref": "#/$defs/Input" }
-		}
-	}`)
-	d := defs(t, `{
-		"Input": {
-			"type": "object",
-			"properties": {
-				"order_id": { "type": "integer" }
+		},
+		"$defs": {
+			"Input": {
+				"type": "object",
+				"properties": {
+					"order_id": { "type": "integer" }
+				}
 			}
 		}
 	}`)
-	assertSchema(t, infer(t, "input.order_id", c, d), `{"type":"integer"}`)
+	assertSchema(t, infer(t, "input.order_id", c), `{"type":"integer"}`)
 }
 
 func TestInfer_RefMissing(t *testing.T) {
@@ -98,9 +98,10 @@ func TestInfer_RefMissing(t *testing.T) {
 		"type": "object",
 		"properties": {
 			"input": { "$ref": "#/$defs/Missing" }
-		}
+		},
+		"$defs": {}
 	}`)
-	inferErr(t, "input.order_id", c, defs(t, `{}`))
+	inferErr(t, "input.order_id", c)
 }
 
 func TestInfer_RefWithoutDefs(t *testing.T) {
@@ -110,95 +111,95 @@ func TestInfer_RefWithoutDefs(t *testing.T) {
 			"input": { "$ref": "#/$defs/Input" }
 		}
 	}`)
-	inferErr(t, "input.order_id", c, nil)
+	inferErr(t, "input.order_id", c)
 }
 
 // --- Arithmetic ---
 
 func TestInfer_IntPlusInt(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.order_id + 1", c, nil), `{"type":"integer"}`)
+	assertSchema(t, infer(t, "input.order_id + 1", c), `{"type":"integer"}`)
 }
 
 func TestInfer_IntPlusFloat(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.order_id + input.amount", c, nil), `{"type":"number"}`)
+	assertSchema(t, infer(t, "input.order_id + input.amount", c), `{"type":"number"}`)
 }
 
 func TestInfer_FloatArithmetic(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.amount * 2.0", c, nil), `{"type":"number"}`)
+	assertSchema(t, infer(t, "input.amount * 2.0", c), `{"type":"number"}`)
 }
 
 func TestInfer_IntegerSubtraction(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.order_id - 1", c, nil), `{"type":"integer"}`)
+	assertSchema(t, infer(t, "input.order_id - 1", c), `{"type":"integer"}`)
 }
 
 func TestInfer_StringConcatenation(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, `input.label + "_suffix"`, c, nil), `{"type":"string"}`)
+	assertSchema(t, infer(t, `input.label + "_suffix"`, c), `{"type":"string"}`)
 }
 
 func TestInfer_ArithmeticOnStrings(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	inferErr(t, "input.label - 1", c, nil)
+	inferErr(t, "input.label - 1", c)
 }
 
 func TestInfer_ArithmeticOnBool(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	inferErr(t, "input.active + 1", c, nil)
+	inferErr(t, "input.active + 1", c)
 }
 
 // --- Unary ---
 
 func TestInfer_UnaryNot(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "!input.active", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "!input.active", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_UnaryMinus(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "-input.order_id", c, nil), `{"type":"integer"}`)
+	assertSchema(t, infer(t, "-input.order_id", c), `{"type":"integer"}`)
 }
 
 func TestInfer_UnaryMinusOnString(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	inferErr(t, "-input.label", c, nil)
+	inferErr(t, "-input.label", c)
 }
 
 // --- Comparison ---
 
 func TestInfer_ComparisonEq(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.order_id == 0", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.order_id == 0", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_ComparisonLt(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.amount < 100.0", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.amount < 100.0", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_LogicalAnd(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.active && outputs.charge.charged", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.active && outputs.charge.charged", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_LogicalOr(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.active || false", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.active || false", c), `{"type":"boolean"}`)
 }
 
 // --- Conditional ---
 
 func TestInfer_Conditional_SameType(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, "input.active ? 1 : 2", c, nil), `{"type":"integer"}`)
+	assertSchema(t, infer(t, "input.active ? 1 : 2", c), `{"type":"integer"}`)
 }
 
 func TestInfer_Conditional_DifferentTypes(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	assertSchema(t, infer(t, `input.active ? input.order_id : "unknown"`, c, nil), `{
+	assertSchema(t, infer(t, `input.active ? input.order_id : "unknown"`, c), `{
 		"oneOf": [{"type":"integer"}, {"type":"string"}]
 	}`)
 }
@@ -206,19 +207,19 @@ func TestInfer_Conditional_DifferentTypes(t *testing.T) {
 func TestInfer_Conditional_FieldFromContext(t *testing.T) {
 	c := ctx(t, richContextJSON)
 	assertSchema(t,
-		infer(t, "outputs.charge.charged ? input.amount : 0.0", c, nil),
+		infer(t, "outputs.charge.charged ? input.amount : 0.0", c),
 		`{"type":"number"}`)
 }
 
 // --- Unsupported constructs ---
 
 func TestInfer_FunctionCall_Unsupported(t *testing.T) {
-	err := inferErr(t, `len("hello")`, nil, nil)
+	err := inferErr(t, `len("hello")`, nil)
 	assertUnsupported(t, err)
 }
 
 func TestInfer_InOperator_Unsupported(t *testing.T) {
 	c := ctx(t, richContextJSON)
-	err := inferErr(t, "1 in [1, 2, 3]", c, nil)
+	err := inferErr(t, "1 in [1, 2, 3]", c)
 	assertUnsupported(t, err)
 }

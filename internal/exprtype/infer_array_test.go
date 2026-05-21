@@ -13,10 +13,20 @@ const arrayCtxJSON = `{
 		"input": {
 			"type": "object",
 			"properties": {
-				"tags":    { "type": "array", "items": { "type": "string" } },
-				"counts":  { "type": "array", "items": { "type": "integer" } },
-				"matrix":  { "type": "array", "items": { "type": "array", "items": { "type": "number" } } },
-				"bare":    { "type": "array" }
+				"tags":       { "type": "array", "items": { "type": "string" } },
+				"counts":     { "type": "array", "items": { "type": "integer" } },
+				"matrix":     { "type": "array", "items": { "type": "array", "items": { "type": "number" } } },
+				"bare":       { "type": "array" },
+				"referenced": { "type": "array", "items": { "$ref": "#/$defs/object" } }
+			}
+		}
+	},
+	"$defs": {
+		"object": {
+			"type": "object",
+			"properties": {
+				"name":  { "type": "string" },
+				"value": { "type": "number" }
 			}
 		}
 	}
@@ -25,7 +35,7 @@ const arrayCtxJSON = `{
 // Accessing an array field returns its full schema (including items).
 func TestInfer_Array_FieldReturnsSchema(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertSchema(t, infer(t, "input.tags", c, nil), `{
+	assertSchema(t, infer(t, "input.tags", c), `{
 		"type": "array",
 		"items": { "type": "string" }
 	}`)
@@ -33,12 +43,12 @@ func TestInfer_Array_FieldReturnsSchema(t *testing.T) {
 
 func TestInfer_Array_FieldWithoutItems(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertSchema(t, infer(t, "input.bare", c, nil), `{"type":"array"}`)
+	assertSchema(t, infer(t, "input.bare", c), `{"type":"array"}`)
 }
 
 func TestInfer_Array_NestedItems(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertSchema(t, infer(t, "input.matrix", c, nil), `{
+	assertSchema(t, infer(t, "input.matrix", c), `{
 		"type": "array",
 		"items": { "type": "array", "items": { "type": "number" } }
 	}`)
@@ -47,24 +57,24 @@ func TestInfer_Array_NestedItems(t *testing.T) {
 // Member access on an array type fails — arrays have no named properties.
 func TestInfer_Array_MemberAccessFails(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	inferErr(t, "input.tags.length", c, nil)
+	inferErr(t, "input.tags.length", c)
 }
 
 // Comparison on an array field always returns boolean.
 func TestInfer_Array_ComparisonIsBoolean(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertSchema(t, infer(t, "input.tags == nil", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.tags == nil", c), `{"type":"boolean"}`)
 }
 
 // Arithmetic on an array type fails.
 func TestInfer_Array_ArithmeticFails(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	inferErr(t, "input.counts + 1", c, nil)
+	inferErr(t, "input.counts + 1", c)
 }
 
 // Array literals are outside the supported subset.
 func TestInfer_Array_LiteralUnsupported(t *testing.T) {
-	err := inferErr(t, "[1, 2, 3]", nil, nil)
+	err := inferErr(t, "[1, 2, 3]", nil)
 	var e exprtype.ErrUnsupported
 	if !errors.As(err, &e) {
 		t.Errorf("expected ErrUnsupported, got %T: %v", err, err)
@@ -74,7 +84,7 @@ func TestInfer_Array_LiteralUnsupported(t *testing.T) {
 // Nullable array: conditional with nil preserves the items schema.
 func TestInfer_Array_NullablePreservesItems(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertSchema(t, infer(t, "true ? input.tags : nil", c, nil), `{
+	assertSchema(t, infer(t, "true ? input.tags : nil", c), `{
 		"type": ["array", "null"],
 		"items": { "type": "string" }
 	}`)
@@ -85,30 +95,35 @@ func TestInfer_Array_NullablePreservesItems(t *testing.T) {
 // Index into a typed array returns the items schema wrapped as nullable.
 func TestInfer_Array_Index_KnownItems(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertSchema(t, infer(t, "input.tags[0]", c, nil), `{"type":["string","null"]}`)
+	assertSchema(t, infer(t, "input.tags[0]", c), `{"type":["string","null"]}`)
 }
 
 func TestInfer_Array_Index_IntegerItems(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertSchema(t, infer(t, "input.counts[0]", c, nil), `{"type":["integer","null"]}`)
+	assertSchema(t, infer(t, "input.counts[0]", c), `{"type":["integer","null"]}`)
 }
 
 // Index into an array without items returns {} (any value, including null).
 func TestInfer_Array_Index_NoItems(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertSchema(t, infer(t, "input.bare[0]", c, nil), `{}`)
+	assertSchema(t, infer(t, "input.bare[0]", c), `{}`)
+}
+
+func TestInfer_Array_ReferencedType(t *testing.T) {
+	c := ctx(t, arrayCtxJSON)
+	assertSchema(t, infer(t, "input.referenced[0].value", c), `{"type":["number","null"]}`)
 }
 
 // Index into a non-array schema fails.
 func TestInfer_Array_Index_NonArrayFails(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	inferErr(t, "input.tags[0][1]", c, nil) // tags[0] is string, not array
+	inferErr(t, "input.tags[0][1]", c) // tags[0] is string, not array
 }
 
 // Dynamic index is unsupported.
 func TestInfer_Array_DynamicIndexUnsupported(t *testing.T) {
 	c := ctx(t, arrayCtxJSON)
-	assertUnsupported(t, inferErr(t, "input.tags[input.counts[0]]", c, nil))
+	assertUnsupported(t, inferErr(t, "input.tags[input.counts[0]]", c))
 }
 
 // --- Already-nullable array combined with nil stays the same.
@@ -124,7 +139,7 @@ func TestInfer_Array_AlreadyNullableStable(t *testing.T) {
 			}
 		}
 	}`)
-	assertSchema(t, infer(t, "true ? input.tags : nil", c, nil), `{
+	assertSchema(t, infer(t, "true ? input.tags : nil", c), `{
 		"type": ["array", "null"],
 		"items": { "type": "string" }
 	}`)

@@ -49,28 +49,28 @@ const complexCtxJSON = `{
 
 func TestInfer_AnyOf_FieldReturnsSchema(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.flexible", c, nil), `{
+	assertSchema(t, infer(t, "input.flexible", c), `{
 		"anyOf": [{"type":"integer"}, {"type":"string"}]
 	}`)
 }
 
 func TestInfer_OneOf_FieldReturnsSchema(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.exactly_one", c, nil), `{
+	assertSchema(t, infer(t, "input.exactly_one", c), `{
 		"oneOf": [{"type":"integer"}, {"type":"number"}]
 	}`)
 }
 
 func TestInfer_AllOf_FieldReturnsSchema(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.combined", c, nil), `{
+	assertSchema(t, infer(t, "input.combined", c), `{
 		"allOf": [{"type":"integer"}, {"minimum": 0}]
 	}`)
 }
 
 func TestInfer_Not_FieldReturnsSchema(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.negated", c, nil), `{
+	assertSchema(t, infer(t, "input.negated", c), `{
 		"not": {"type":"string"}
 	}`)
 }
@@ -79,27 +79,27 @@ func TestInfer_Not_FieldReturnsSchema(t *testing.T) {
 
 func TestInfer_AnyOf_EqualityIsBoolean(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, `input.flexible == "x"`, c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, `input.flexible == "x"`, c), `{"type":"boolean"}`)
 }
 
 func TestInfer_AnyOf_InequalityIsBoolean(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.flexible != 0", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.flexible != 0", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_AnyOf_OrderComparisonIsBoolean(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.flexible < 10", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.flexible < 10", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_OneOf_EqualityIsBoolean(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.exactly_one == 0", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.exactly_one == 0", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_Not_EqualityIsBoolean(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, `input.negated == "hello"`, c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, `input.negated == "hello"`, c), `{"type":"boolean"}`)
 }
 
 // --- logical operators always produce boolean ---
@@ -107,36 +107,36 @@ func TestInfer_Not_EqualityIsBoolean(t *testing.T) {
 func TestInfer_AnyOf_LogicalAndIsBoolean(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// both operands are comparisons → boolean && boolean → boolean
-	assertSchema(t, infer(t, "input.flexible == 1 && input.flexible == 2", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.flexible == 1 && input.flexible == 2", c), `{"type":"boolean"}`)
 }
 
 func TestInfer_AnyOf_UnaryNotIsBoolean(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// ! wraps a comparison; the inner comparison is boolean so ! is valid
-	assertSchema(t, infer(t, "!(input.flexible == 1)", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "!(input.flexible == 1)", c), `{"type":"boolean"}`)
 }
 
 // --- arithmetic on complex schemas fails (cannot determine numeric type) ---
 
 func TestInfer_AnyOf_ArithmeticFails(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	inferErr(t, "input.flexible + 1", c, nil)
+	inferErr(t, "input.flexible + 1", c)
 }
 
 func TestInfer_OneOf_ArithmeticFails(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	inferErr(t, "input.exactly_one * 2", c, nil)
+	inferErr(t, "input.exactly_one * 2", c)
 }
 
 func TestInfer_AllOf_ArithmeticFails(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// allOf carries no plain "type" key at the top level
-	inferErr(t, "input.combined + 1", c, nil)
+	inferErr(t, "input.combined + 1", c)
 }
 
 func TestInfer_Not_ArithmeticFails(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	inferErr(t, "input.negated + 1", c, nil)
+	inferErr(t, "input.negated + 1", c)
 }
 
 // --- nullable types ---
@@ -159,49 +159,49 @@ const nullableCtxJSON = `{
 // Accessing a nullable field returns its schema as-is.
 func TestInfer_Nullable_FieldReturnsSchema(t *testing.T) {
 	c := ctx(t, nullableCtxJSON)
-	assertSchema(t, infer(t, "input.comment", c, nil), `{"type":["string","null"]}`)
+	assertSchema(t, infer(t, "input.comment", c), `{"type":["string","null"]}`)
 }
 
 // A conditional where one branch is nil produces a nullable type.
 func TestInfer_Nullable_ConditionalWithNil_String(t *testing.T) {
 	c := ctx(t, nullableCtxJSON)
-	assertSchema(t, infer(t, `input.id > 0 ? input.comment : nil`, c, nil), `{"type":["string","null"]}`)
+	assertSchema(t, infer(t, `input.id > 0 ? input.comment : nil`, c), `{"type":["string","null"]}`)
 }
 
 func TestInfer_Nullable_ConditionalWithNil_Integer(t *testing.T) {
 	c := ctx(t, nullableCtxJSON)
-	assertSchema(t, infer(t, `true ? input.id : nil`, c, nil), `{"type":["integer","null"]}`)
+	assertSchema(t, infer(t, `true ? input.id : nil`, c), `{"type":["integer","null"]}`)
 }
 
 // nil on the left branch works the same way.
 func TestInfer_Nullable_ConditionalNilFirst(t *testing.T) {
 	c := ctx(t, nullableCtxJSON)
-	assertSchema(t, infer(t, `false ? nil : input.id`, c, nil), `{"type":["integer","null"]}`)
+	assertSchema(t, infer(t, `false ? nil : input.id`, c), `{"type":["integer","null"]}`)
 }
 
 // Both branches nil → plain null type (not a type array).
 func TestInfer_Nullable_BothBranchesNil(t *testing.T) {
-	assertSchema(t, infer(t, `true ? nil : nil`, nil, nil), `{"type":"null"}`)
+	assertSchema(t, infer(t, `true ? nil : nil`, nil), `{"type":"null"}`)
 }
 
 // Arithmetic on a nullable type fails — the null case is unhandled.
 func TestInfer_Nullable_ArithmeticFails(t *testing.T) {
 	c := ctx(t, nullableCtxJSON)
-	inferErr(t, "input.amount + 1.0", c, nil)
+	inferErr(t, "input.amount + 1.0", c)
 }
 
 // Comparisons on nullable types still return boolean.
 func TestInfer_Nullable_ComparisonIsBoolean(t *testing.T) {
 	c := ctx(t, nullableCtxJSON)
-	assertSchema(t, infer(t, "input.comment == nil", c, nil), `{"type":"boolean"}`)
-	assertSchema(t, infer(t, "input.amount != nil", c, nil), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.comment == nil", c), `{"type":"boolean"}`)
+	assertSchema(t, infer(t, "input.amount != nil", c), `{"type":"boolean"}`)
 }
 
 // A non-null + complex-type branch still falls back to oneOf.
 func TestInfer_Nullable_ComplexBranchFallsBackToOneOf(t *testing.T) {
 	c := ctx(t, nullableCtxJSON)
 	// anyOf field vs nil — the non-null branch has no simple type string
-	assertSchema(t, infer(t, `true ? input.comment : input.id`, c, nil), `{
+	assertSchema(t, infer(t, `true ? input.comment : input.id`, c), `{
 		"oneOf": [{"type":["string","null"]}, {"type":"integer"}]
 	}`)
 }
@@ -213,7 +213,7 @@ func TestInfer_Nullable_ComplexBranchFallsBackToOneOf(t *testing.T) {
 // of those two types.
 func TestInfer_AnyOf_MemberAccess_DifferentTypes(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.obj_union.x", c, nil), `{
+	assertSchema(t, infer(t, "input.obj_union.x", c), `{
 		"anyOf": [{"type":"integer"}, {"type":"string"}]
 	}`)
 }
@@ -221,7 +221,7 @@ func TestInfer_AnyOf_MemberAccess_DifferentTypes(t *testing.T) {
 // TestInfer_OneOf_MemberAccess_DifferentTypes same as above but oneOf.
 func TestInfer_OneOf_MemberAccess_DifferentTypes(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.obj_union_oneof.x", c, nil), `{
+	assertSchema(t, infer(t, "input.obj_union_oneof.x", c), `{
 		"oneOf": [{"type":"boolean"}, {"type":"number"}]
 	}`)
 }
@@ -230,13 +230,13 @@ func TestInfer_OneOf_MemberAccess_DifferentTypes(t *testing.T) {
 // and returns the type directly instead of wrapping in anyOf.
 func TestInfer_AnyOf_MemberAccess_SameType(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.obj_union_same.x", c, nil), `{"type":"integer"}`)
+	assertSchema(t, infer(t, "input.obj_union_same.x", c), `{"type":"integer"}`)
 }
 
 // TestInfer_AnyOf_MemberAccess_DeepPath walks through two levels of anyOf.
 func TestInfer_AnyOf_MemberAccess_DeepPath(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
-	assertSchema(t, infer(t, "input.obj_union_nested.inner.z", c, nil), `{
+	assertSchema(t, infer(t, "input.obj_union_nested.inner.z", c), `{
 		"anyOf": [{"type":"boolean"}, {"type":"integer"}]
 	}`)
 }
@@ -260,7 +260,7 @@ func TestInfer_AnyOf_MemberAccess_MissingInVariant(t *testing.T) {
 			}
 		}
 	}`)
-	inferErr(t, "input.partial.x", c, nil)
+	inferErr(t, "input.partial.x", c)
 }
 
 // TestInfer_AnyOf_MemberAccess_NonObjectVariant errors when a variant is not
@@ -268,7 +268,7 @@ func TestInfer_AnyOf_MemberAccess_MissingInVariant(t *testing.T) {
 func TestInfer_AnyOf_MemberAccess_NonObjectVariant(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// input.flexible is anyOf [integer, string] — neither has properties
-	inferErr(t, "input.flexible.x", c, nil)
+	inferErr(t, "input.flexible.x", c)
 }
 
 // --- member access on opaque schemas (not, allOf, unknown) always fails ---
@@ -276,13 +276,13 @@ func TestInfer_AnyOf_MemberAccess_NonObjectVariant(t *testing.T) {
 func TestInfer_Not_MemberAccessFails(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// "not" schema carries no structural information — cannot resolve .x
-	inferErr(t, "input.negated.x", c, nil)
+	inferErr(t, "input.negated.x", c)
 }
 
 func TestInfer_AllOf_MemberAccessFails(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// allOf without a top-level properties map — cannot resolve .x
-	inferErr(t, "input.combined.x", c, nil)
+	inferErr(t, "input.combined.x", c)
 }
 
 // --- conditional with complex schemas ---
@@ -290,7 +290,7 @@ func TestInfer_AllOf_MemberAccessFails(t *testing.T) {
 func TestInfer_Conditional_AnyOfBothBranches(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// both branches have the same anyOf schema → result is that schema
-	assertSchema(t, infer(t, "true ? input.flexible : input.flexible", c, nil), `{
+	assertSchema(t, infer(t, "true ? input.flexible : input.flexible", c), `{
 		"anyOf": [{"type":"integer"}, {"type":"string"}]
 	}`)
 }
@@ -298,7 +298,7 @@ func TestInfer_Conditional_AnyOfBothBranches(t *testing.T) {
 func TestInfer_Conditional_AnyOfVsLiteral(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// branches differ → oneOf wrapping both
-	assertSchema(t, infer(t, "true ? input.flexible : 42", c, nil), `{
+	assertSchema(t, infer(t, "true ? input.flexible : 42", c), `{
 		"oneOf": [
 			{"anyOf": [{"type":"integer"}, {"type":"string"}]},
 			{"type":"integer"}
@@ -309,7 +309,7 @@ func TestInfer_Conditional_AnyOfVsLiteral(t *testing.T) {
 func TestInfer_Conditional_OneOfVsOneOf(t *testing.T) {
 	c := ctx(t, complexCtxJSON)
 	// two different oneOf schemas → wrapped in oneOf
-	assertSchema(t, infer(t, "true ? input.flexible : input.exactly_one", c, nil), `{
+	assertSchema(t, infer(t, "true ? input.flexible : input.exactly_one", c), `{
 		"oneOf": [
 			{"anyOf": [{"type":"integer"}, {"type":"string"}]},
 			{"oneOf": [{"type":"integer"}, {"type":"number"}]}

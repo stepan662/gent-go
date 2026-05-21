@@ -200,9 +200,12 @@ func inferInput(s *model.Step, ctx map[string]any, defs map[string]any) map[stri
 	if len(s.Params) == 0 {
 		return ctx
 	}
+	if len(defs) > 0 {
+		ctx["$defs"] = defs
+	}
 	props := make(map[string]any, len(s.Params))
 	for name, expr := range s.Params {
-		inferred, err := exprtype.InferType(expr, ctx, defs)
+		inferred, err := exprtype.InferType(expr, ctx)
 		if err != nil {
 			props[name] = map[string]any{}
 		} else {

@@ -23,14 +23,14 @@ import (
 )
 
 // InferType statically determines the JSON Schema type of expression when
-// evaluated against a context matching contextSchema.
-// defs provides $ref resolution; pass nil if contextSchema contains no $refs.
-func InferType(expression string, contextSchema map[string]any, defs map[string]any) (map[string]any, error) {
+// evaluated against schema. $refs are resolved against schema["$defs"].
+func InferType(expression string, schema map[string]any) (map[string]any, error) {
+	defs, _ := schema["$defs"].(map[string]any)
 	tree, err := parser.Parse(expression)
 	if err != nil {
 		return nil, fmt.Errorf("parse %q: %w", expression, err)
 	}
-	return inferNode(tree.Node, contextSchema, defs)
+	return inferNode(tree.Node, schema, defs)
 }
 
 func inferNode(node ast.Node, ctx map[string]any, defs map[string]any) (map[string]any, error) {
@@ -145,16 +145,23 @@ func lookupProperty(schemaObj map[string]any, name string, defs map[string]any) 
 	}
 
 	// For anyOf / oneOf: resolve the property in every variant and collect results.
+	// Null-type variants are skipped (they have no properties) but remembered so
+	// the final result can be made nullable if any null variant was present.
 	for _, kw := range []string{"anyOf", "oneOf"} {
 		variants, ok := resolved[kw].([]any)
 		if !ok {
 			continue
 		}
 		results := make([]any, 0, len(variants))
+		hadNull := false
 		for i, v := range variants {
 			varSchema, ok := v.(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("cannot access .%s: %s[%d] is not a schema object", name, kw, i)
+			}
+			if isNullType(varSchema) {
+				hadNull = true
+				continue
 			}
 			r, err := lookupProperty(varSchema, name, defs)
 			if err != nil {
@@ -163,12 +170,18 @@ func lookupProperty(schemaObj map[string]any, name string, defs map[string]any) 
 			results = append(results, r)
 		}
 		if len(results) == 0 {
-			return nil, fmt.Errorf("cannot access .%s: %s has no variants", name, kw)
+			return nil, fmt.Errorf("cannot access .%s: %s has no non-null variants", name, kw)
 		}
+		var result map[string]any
 		if allSameSchema(results) {
-			return results[0].(map[string]any), nil
+			result = results[0].(map[string]any)
+		} else {
+			result = map[string]any{kw: results}
 		}
-		return map[string]any{kw: results}, nil
+		if hadNull {
+			return withNull(result), nil
+		}
+		return result, nil
 	}
 
 	// Standard case: flat object schema with properties.
