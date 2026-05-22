@@ -191,12 +191,7 @@ func TestGenerate_Input_FirstTaskNoInput(t *testing.T) {
 			"output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
 		}]
 	}`)
-	assertJSON(t, out.Tasks["charge"].Input, `{
-		"type": "object",
-		"properties": {
-			"outputs": { "type": "object" }
-		}
-	}`)
+	assertJSON(t, out.Tasks["charge"].Input, `{"type": "object"}`)
 }
 
 func TestGenerate_Input_WithProcessInput(t *testing.T) {
@@ -209,13 +204,7 @@ func TestGenerate_Input_WithProcessInput(t *testing.T) {
 			"output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
 		}]
 	}`)
-	assertJSON(t, out.Tasks["charge"].Input, `{
-		"type": "object",
-		"properties": {
-			"input": { "$ref": "#/$defs/input" },
-			"outputs": { "type": "object" }
-		}
-	}`)
+	assertJSON(t, out.Tasks["charge"].Input, `{"type": "object"}`)
 }
 
 func TestGenerate_Input_PrecedingTaskOutput(t *testing.T) {
@@ -234,21 +223,8 @@ func TestGenerate_Input_PrecedingTaskOutput(t *testing.T) {
 			}
 		]
 	}`)
-	assertJSON(t, out.Tasks["charge"].Input, `{
-		"type": "object",
-		"properties": { "outputs": { "type": "object" } }
-	}`)
-	assertJSON(t, out.Tasks["notify"].Input, `{
-		"type": "object",
-		"properties": {
-			"outputs": {
-				"type": "object",
-				"properties": {
-					"charge": { "$ref": "#/$defs/charge_output" }
-				}
-			}
-		}
-	}`)
+	assertJSON(t, out.Tasks["charge"].Input, `{"type": "object"}`)
+	assertJSON(t, out.Tasks["notify"].Input, `{"type": "object"}`)
 }
 
 func TestGenerate_Input_TaskWithNoOutputSkippedInContext(t *testing.T) {
@@ -263,10 +239,7 @@ func TestGenerate_Input_TaskWithNoOutputSkippedInContext(t *testing.T) {
 			}
 		]
 	}`)
-	assertJSON(t, out.Tasks["notify"].Input, `{
-		"type": "object",
-		"properties": { "outputs": { "type": "object" } }
-	}`)
+	assertJSON(t, out.Tasks["notify"].Input, `{"type": "object"}`)
 }
 
 func TestGenerate_Input_ConditionalBranchUnion(t *testing.T) {
@@ -298,28 +271,8 @@ func TestGenerate_Input_ConditionalBranchUnion(t *testing.T) {
 			}
 		]
 	}`)
-	assertJSON(t, out.Tasks["ship"].Input, `{
-		"type": "object",
-		"properties": {
-			"outputs": {
-				"type": "object",
-				"properties": { "charge": { "$ref": "#/$defs/charge_output" } }
-			}
-		}
-	}`)
-	assertJSON(t, out.Tasks["notify"].Input, `{
-		"type": "object",
-		"properties": {
-			"outputs": {
-				"type": "object",
-				"properties": {
-					"charge": { "$ref": "#/$defs/charge_output" },
-					"ship":   { "$ref": "#/$defs/ship_output" },
-					"refund": { "$ref": "#/$defs/refund_output" }
-				}
-			}
-		}
-	}`)
+	assertJSON(t, out.Tasks["ship"].Input, `{"type": "object"}`)
+	assertJSON(t, out.Tasks["notify"].Input, `{"type": "object"}`)
 }
 
 func TestGenerate_Input_Params(t *testing.T) {
@@ -366,7 +319,8 @@ func TestGenerate_Input_ParamsOnlyTask(t *testing.T) {
 	}
 	assertJSON(t, out.Tasks["log"].Input, `{
 		"type": "object",
-		"properties": { "uid": { "type": "string" } }
+		"properties": { "uid": { "type": "string" } },
+		"required": ["uid"]
 	}`)
 }
 

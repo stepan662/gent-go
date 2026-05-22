@@ -175,7 +175,7 @@ func (e *Engine) handleStepError(inst *model.ProcessInstance, step *model.Step, 
 
 func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (map[string]any, error) {
 	if len(step.Params) == 0 {
-		return inst.ContextData, nil
+		return map[string]any{}, nil
 	}
 	result := make(map[string]any, len(step.Params))
 	for name, expression := range step.Params {

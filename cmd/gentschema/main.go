@@ -173,8 +173,7 @@ func flattenNamedSchemas(named map[string]map[string]any) (map[string]any, error
 // entry in tasks, and returns the IDs of all tasks that could have run by the
 // end of steps. It builds the context schema internally for inference but does
 // not store it on the output. Tasks with params appear even without an output
-// schema; their input is inferred from param expressions. Tasks without params
-// receive the full context schema as their input.
+// schema; tasks without params only appear if they already have an output schema.
 func buildInputs(steps []*model.Step, accumulated []string, tasks map[string]TaskSchemas, processInput map[string]any, defs map[string]any) ([]string, error) {
 	for _, s := range steps {
 		switch s.Type {
@@ -212,25 +211,27 @@ func buildInputs(steps []*model.Step, accumulated []string, tasks map[string]Tas
 	return accumulated, nil
 }
 
-// inferInput returns the input schema for a task. When the task has params,
-// each param name maps to the inferred type of its expression against ctx.
-// When there are no params the full ctx is sent, so ctx is returned as-is.
+// inferInput returns the input schema for a task. Each param name maps to the
+// inferred type of its expression against ctx. Tasks with no params receive an
+// empty payload from the engine, so their input schema is an empty object.
 func inferInput(s *model.Step, ctx map[string]any, defs map[string]any) (map[string]any, error) {
 	if len(s.Params) == 0 {
-		return ctx, nil
+		return map[string]any{"type": "object"}, nil
 	}
 	if len(defs) > 0 {
 		ctx["$defs"] = defs
 	}
 	props := make(map[string]any, len(s.Params))
+	required := make([]string, 0, len(s.Params))
 	for name, expr := range s.Params {
 		inferred, err := exprtype.InferType(expr, ctx)
 		if err != nil {
 			return nil, fmt.Errorf("task %q param %q: %w", s.ID, name, err)
 		}
 		props[name] = inferred
+		required = append(required, name)
 	}
-	return map[string]any{"type": "object", "properties": props}, nil
+	return map[string]any{"type": "object", "properties": props, "required": required}, nil
 }
 
 // contextSchema builds a JSON Schema for the context available to a task:
