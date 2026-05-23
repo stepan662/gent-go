@@ -38,7 +38,8 @@ func TestInfer_TopLevelField(t *testing.T) {
 			"amount":   {"type":"number"},
 			"label":    {"type":"string"},
 			"active":   {"type":"boolean"}
-		}
+		},
+		"required": ["order_id", "amount", "label", "active"]
 	}`)
 }
 
@@ -80,12 +81,14 @@ func TestInfer_RefResolution(t *testing.T) {
 		"properties": {
 			"input": { "$ref": "#/$defs/Input" }
 		},
+		"required": ["input"],
 		"$defs": {
 			"Input": {
 				"type": "object",
 				"properties": {
 					"order_id": { "type": "integer" }
-				}
+				},
+				"required": ["order_id"]
 			}
 		}
 	}`)

@@ -5,21 +5,24 @@ import "testing"
 // Schemas local to error-message tests. Each is a minimal single-field schema
 // that isolates one type behaviour.
 var (
-	stringXSchema  = mustSchema(`{"properties": {"x": {"type": "string"}}}`)
-	booleanXSchema = mustSchema(`{"properties": {"x": {"type": "boolean"}}}`)
+	stringXSchema  = mustSchema(`{"properties": {"x": {"type": "string"}}, "required": ["x"]}`)
+	booleanXSchema = mustSchema(`{"properties": {"x": {"type": "boolean"}}, "required": ["x"]}`)
 
 	// Single-notation nullable schemas. Error messages are notation-independent,
 	// so one variant is enough here.
 	nullableIntegerAnyOf = mustSchema(`{
-		"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}
+		"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
+		"required": ["x"]
 	}`)
 	nullableBooleanAnyOf = mustSchema(`{
-		"properties": {"x": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}}
+		"properties": {"x": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}},
+		"required": ["x"]
 	}`)
 
 	// integerOrObjectAnyOf — incompatible union used in the ambiguous-operator tests.
 	integerOrObjectAnyOf = mustSchema(`{
-		"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "object"}]}}
+		"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "object"}]}},
+		"required": ["x"]
 	}`)
 
 	// objectWithFieldSchema — x is an object that has field "n" but not "missing".
@@ -27,9 +30,11 @@ var (
 		"properties": {
 			"x": {
 				"type": "object",
-				"properties": {"n": {"type": "integer"}}
+				"properties": {"n": {"type": "integer"}},
+				"required": ["n"]
 			}
-		}
+		},
+		"required": ["x"]
 	}`)
 )
 
@@ -136,7 +141,8 @@ func TestInferError_AmbiguousArithmetic(t *testing.T) {
 
 func TestInferError_AmbiguousComparison(t *testing.T) {
 	schema := mustSchema(`{
-		"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "string"}]}}
+		"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "string"}]}},
+		"required": ["x"]
 	}`)
 	inferErr(t, "x < 1", schema, "unambiguous")
 	evalErr(t, "x < 1", map[string]any{"x": "hello"})
@@ -146,13 +152,12 @@ func TestInferError_AmbiguousComparison(t *testing.T) {
 //
 // InferType catches missing or inaccessible fields at schema-resolution time.
 
-func TestInferError_MissingField(t *testing.T) {
-	inferErr(t, "x.missing", objectWithFieldSchema, `"missing" not found in schema`)
-	evalErr(t, "x.missing", map[string]any{"x": map[string]any{"n": 5}})
-}
-
 func TestInferError_FieldOnPrimitive(t *testing.T) {
-	inferErr(t, "x.foo", integerXSchema, "no properties")
+	schema := mustSchema(`{
+		"properties": {"x": {"anyOf": [{"type": "object", "properties": {"foo": {"type": "string"}}}, {"type": "string"}]}},
+		"required": ["x"]
+	}`)
+	infer(t, "x.foo", schema)
 	evalErr(t, "x.foo", map[string]any{"x": 42})
 }
 

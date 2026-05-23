@@ -16,9 +16,11 @@ var (
 				"type": "object",
 				"properties": {
 					"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}
-				}
+				},
+				"required": ["x"]
 			}
-		}
+		},
+		"required": ["input"]
 	}`)
 
 	// tripleNumericNullSchema — x can be integer, number, or null. Without a null
@@ -32,7 +34,8 @@ var (
 					{"type": "null"}
 				]
 			}
-		}
+		},
+		"required": ["x"]
 	}`)
 )
 

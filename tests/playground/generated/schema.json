@@ -1,0 +1,86 @@
+{
+  "process": "order-pipeline",
+  "version": 1,
+  "process_input": {
+    "$ref": "#/$defs/input"
+  },
+  "tasks": {
+    "check_fraud": {
+      "input": {
+        "properties": {
+          "valid": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "valid"
+        ],
+        "type": "object"
+      }
+    },
+    "save_order": {
+      "input": {
+        "properties": {
+          "data": {
+            "properties": {
+              "amount": {
+                "type": "number"
+              },
+              "card_token": {
+                "type": "string"
+              },
+              "customer_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "customer_id",
+              "amount",
+              "card_token"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/save_order_output"
+      }
+    }
+  },
+  "$defs": {
+    "input": {
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "card_token": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "customer_id",
+        "amount",
+        "card_token"
+      ],
+      "type": "object"
+    },
+    "save_order_output": {
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  }
+}

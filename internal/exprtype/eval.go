@@ -61,7 +61,7 @@ func evalMember(n *ast.MemberNode, ctx map[string]any) (any, error) {
 		}
 		v, ok := m[prop.Value]
 		if !ok {
-			return nil, fmt.Errorf("field %q not found", prop.Value)
+			return nil, nil // missing field → null
 		}
 		return v, nil
 	case *ast.IntegerNode:

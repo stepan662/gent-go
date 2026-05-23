@@ -31,29 +31,29 @@ func mustSchema(s string) map[string]any {
 // Nullable schema sets — "x" declared as T|null in all three JSON Schema notations.
 var (
 	nullableInteger = []namedSchema{
-		{"type_array", mustSchema(`{"properties": {"x": {"type": ["integer", "null"]}}}`)},
-		{"anyOf", mustSchema(`{"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}}`)},
-		{"oneOf", mustSchema(`{"properties": {"x": {"oneOf": [{"type": "integer"}, {"type": "null"}]}}}`)},
+		{"type_array", mustSchema(`{"properties": {"x": {"type": ["integer", "null"]}}, "required": ["x"]}`)},
+		{"anyOf", mustSchema(`{"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}, "required": ["x"]}`)},
+		{"oneOf", mustSchema(`{"properties": {"x": {"oneOf": [{"type": "integer"}, {"type": "null"}]}}, "required": ["x"]}`)},
 	}
 	nullableString = []namedSchema{
-		{"type_array", mustSchema(`{"properties": {"x": {"type": ["string", "null"]}}}`)},
-		{"anyOf", mustSchema(`{"properties": {"x": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}`)},
-		{"oneOf", mustSchema(`{"properties": {"x": {"oneOf": [{"type": "string"}, {"type": "null"}]}}}`)},
+		{"type_array", mustSchema(`{"properties": {"x": {"type": ["string", "null"]}}, "required": ["x"]}`)},
+		{"anyOf", mustSchema(`{"properties": {"x": {"anyOf": [{"type": "string"}, {"type": "null"}]}}, "required": ["x"]}`)},
+		{"oneOf", mustSchema(`{"properties": {"x": {"oneOf": [{"type": "string"}, {"type": "null"}]}}, "required": ["x"]}`)},
 	}
 	nullableBoolean = []namedSchema{
-		{"type_array", mustSchema(`{"properties": {"x": {"type": ["boolean", "null"]}}}`)},
-		{"anyOf", mustSchema(`{"properties": {"x": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}}}`)},
-		{"oneOf", mustSchema(`{"properties": {"x": {"oneOf": [{"type": "boolean"}, {"type": "null"}]}}}`)},
+		{"type_array", mustSchema(`{"properties": {"x": {"type": ["boolean", "null"]}}, "required": ["x"]}`)},
+		{"anyOf", mustSchema(`{"properties": {"x": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}}, "required": ["x"]}`)},
+		{"oneOf", mustSchema(`{"properties": {"x": {"oneOf": [{"type": "boolean"}, {"type": "null"}]}}, "required": ["x"]}`)},
 	}
 )
 
 // Commonly shared non-nullable and union schemas.
 var (
-	integerXSchema = mustSchema(`{"properties": {"x": {"type": "integer"}}}`)
+	integerXSchema = mustSchema(`{"properties": {"x": {"type": "integer"}}, "required": ["x"]}`)
 
 	numericUnionSchemas = []namedSchema{
-		{"anyOf", mustSchema(`{"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "number"}]}}}`)},
-		{"oneOf", mustSchema(`{"properties": {"x": {"oneOf": [{"type": "integer"}, {"type": "number"}]}}}`)},
+		{"anyOf", mustSchema(`{"properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "number"}]}}, "required": ["x"]}`)},
+		{"oneOf", mustSchema(`{"properties": {"x": {"oneOf": [{"type": "integer"}, {"type": "number"}]}}, "required": ["x"]}`)},
 	}
 )
 

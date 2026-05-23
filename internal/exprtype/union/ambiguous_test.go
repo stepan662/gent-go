@@ -12,7 +12,8 @@ var (
 	integerOrObjectSchema = mustSchema(`{
 		"properties": {
 			"x": {"anyOf": [{"type": "integer"}, {"type": "object"}]}
-		}
+		},
+		"required": ["x"]
 	}`)
 
 	// stringOrIntegerSchema — string ops on string|integer: the integer variant
@@ -20,7 +21,8 @@ var (
 	stringOrIntegerSchema = mustSchema(`{
 		"properties": {
 			"x": {"anyOf": [{"type": "string"}, {"type": "integer"}]}
-		}
+		},
+		"required": ["x"]
 	}`)
 
 	// oneOfIntegerObjectSchema — same semantics as integerOrObjectSchema but
@@ -28,7 +30,8 @@ var (
 	oneOfIntegerObjectSchema = mustSchema(`{
 		"properties": {
 			"x": {"oneOf": [{"type": "integer"}, {"type": "object"}]}
-		}
+		},
+		"required": ["x"]
 	}`)
 )
 

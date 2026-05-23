@@ -146,6 +146,20 @@ func (e *Engine) execTask(ctx context.Context, inst *model.ProcessInstance, step
 	}
 	inst.ContextData["outputs"].(map[string]any)[step.ID] = resp.Output
 
+	// Track step completion order so outputs can be serialized in step order.
+	var order []string
+	switch v := inst.ContextData["output_order"].(type) {
+	case []string:
+		order = v
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				order = append(order, s)
+			}
+		}
+	}
+	inst.ContextData["output_order"] = append(order, step.ID)
+
 	// Step succeeded: pop it from the queue.
 	inst.StepQueue = inst.StepQueue[1:]
 	inst.RetryCount = 0

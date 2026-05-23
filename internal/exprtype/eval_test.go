@@ -55,7 +55,7 @@ func TestEval_NestedField_DeepPath(t *testing.T) {
 }
 
 func TestEval_FieldNotFound(t *testing.T) {
-	evalErr(t, "input.missing", richCtx)
+	assertEq(t, evalOK(t, "input.missing", richCtx), nil)
 }
 
 func TestEval_FieldOnNonObject(t *testing.T) {

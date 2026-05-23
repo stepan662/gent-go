@@ -3,7 +3,7 @@
 
 import { createServer } from 'node:http'
 import Ajv from 'ajv'
-import type { ChargeCardInput, ChargeCardOutput, RejectOrderInput, RejectOrderOutput, ValidateOrderInput, ValidateOrderOutput } from './types.ts'
+import type { CheckFraudInput, SaveOrderInput, SaveOrderOutput } from './types.ts'
 
 // Transport envelope — mirrors internal/transport/transport.go
 interface TaskRequest {
@@ -14,58 +14,18 @@ interface TaskRequest {
 
 // Implement this in server.ts and pass it to startServer().
 export interface Handlers {
-  charge_card: (ctx: ChargeCardInput) => Promise<ChargeCardOutput>
-  reject_order: (ctx: RejectOrderInput) => Promise<RejectOrderOutput>
-  validate_order: (ctx: ValidateOrderInput) => Promise<ValidateOrderOutput>
+  check_fraud: (ctx: CheckFraudInput) => Promise<Record<string, unknown>>
+  save_order: (ctx: SaveOrderInput) => Promise<SaveOrderOutput>
 }
 
 // Output schemas baked in for runtime validation via AJV.
 const stepSchemas: Record<string, object> = {
-  "charge_card": {
-    "additionalProperties": false,
+  "save_order": {
     "properties": {
-      "charged": {
-        "type": "boolean"
-      },
-      "transaction_id": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "charged",
-      "transaction_id"
-    ],
-    "type": "object"
-  },
-  "reject_order": {
-    "additionalProperties": false,
-    "properties": {
-      "reason": {
-        "type": "string"
-      },
-      "rejected": {
-        "type": "boolean"
-      }
-    },
-    "required": [
-      "rejected",
-      "reason"
-    ],
-    "type": "object"
-  },
-  "validate_order": {
-    "additionalProperties": false,
-    "properties": {
-      "reason": {
-        "type": "string"
-      },
       "valid": {
         "type": "boolean"
       }
     },
-    "required": [
-      "valid"
-    ],
     "type": "object"
   }
 }

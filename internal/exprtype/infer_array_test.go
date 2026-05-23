@@ -18,16 +18,19 @@ const arrayCtxJSON = `{
 				"matrix":     { "type": "array", "items": { "type": "array", "items": { "type": "number" } } },
 				"bare":       { "type": "array" },
 				"referenced": { "type": "array", "items": { "$ref": "#/$defs/object" } }
-			}
+			},
+			"required": ["tags", "counts", "matrix", "bare", "referenced"]
 		}
 	},
+	"required": ["input"],
 	"$defs": {
 		"object": {
 			"type": "object",
 			"properties": {
 				"name":  { "type": "string" },
 				"value": { "type": "number" }
-			}
+			},
+			"required": ["name", "value"]
 		}
 	}
 }`
@@ -135,9 +138,11 @@ func TestInfer_Array_AlreadyNullableStable(t *testing.T) {
 				"type": "object",
 				"properties": {
 					"tags": { "type": ["array", "null"], "items": { "type": "string" } }
-				}
+				},
+				"required": ["tags"]
 			}
-		}
+		},
+		"required": ["input"]
 	}`)
 	assertSchema(t, infer(t, "true ? input.tags : nil", c), `{
 		"type": ["array", "null"],

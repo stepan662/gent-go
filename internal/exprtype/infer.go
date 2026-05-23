@@ -368,7 +368,14 @@ func lookupProperty(schemaObj map[string]any, name string, defs map[string]any) 
 	if !ok {
 		return nil, fmt.Errorf("field %q not found in schema", name)
 	}
-	return deref(prop, defs)
+	result, err := deref(prop, defs)
+	if err != nil {
+		return nil, err
+	}
+	if !isRequiredField(resolved, name) {
+		return withNull(result), nil
+	}
+	return result, nil
 }
 
 func allSameSchema(schemas []any) bool {
@@ -383,6 +390,17 @@ func allSameSchema(schemas []any) bool {
 		}
 	}
 	return true
+}
+
+// isRequiredField reports whether name appears in the "required" array of schema.
+func isRequiredField(schema map[string]any, name string) bool {
+	req, _ := schema["required"].([]any)
+	for _, r := range req {
+		if r == name {
+			return true
+		}
+	}
+	return false
 }
 
 // deref follows a $ref pointer if present, looking it up in defs.

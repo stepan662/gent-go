@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -207,11 +208,62 @@ func instanceToResp(inst *model.ProcessInstance) InstanceStatusResp {
 		Version:    inst.ProcessVersion,
 		Status:     inst.Status,
 		RetryCount: inst.RetryCount,
-		Context:    inst.ContextData,
+		Context:    orderedContext(inst.ContextData),
 		Error:      inst.Error,
 		CreatedAt:  inst.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:  inst.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+// orderedContext returns a copy of contextData with outputs serialized in step
+// completion order (tracked by "output_order"), hiding the order key itself.
+func orderedContext(ctxData map[string]any) map[string]any {
+	result := make(map[string]any, len(ctxData))
+	for k, v := range ctxData {
+		if k != "output_order" {
+			result[k] = v
+		}
+	}
+
+	outputs, _ := ctxData["outputs"].(map[string]any)
+	if len(outputs) == 0 {
+		return result
+	}
+
+	var order []string
+	switch v := ctxData["output_order"].(type) {
+	case []string:
+		order = v
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				order = append(order, s)
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	first := true
+	for _, key := range order {
+		val, ok := outputs[key]
+		if !ok {
+			continue
+		}
+		if !first {
+			buf.WriteByte(',')
+		}
+		keyBytes, _ := json.Marshal(key)
+		valBytes, _ := json.Marshal(val)
+		buf.Write(keyBytes)
+		buf.WriteByte(':')
+		buf.Write(valBytes)
+		first = false
+	}
+	buf.WriteByte('}')
+
+	result["outputs"] = json.RawMessage(buf.Bytes())
+	return result
 }
 
 // ProcessSpec returns the full OpenAPI spec with the input schema for POST /instances

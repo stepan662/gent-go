@@ -18,37 +18,39 @@ const complexCtxJSON = `{
 				"numeric_union": { "anyOf": [{"type":"integer"}, {"type":"number"}] },
 				"obj_union": {
 					"anyOf": [
-						{"type":"object","properties":{"x":{"type":"integer"}}},
-						{"type":"object","properties":{"x":{"type":"string"}}}
+						{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]},
+						{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}
 					]
 				},
 				"obj_union_oneof": {
 					"oneOf": [
-						{"type":"object","properties":{"x":{"type":"boolean"}}},
-						{"type":"object","properties":{"x":{"type":"number"}}}
+						{"type":"object","properties":{"x":{"type":"boolean"}},"required":["x"]},
+						{"type":"object","properties":{"x":{"type":"number"}},"required":["x"]}
 					]
 				},
 				"obj_union_same": {
 					"anyOf": [
-						{"type":"object","properties":{"x":{"type":"integer"}}},
-						{"type":"object","properties":{"x":{"type":"integer"}}}
+						{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]},
+						{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]}
 					]
 				},
 				"obj_union_nested": {
 					"anyOf": [
-						{"type":"object","properties":{"inner":{"type":"object","properties":{"z":{"type":"boolean"}}}}},
-						{"type":"object","properties":{"inner":{"type":"object","properties":{"z":{"type":"integer"}}}}}
+						{"type":"object","properties":{"inner":{"type":"object","properties":{"z":{"type":"boolean"}},"required":["z"]}},"required":["inner"]},
+						{"type":"object","properties":{"inner":{"type":"object","properties":{"z":{"type":"integer"}},"required":["z"]}},"required":["inner"]}
 					]
 				},
 				"obj_union_anyof_in_oneof": {
 					"oneOf": [
-						{"type":"object","properties":{"x":{"anyOf":[{"type":"number"},{"type":"object","properties":{"y":{"type":"boolean"}}}]}}},
-						{"type":"object","properties":{"x":{"anyOf":[{"type":"integer"}]}}}
+						{"type":"object","properties":{"x":{"anyOf":[{"type":"number"},{"type":"object","properties":{"y":{"type":"boolean"}},"required":["y"]}]}},"required":["x"]},
+						{"type":"object","properties":{"x":{"anyOf":[{"type":"integer"}]}},"required":["x"]}
 					]
 				}
-			}
+			},
+			"required": ["flexible", "exactly_one", "combined", "negated", "numeric_union", "obj_union", "obj_union_oneof", "obj_union_same", "obj_union_nested", "obj_union_anyof_in_oneof"]
 		}
-	}
+	},
+	"required": ["input"]
 }`
 
 // --- field access: complex schemas are returned as-is ---
@@ -160,9 +162,11 @@ const nullableCtxJSON = `{
 				"id":      { "type": "integer" },
 				"comment": { "type": ["string", "null"] },
 				"amount":  { "type": ["number", "null"] }
-			}
+			},
+			"required": ["id", "comment", "amount"]
 		}
-	}
+	},
+	"required": ["input"]
 }`
 
 // Accessing a nullable field returns its schema as-is.
@@ -273,13 +277,15 @@ func TestInfer_AnyOf_MemberAccess_MissingInVariant(t *testing.T) {
 				"properties": {
 					"partial": {
 						"anyOf": [
-							{"type":"object","properties":{"x":{"type":"integer"}}},
-							{"type":"object","properties":{"y":{"type":"string"}}}
+							{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]},
+							{"type":"object","properties":{"y":{"type":"string"}},"required":["y"]}
 						]
 					}
-				}
+				},
+				"required": ["partial"]
 			}
-		}
+		},
+		"required": ["input"]
 	}`)
 	assertSchema(t, infer(t, "input.partial.x", c), `{"type":["integer","null"]}`)
 }
@@ -308,9 +314,11 @@ func TestInfer_AnyOf_AllNullVariants_MemberAccess(t *testing.T) {
 					"always_null": {
 						"anyOf": [{"type":"null"}, {"type":"null"}]
 					}
-				}
+				},
+				"required": ["always_null"]
 			}
-		}
+		},
+		"required": ["input"]
 	}`)
 	assertSchema(t, infer(t, "input.always_null.x", c), `{"type":"null"}`)
 }
@@ -326,9 +334,11 @@ func TestInfer_OneOf_AllNullVariants_MemberAccess(t *testing.T) {
 					"always_null": {
 						"oneOf": [{"type":"null"}]
 					}
-				}
+				},
+				"required": ["always_null"]
 			}
-		}
+		},
+		"required": ["input"]
 	}`)
 	assertSchema(t, infer(t, "input.always_null.x", c), `{"type":"null"}`)
 }
@@ -345,12 +355,14 @@ func TestInfer_AnyOf_NullAndObject_MemberAccess(t *testing.T) {
 					"maybe": {
 						"anyOf": [
 							{"type":"null"},
-							{"type":"object","properties":{"x":{"type":"integer"}}}
+							{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"]}
 						]
 					}
-				}
+				},
+				"required": ["maybe"]
 			}
-		}
+		},
+		"required": ["input"]
 	}`)
 	assertSchema(t, infer(t, "input.maybe.x", c), `{"type":["integer","null"]}`)
 }

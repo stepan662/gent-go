@@ -283,7 +283,8 @@ func TestGenerate_Input_Params(t *testing.T) {
 			"properties": {
 				"order_id": { "type": "integer" },
 				"amount":   { "type": "number" }
-			}
+			},
+			"required": ["order_id", "amount"]
 		},
 		"steps": [{
 			"type": "task", "id": "charge",
@@ -307,7 +308,7 @@ func TestGenerate_Input_Params(t *testing.T) {
 func TestGenerate_Input_ParamsOnlyTask(t *testing.T) {
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
-		"input_schema": { "type": "object", "properties": { "user_id": { "type": "string" } } },
+		"input_schema": { "type": "object", "properties": { "user_id": { "type": "string" } }, "required": ["user_id"] },
 		"steps": [{
 			"type": "task", "id": "log",
 			"transport": "http", "endpoint": "http://x",

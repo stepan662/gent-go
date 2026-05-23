@@ -7,30 +7,18 @@ export interface ProcessInput {
   customer_id: string;
 }
 
-export interface ChargeCardInput {
-  amount: number;
-  customer_id: string;
+export interface CheckFraudInput {
+  valid: boolean | null;
 }
 
-export interface ChargeCardOutput {
-  charged: boolean;
-  transaction_id: string;
+export interface SaveOrderInput {
+  data: {
+    amount: number;
+    card_token: string;
+    customer_id: string;
+  };
 }
 
-export interface RejectOrderInput {
-  reason: string;
-}
-
-export interface RejectOrderOutput {
-  reason: string;
-  rejected: boolean;
-}
-
-export interface ValidateOrderInput {
-  amount: number;
-}
-
-export interface ValidateOrderOutput {
-  reason?: string;
-  valid: boolean;
+export interface SaveOrderOutput {
+  valid?: boolean;
 }

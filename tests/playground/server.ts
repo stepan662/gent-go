@@ -4,26 +4,28 @@
 // Usage: bun run playground:server
 
 import { startServer, type Handlers } from "./generated/server.ts";
+import { CheckFraudInput } from "./generated/types.ts";
 import { PORT } from "./process.ts";
 
 const handlers: Handlers = {
-  async validate_order({ amount }) {
+  async save_order({ data: { amount } }) {
     console.log("validating order, amount:", amount);
     if (amount <= 0) return { valid: false, reason: "amount must be positive" };
-    if (amount > 10_000)
+    if (amount > 10000)
       return { valid: false, reason: "amount exceeds $10,000 limit" };
-    return { valid: true };
+    return {};
   },
-
-  async charge_card({ customer_id, amount }) {
-    console.log(`charging ${customer_id} $${amount.toFixed(2)}`);
-    return { charged: true, transaction_id: `txn_${Date.now()}` };
-  },
-
-  async reject_order({ reason }) {
-    const msg = reason ?? "validation failed";
-    console.log(`rejecting order: ${msg}`);
-    return { rejected: true, reason: msg };
+  check_fraud: function (
+    ctx: CheckFraudInput,
+  ): Promise<Record<string, unknown>> {
+    console.log("checking for fraud:", ctx);
+    if (ctx.valid) {
+      console.log("no fraud detected");
+      return Promise.resolve({ fraud: false });
+    } else {
+      console.log("fraud detected, rejecting order");
+      return Promise.resolve({ fraud: true });
+    }
   },
 };
 

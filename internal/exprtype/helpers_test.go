@@ -145,7 +145,8 @@ const richContextJSON = `{
 				"amount":   { "type": "number"  },
 				"label":    { "type": "string"  },
 				"active":   { "type": "boolean" }
-			}
+			},
+			"required": ["order_id", "amount", "label", "active"]
 		},
 		"outputs": {
 			"type": "object",
@@ -155,9 +156,12 @@ const richContextJSON = `{
 					"properties": {
 						"charged": { "type": "boolean" },
 						"fee":     { "type": "number"  }
-					}
+					},
+					"required": ["charged", "fee"]
 				}
-			}
+			},
+			"required": ["charge"]
 		}
-	}
+	},
+	"required": ["input", "outputs"]
 }`

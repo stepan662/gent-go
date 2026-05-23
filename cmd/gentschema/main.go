@@ -236,23 +236,29 @@ func inferInput(s *model.Step, ctx map[string]any, defs map[string]any) (map[str
 
 // contextSchema builds a JSON Schema for the context available to a task:
 // the process input (if any, as a $ref) and $ref outputs of all preceding tasks.
+// All fields listed are guaranteed present at runtime, so they are marked required.
 func contextSchema(preceding []string, tasks map[string]TaskSchemas, processInput map[string]any) map[string]any {
 	props := make(map[string]any)
+	required := []any{"outputs"}
 	if len(processInput) > 0 {
 		props["input"] = processInput
+		required = append(required, "input")
 	}
 	outputProps := make(map[string]any)
+	outputRequired := make([]any, 0)
 	for _, id := range preceding {
 		if ts, ok := tasks[id]; ok && len(ts.Output) > 0 {
 			outputProps[id] = ts.Output
+			outputRequired = append(outputRequired, id)
 		}
 	}
 	outputs := map[string]any{"type": "object"}
 	if len(outputProps) > 0 {
 		outputs["properties"] = outputProps
+		outputs["required"] = outputRequired
 	}
 	props["outputs"] = outputs
-	return map[string]any{"type": "object", "properties": props}
+	return map[string]any{"type": "object", "properties": props, "required": required}
 }
 
 func schemaRef(name string) map[string]any {
