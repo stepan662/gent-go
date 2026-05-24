@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"gent/internal/exprtype"
+	tmpl "gent/internal/template"
 )
 
 // Evaluator compiles and evaluates expressions against a context map.
@@ -29,12 +30,14 @@ func evalEnv(contextData map[string]any, self any) map[string]any {
 	}
 }
 
-// EvalAny evaluates an expression and returns the result as any value.
-// self is nil (params are evaluated before the action runs).
+// EvalAny evaluates a template string and returns the result.
+// Plain strings are returned as-is; "{{expr}}" returns the expression result
+// preserving type; mixed templates are stringified. self is nil (params are
+// evaluated before the action runs).
 func (Evaluator) EvalAny(expression string, contextData map[string]any) (any, error) {
-	result, err := exprtype.Eval(expression, evalEnv(contextData, nil))
+	result, err := tmpl.EvalAny(expression, evalEnv(contextData, nil))
 	if err != nil {
-		return nil, fmt.Errorf("eval %q: %w", expression, err)
+		return nil, fmt.Errorf("param %q: %w", expression, err)
 	}
 	return result, nil
 }

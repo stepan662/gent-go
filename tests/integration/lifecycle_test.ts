@@ -94,8 +94,8 @@ test("lifecycle — conditional routes to correct branch", async () => {
           transport: "http",
           endpoint: "http://localhost:19994/action",
           switch: {
-            "input.go_then == true": "then_step",
-            default: "else_step",
+            "input.go_then == true": "#then_step",
+            default: "#else_step",
           },
         },
         {
@@ -162,7 +162,6 @@ test("lifecycle — task fails when output violates output_schema", async () => 
       version: 1,
       steps: [
         {
-          type: "task" as const,
           id: "charge",
           transport: "http" as const,
           endpoint: "http://localhost:19996/action",

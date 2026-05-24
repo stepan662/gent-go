@@ -1,1 +1,2 @@
-export const BASE_URL = process.env.GENT_URL ?? "http://localhost:8080";
+export const PORT = process.env.GENT_PORT ?? 8888;
+export const BASE_URL = `http://localhost:${PORT}`;

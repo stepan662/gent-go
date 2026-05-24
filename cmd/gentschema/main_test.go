@@ -74,7 +74,7 @@ func TestGenerate_FlatStepsWithOutputs(t *testing.T) {
 			{
 				"id": "charge",
 				"transport": "http", "endpoint": "http://x",
-				"switch": {"self.charged == true": "ship"},
+				"switch": {"self.charged == true": "#ship"},
 				"output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }
 			},
 			{
@@ -254,7 +254,7 @@ func TestGenerate_Input_SwitchOnlyStepSkippedInContext(t *testing.T) {
 			},
 			{
 				"id": "route",
-				"switch": {"outputs.charge.charged == true": "ship"}
+				"switch": {"outputs.charge.charged == true": "#ship"}
 			},
 			{
 				"id": "ship",
@@ -287,8 +287,8 @@ func TestGenerate_Input_Params(t *testing.T) {
 			"id": "charge",
 			"transport": "http", "endpoint": "http://x",
 			"params": {
-				"id":  "input.order_id",
-				"sum": "input.amount"
+				"id":  "{{input.order_id}}",
+				"sum": "{{input.amount}}"
 			},
 			"output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
 		}]
@@ -309,7 +309,7 @@ func TestGenerate_Input_ParamsOnlyTask(t *testing.T) {
 		"steps": [{
 			"id": "log",
 			"transport": "http", "endpoint": "http://x",
-			"params": { "uid": "input.user_id" }
+			"params": { "uid": "{{input.user_id}}" }
 		}]
 	}`)
 	if _, ok := out.Tasks["log"]; !ok {
@@ -342,7 +342,7 @@ func TestGenerate_Input_Params_OneOfOutputPropertyAccess(t *testing.T) {
 			{
 				"id": "check_fraud",
 				"transport": "http", "endpoint": "http://x",
-				"params": { "result": "outputs.save_order.valid" }
+				"params": { "result": "{{outputs.save_order.valid}}" }
 			}
 		]
 	}`)
@@ -366,8 +366,8 @@ func TestGenerate_Switch_SelfExpressionTypeChecked(t *testing.T) {
 					"required": ["charged"]
 				},
 				"switch": {
-					"self.charged == true": "ship",
-					"self.charged == false": "refund"
+					"self.charged == true": "#ship",
+					"self.charged == false": "#refund"
 				}
 			},
 			{ "id": "ship",   "transport": "http", "endpoint": "http://x" },
@@ -391,7 +391,7 @@ func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
 					"properties": { "charged": { "type": "boolean" } },
 					"required": ["charged"]
 				},
-				"switch": {"outputs.charge.charged == true": "notify"}
+				"switch": {"outputs.charge.charged == true": "#notify"}
 			},
 			{ "id": "notify", "transport": "http", "endpoint": "http://x" }
 		]
@@ -413,8 +413,8 @@ func TestGenerate_RecursiveStep_OwnOutputOptionalInParams(t *testing.T) {
 			"id": "loop",
 			"transport": "http", "endpoint": "http://x",
 			"params": {
-				"tasks": "input.tasks",
-				"task_index": "outputs.loop.finished_index ? outputs.loop.finished_index : 0"
+				"tasks": "{{input.tasks}}",
+				"task_index": "{{outputs.loop.finished_index ? outputs.loop.finished_index : 0}}"
 			},
 			"output_schema": {
 				"type": "object",
@@ -424,7 +424,7 @@ func TestGenerate_RecursiveStep_OwnOutputOptionalInParams(t *testing.T) {
 				},
 				"required": ["finished_index", "done"]
 			},
-			"switch": { "!self.done": "loop", "default": "$end" }
+			"switch": { "!self.done": "#loop", "default": "$end" }
 		}]
 	}`)
 	input := out.Tasks["loop"].Input
@@ -453,12 +453,12 @@ func TestGenerate_SwitchStep_NextStepNotReachableViaFallthrough(t *testing.T) {
 				"id": "decide",
 				"transport": "http", "endpoint": "http://x",
 				"output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] },
-				"switch": { "self.ok": "work", "default": "$end" }
+				"switch": { "self.ok": "#work", "default": "$end" }
 			},
 			{
 				"id": "work",
 				"transport": "http", "endpoint": "http://x",
-				"params": { "flag": "outputs.decide.ok" },
+				"params": { "flag": "{{outputs.decide.ok}}" },
 				"output_schema": { "type": "object", "properties": { "done": { "type": "boolean" } } }
 			}
 		]
@@ -498,7 +498,7 @@ func TestGenerate_ContextSets_LinearChain_RequiredOutputNonNullable(t *testing.T
 			{
 				"id": "B",
 				"transport": "http", "endpoint": "http://x",
-				"params": { "flag": "outputs.A.ok" }
+				"params": { "flag": "{{outputs.A.ok}}" }
 			}
 		]
 	}`)
@@ -528,7 +528,7 @@ func TestGenerate_ContextSets_ExclusiveBranch_SkippedStepOutputNullable(t *testi
 		"steps": [
 			{
 				"id": "gate",
-				"switch": { "input.take_fast": "fast", "default": "slow" }
+				"switch": { "input.take_fast": "#fast", "default": "#slow" }
 			},
 			{
 				"id": "fast",
@@ -543,7 +543,7 @@ func TestGenerate_ContextSets_ExclusiveBranch_SkippedStepOutputNullable(t *testi
 			{
 				"id": "merge",
 				"transport": "http", "endpoint": "http://x",
-				"params": { "s": "outputs.fast.speed" }
+				"params": { "s": "{{outputs.fast.speed}}" }
 			}
 		]
 	}`)
@@ -575,14 +575,14 @@ func TestGenerate_ContextSets_PreBranchStepRequiredAtAllMergePoints(t *testing.T
 			},
 			{
 				"id": "gate",
-				"switch": { "outputs.pre.id == 1": "path_a", "default": "path_b" }
+				"switch": { "outputs.pre.id == 1": "#path_a", "default": "#path_b" }
 			},
 			{ "id": "path_a", "transport": "http", "endpoint": "http://x" },
 			{ "id": "path_b", "transport": "http", "endpoint": "http://x" },
 			{
 				"id": "post",
 				"transport": "http", "endpoint": "http://x",
-				"params": { "pre_id": "outputs.pre.id" }
+				"params": { "pre_id": "{{outputs.pre.id}}" }
 			}
 		]
 	}`)
@@ -610,12 +610,12 @@ func TestGenerate_ContextSets_DefaultEndSwitch_SuccessorRequiredNotOptional(t *t
 					"properties": { "ok": { "type": "boolean" } },
 					"required": ["ok"]
 				},
-				"switch": { "self.ok": "work", "default": "$end" }
+				"switch": { "self.ok": "#work", "default": "$end" }
 			},
 			{
 				"id": "work",
 				"transport": "http", "endpoint": "http://x",
-				"params": { "flag": "outputs.decide.ok" }
+				"params": { "flag": "{{outputs.decide.ok}}" }
 			}
 		]
 	}`)

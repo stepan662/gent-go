@@ -33,9 +33,9 @@ export const processDefinition = {
       transport: "http" as const,
       endpoint: `http://localhost:${PORT}/loop`,
       params: {
-        tasks: "input.tasks",
+        tasks: "{{input.tasks}}",
         task_index:
-          "outputs.loop.finished_index != nil ? outputs.loop.finished_index + 1 : 0",
+          "{{outputs.loop.finished_index != nil ? outputs.loop.finished_index + 1 : 0}}",
       },
       output_schema: {
         type: "object",
@@ -46,7 +46,7 @@ export const processDefinition = {
         required: ["finished_index", "done"],
       },
       switch: {
-        "!outputs.loop.done": "loop",
+        "!self.done": "#loop",
         default: "$end",
       },
     },

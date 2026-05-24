@@ -19,6 +19,7 @@ import (
 	"gent/internal/exprtype"
 	"gent/internal/model"
 	"gent/internal/schema"
+	"gent/internal/template"
 )
 
 // TaskSchemas holds the schemas associated with a single task step.
@@ -408,7 +409,7 @@ func inferInput(s *model.Step, ctx map[string]any, defs map[string]any) (map[str
 	props := make(map[string]any, len(s.Params))
 	required := make([]string, 0, len(s.Params))
 	for name, expr := range s.Params {
-		inferred, err := exprtype.InferType(expr, ctx)
+		inferred, err := template.InferType(expr, ctx)
 		if err != nil {
 			return nil, fmt.Errorf("task %q param %q: %w", s.ID, name, err)
 		}

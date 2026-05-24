@@ -52,7 +52,11 @@ func (s SwitchMap) MarshalJSON() ([]byte, error) {
 			buf.WriteByte(',')
 		}
 		key, _ := json.Marshal(c.When)
-		val, _ := json.Marshal(c.Goto)
+		gotoWire := c.Goto
+		if gotoWire != GotoEnd {
+			gotoWire = "#" + gotoWire
+		}
+		val, _ := json.Marshal(gotoWire)
 		buf.Write(key)
 		buf.WriteByte(':')
 		buf.Write(val)
@@ -83,6 +87,12 @@ func (s *SwitchMap) UnmarshalJSON(data []byte) error {
 		var goto_ string
 		if err := dec.Decode(&goto_); err != nil {
 			return err
+		}
+		if goto_ != GotoEnd {
+			if !strings.HasPrefix(goto_, "#") {
+				return fmt.Errorf("switch: goto %q must be %q or a step reference like \"#step-id\"", goto_, GotoEnd)
+			}
+			goto_ = goto_[1:]
 		}
 		*s = append(*s, SwitchCase{When: when, Goto: goto_})
 	}

@@ -1,7 +1,7 @@
 import { spawnSync, spawn, type ChildProcess } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
-import { BASE_URL } from "./constants.ts";
+import { BASE_URL, PORT } from "./constants.ts";
 
 async function ping(): Promise<boolean> {
   try {
@@ -31,13 +31,16 @@ export async function setup() {
 
   if (build.status !== 0) throw new Error("Failed to build test server");
 
-  proc = spawn(bin, ["--db", db, "--http", ":8080", "--log", "error"], {
+  proc = spawn(bin, ["--db", db, "--http", `:${PORT}`, "--log", "error"], {
     stdio: "ignore",
   });
 
   let ready = false;
   for (let i = 0; i < 50; i++) {
-    if (await ping()) { ready = true; break; }
+    if (await ping()) {
+      ready = true;
+      break;
+    }
     await new Promise((r) => setTimeout(r, 200));
   }
   if (!ready) throw new Error("Test server did not start within 10 s");
