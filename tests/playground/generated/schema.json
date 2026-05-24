@@ -1,0 +1,70 @@
+{
+  "process": "order-pipeline",
+  "version": 1,
+  "process_input": {
+    "$ref": "#/$defs/input"
+  },
+  "tasks": {
+    "loop": {
+      "input": {
+        "properties": {
+          "task_index": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "tasks": {
+            "item": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tasks",
+          "task_index"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/loop_output"
+      }
+    }
+  },
+  "$defs": {
+    "input": {
+      "properties": {
+        "tasks": {
+          "item": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tasks"
+      ],
+      "type": "object"
+    },
+    "loop_output": {
+      "properties": {
+        "done": {
+          "type": "boolean"
+        },
+        "finished_index": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "finished_index",
+        "done"
+      ],
+      "type": "object"
+    }
+  }
+}

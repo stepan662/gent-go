@@ -3,7 +3,7 @@
 
 import { createServer } from 'node:http'
 import Ajv from 'ajv'
-import type { CheckFraudInput, SaveOrderInput, SaveOrderOutput } from './types.ts'
+import type { LoopInput, LoopOutput } from './types.ts'
 
 // Transport envelope — mirrors internal/transport/transport.go
 interface TaskRequest {
@@ -14,26 +14,25 @@ interface TaskRequest {
 
 // Implement this in server.ts and pass it to startServer().
 export interface Handlers {
-  check_fraud: (ctx: CheckFraudInput) => Promise<Record<string, unknown>>
-  save_order: (ctx: SaveOrderInput) => Promise<SaveOrderOutput>
+  loop: (ctx: LoopInput) => Promise<LoopOutput>
 }
 
 // Output schemas baked in for runtime validation via AJV.
 const stepSchemas: Record<string, object> = {
-  "save_order": {
-    "oneOf": [
-      {
-        "properties": {
-          "valid": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "valid"
-        ],
-        "type": "object"
+  "loop": {
+    "properties": {
+      "done": {
+        "type": "boolean"
+      },
+      "finished_index": {
+        "type": "number"
       }
-    ]
+    },
+    "required": [
+      "finished_index",
+      "done"
+    ],
+    "type": "object"
   }
 }
 

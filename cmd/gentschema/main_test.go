@@ -398,6 +398,82 @@ func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
 	}`)
 }
 
+func TestGenerate_RecursiveStep_OwnOutputOptionalInParams(t *testing.T) {
+	// A step that switches back to itself (final loop) must be able to reference
+	// its own previous output in params. The output is optional (nullable) because
+	// it doesn't exist on the first iteration.
+	out := runGenerate(t, `{
+		"name": "p", "version": 1,
+		"input_schema": {
+			"type": "object",
+			"properties": { "tasks": { "type": "array", "items": { "type": "string" } } },
+			"required": ["tasks"]
+		},
+		"steps": [{
+			"id": "loop",
+			"transport": "http", "endpoint": "http://x",
+			"params": {
+				"tasks": "input.tasks",
+				"task_index": "outputs.loop.finished_index ? outputs.loop.finished_index : 0"
+			},
+			"output_schema": {
+				"type": "object",
+				"properties": {
+					"finished_index": { "type": "number" },
+					"done": { "type": "boolean" }
+				},
+				"required": ["finished_index", "done"]
+			},
+			"switch": { "!self.done": "loop" },
+			"final": true
+		}]
+	}`)
+	input := out.Tasks["loop"].Input
+	props, _ := input["properties"].(map[string]any)
+	if props == nil {
+		t.Fatal("loop input should have properties")
+	}
+	// task_index is a conditional: outputs.loop.finished_index (nullable number) or 0 (integer)
+	if props["task_index"] == nil {
+		t.Error("task_index param should be inferred")
+	}
+	// tasks comes from required input field → non-nullable array
+	if props["tasks"] == nil {
+		t.Error("tasks param should be inferred")
+	}
+}
+
+func TestGenerate_FinalStep_NextStepNotReachableViaFallthrough(t *testing.T) {
+	// A step with final:true does not fall through to the next step in the list.
+	// The next step's required context must not include the final step's output
+	// unless it is also reachable from a non-final predecessor.
+	out := runGenerate(t, `{
+		"name": "p", "version": 1,
+		"steps": [
+			{
+				"id": "decide",
+				"transport": "http", "endpoint": "http://x",
+				"output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] },
+				"switch": { "self.ok": "work" },
+				"final": true
+			},
+			{
+				"id": "work",
+				"transport": "http", "endpoint": "http://x",
+				"params": { "flag": "outputs.decide.ok" },
+				"output_schema": { "type": "object", "properties": { "done": { "type": "boolean" } } }
+			}
+		]
+	}`)
+	// work is only reachable via decide's switch, so decide's output is required for work.
+	input := out.Tasks["work"].Input
+	props, _ := input["properties"].(map[string]any)
+	if props == nil {
+		t.Fatal("work input should have properties")
+	}
+	assertJSON(t, props["flag"], `{"type": "boolean"}`)
+}
+
 func TestGenerate_InvalidRef(t *testing.T) {
 	err := runGenerateErr(t, `{
 		"name": "p", "version": 1,

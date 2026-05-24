@@ -23,40 +23,30 @@ export const processDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      customer_id: { type: "string" },
-      amount: { type: "number" },
-      card_token: { type: "string" },
+      tasks: { type: "array", item: { type: "string" } },
     },
-    required: ["customer_id", "amount", "card_token"],
+    required: ["tasks"],
   },
   steps: [
     {
-      id: "save_order",
+      id: "loop",
       transport: "http" as const,
-      endpoint: `http://localhost:${PORT}/save_order`,
+      endpoint: `http://localhost:${PORT}/loop`,
       params: {
-        data: "input",
+        tasks: "input.tasks",
+        task_index:
+          "outputs.loop.finished_index != nil ? outputs.loop.finished_index + 1 : 0",
       },
       output_schema: {
-        oneOf: [
-          {
-            type: "object",
-            properties: { valid: { type: "boolean" } },
-            required: ["valid"],
-          },
-        ],
+        type: "object",
+        properties: {
+          finished_index: { type: "number" },
+          done: { type: "boolean" },
+        },
+        required: ["finished_index", "done"],
       },
       switch: {
-        "input.amount > 100": "check_fraud",
-      },
-      final: true,
-    },
-    {
-      id: "check_fraud",
-      transport: "http" as const,
-      endpoint: `http://localhost:${PORT}/check_fraud`,
-      params: {
-        result: "outputs.save_order",
+        "!outputs.loop.done": "loop",
       },
     },
   ],

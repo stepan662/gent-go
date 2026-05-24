@@ -2,25 +2,15 @@
 // Re-run `bun run playground:generate` after changing process.ts.
 
 export interface ProcessInput {
-  amount: number;
-  card_token: string;
-  customer_id: string;
+  tasks: unknown[];
 }
 
-export interface CheckFraudInput {
-  result: {
-    valid: boolean;
-  };
+export interface LoopInput {
+  task_index: number;
+  tasks: unknown[];
 }
 
-export interface SaveOrderInput {
-  data: {
-    amount: number;
-    card_token: string;
-    customer_id: string;
-  };
+export interface LoopOutput {
+  done: boolean;
+  finished_index: number;
 }
-
-export type SaveOrderOutput = {
-  valid: boolean;
-};

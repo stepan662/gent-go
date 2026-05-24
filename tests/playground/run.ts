@@ -23,9 +23,7 @@ console.log("  registered");
 // ─── 2. start an instance ──────────────────────────────────────────────────
 
 const input: ProcessInput = {
-  customer_id: "cust_42",
-  amount: 101,
-  card_token: "tok_visa_1234",
+  tasks: ["first", "second", "third", "fourth"],
 };
 
 console.log("\nStarting instance with input:", input);

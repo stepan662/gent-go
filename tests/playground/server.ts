@@ -3,28 +3,26 @@
 //
 // Usage: bun run playground:server
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 import { startServer, type Handlers } from "./generated/server.ts";
-import { CheckFraudInput } from "./generated/types.ts";
 import { PORT } from "./process.ts";
 
 const handlers: Handlers = {
-  async save_order({ data: { amount } }) {
-    console.log("validating order, amount:", amount);
-    if (amount <= 0) return { valid: false, reason: "amount must be positive" };
-    if (amount > 10000) return { valid: false, reason: "amount exceeds limit" };
-    return { valid: true };
-  },
-  check_fraud: function (
-    ctx: CheckFraudInput,
-  ): Promise<Record<string, unknown>> {
-    console.log("checking for fraud:", ctx);
-    if (ctx.result.valid === true) {
-      console.log("no fraud detected");
-      return Promise.resolve({ fraud: false });
-    } else {
-      console.log("fraud detected, rejecting order");
-      return Promise.resolve({ fraud: true });
-    }
+  async loop(ctx) {
+    console.log(ctx);
+    console.log(
+      `processing task ${ctx.tasks[ctx.task_index]} (${ctx.task_index})`,
+    );
+    sleep(1000);
+
+    console.log(
+      `finished task ${ctx.tasks[ctx.task_index]} (${ctx.task_index})`,
+    );
+    return {
+      finished_index: ctx.task_index,
+      done: !(ctx.task_index < ctx.tasks.length),
+    };
   },
 };
 

@@ -165,13 +165,16 @@ func flattenNamedSchemas(named map[string]map[string]any) (map[string]any, error
 	return rootDefs, nil
 }
 
-// buildInputs walks the step list in definition order, infers input schemas for
-// action steps, and type-checks switch expressions. It returns the IDs of all
-// action steps encountered so callers can track context accumulation.
-func buildInputs(steps []*model.Step, accumulated []string, tasks map[string]TaskSchemas, processInput map[string]any, defs map[string]any) ([]string, error) {
+// buildInputs infers input schemas for action steps and type-checks switch
+// expressions. It uses CFG-based data-flow analysis (computeContextSets) to
+// determine which preceding step outputs are guaranteed (required) or possible
+// (optional) before each step runs.
+func buildInputs(steps []*model.Step, _ []string, tasks map[string]TaskSchemas, processInput map[string]any, defs map[string]any) ([]string, error) {
+	required, optional := computeContextSets(steps)
+	var accumulated []string
 	for _, s := range steps {
 		if s.Transport != "" {
-			ctx := contextSchema(accumulated, tasks, processInput)
+			ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput)
 			if len(defs) > 0 {
 				ctx["$defs"] = defs
 			}
@@ -188,8 +191,21 @@ func buildInputs(steps []*model.Step, accumulated []string, tasks map[string]Tas
 		}
 
 		if len(s.Switch) > 0 {
-			// Switch runs after the action, so accumulated already includes this step.
-			switchCtx := contextSchema(accumulated, tasks, processInput)
+			// At switch evaluation time the action for s just ran, so s's own output
+			// is now guaranteed. Promote it from optional to required.
+			req := required[s.ID]
+			opt := optional[s.ID]
+			if s.Transport != "" && len(s.OutputSchema) > 0 {
+				req = append(req, s.ID)
+				var filtered []string
+				for _, id := range opt {
+					if id != s.ID {
+						filtered = append(filtered, id)
+					}
+				}
+				opt = filtered
+			}
+			switchCtx := contextSchema(req, opt, tasks, processInput)
 			if s.Transport != "" {
 				addSelfSchema(switchCtx, s)
 			}
@@ -204,6 +220,160 @@ func buildInputs(steps []*model.Step, accumulated []string, tasks map[string]Tas
 		}
 	}
 	return accumulated, nil
+}
+
+// computeContextSets builds a control-flow graph from steps — switch targets
+// provide explicit jump edges; non-final steps also have a fall-through edge to
+// the next step — then runs two forward data-flow passes:
+//
+//   - must-analysis (intersection): outputs guaranteed before each step runs
+//   - may-analysis  (union):        outputs possibly present before each step
+//
+// The difference (may − must) gives the optional set. The virtual "start" node
+// (index -1) has no outputs, so the first step's required set is always empty.
+func computeContextSets(steps []*model.Step) (required, optional map[string][]string) {
+	n := len(steps)
+	required = make(map[string][]string, n)
+	optional = make(map[string][]string, n)
+	if n == 0 {
+		return
+	}
+
+	idx := make(map[string]int, n)
+	for i, s := range steps {
+		idx[s.ID] = i
+	}
+
+	// Predecessor lists; -1 is the virtual start node (produces no outputs).
+	preds := make([][]int, n)
+	preds[0] = append(preds[0], -1)
+	for i, s := range steps {
+		for _, c := range s.Switch {
+			if j, ok := idx[c.Goto]; ok {
+				preds[j] = append(preds[j], i)
+			}
+		}
+		if !s.Final && i+1 < n {
+			preds[i+1] = append(preds[i+1], i)
+		}
+	}
+
+	hasOutput := make([]bool, n)
+	for i, s := range steps {
+		hasOutput[i] = len(s.OutputSchema) > 0
+	}
+
+	allTrue := func() []bool { s := make([]bool, n); for i := range s { s[i] = true }; return s }
+	allFalse := func() []bool { return make([]bool, n) }
+	eq := func(a, b []bool) bool {
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	// must-analysis: intersection lattice, top = all-true.
+	mustOut := make([][]bool, n)
+	for i := range mustOut {
+		mustOut[i] = allTrue()
+	}
+	for {
+		changed := false
+		for i := range steps {
+			in := allTrue()
+			for _, p := range preds[i] {
+				if p == -1 {
+					in = allFalse()
+					break // ∩ {} = {} regardless of remaining preds
+				}
+				for j := range in {
+					in[j] = in[j] && mustOut[p][j]
+				}
+			}
+			if len(preds[i]) == 0 {
+				in = allFalse() // unreachable step
+			}
+			out := append([]bool{}, in...)
+			if hasOutput[i] {
+				out[i] = true
+			}
+			if !eq(mustOut[i], out) {
+				mustOut[i] = out
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
+	// may-analysis: union lattice, bottom = all-false.
+	mayOut := make([][]bool, n)
+	for i := range mayOut {
+		mayOut[i] = allFalse()
+	}
+	for {
+		changed := false
+		for i := range steps {
+			in := allFalse()
+			for _, p := range preds[i] {
+				if p != -1 {
+					for j := range in {
+						in[j] = in[j] || mayOut[p][j]
+					}
+				}
+			}
+			out := append([]bool{}, in...)
+			if hasOutput[i] {
+				out[i] = true
+			}
+			if !eq(mayOut[i], out) {
+				mayOut[i] = out
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
+	// Derive mustIn / mayIn from converged mustOut / mayOut and build result maps.
+	for i, s := range steps {
+		mustIn := allTrue()
+		for _, p := range preds[i] {
+			if p == -1 {
+				mustIn = allFalse()
+				break
+			}
+			for j := range mustIn {
+				mustIn[j] = mustIn[j] && mustOut[p][j]
+			}
+		}
+		if len(preds[i]) == 0 {
+			mustIn = allFalse()
+		}
+
+		mayIn := allFalse()
+		for _, p := range preds[i] {
+			if p != -1 {
+				for j := range mayIn {
+					mayIn[j] = mayIn[j] || mayOut[p][j]
+				}
+			}
+		}
+
+		for j, ss := range steps {
+			switch {
+			case mustIn[j]:
+				required[s.ID] = append(required[s.ID], ss.ID)
+			case mayIn[j]:
+				optional[s.ID] = append(optional[s.ID], ss.ID)
+			}
+		}
+	}
+	return
 }
 
 // addSelfSchema injects a "self" property into ctx representing this step's own
@@ -244,8 +414,10 @@ func inferInput(s *model.Step, ctx map[string]any, defs map[string]any) (map[str
 
 // contextSchema builds a JSON Schema for the context available to a step:
 // the process input (if any, as a $ref) and $ref outputs of all preceding action steps.
-// All fields listed are guaranteed present at runtime, so they are marked required.
-func contextSchema(preceding []string, tasks map[string]TaskSchemas, processInput map[string]any) map[string]any {
+// Steps in preceding are guaranteed present at runtime (marked required).
+// Steps in optional may or may not have run (added as properties but not required,
+// making them nullable via the type inference layer).
+func contextSchema(preceding []string, optional []string, tasks map[string]TaskSchemas, processInput map[string]any) map[string]any {
 	props := make(map[string]any)
 	required := []any{"outputs"}
 	if len(processInput) > 0 {
@@ -258,6 +430,14 @@ func contextSchema(preceding []string, tasks map[string]TaskSchemas, processInpu
 		if ts, ok := tasks[id]; ok && len(ts.Output) > 0 {
 			outputProps[id] = ts.Output
 			outputRequired = append(outputRequired, id)
+		}
+	}
+	for _, id := range optional {
+		if _, already := outputProps[id]; already {
+			continue
+		}
+		if ts, ok := tasks[id]; ok && len(ts.Output) > 0 {
+			outputProps[id] = ts.Output
 		}
 	}
 	outputs := map[string]any{"type": "object"}
@@ -278,27 +458,6 @@ func deepCopy(m map[string]any) map[string]any {
 	var out map[string]any
 	json.Unmarshal(b, &out)
 	return out
-}
-
-func sliceCopy(s []string) []string {
-	out := make([]string, len(s))
-	copy(out, s)
-	return out
-}
-
-func sliceUnion(a, b []string) []string {
-	seen := make(map[string]bool, len(a))
-	result := append([]string{}, a...)
-	for _, v := range a {
-		seen[v] = true
-	}
-	for _, v := range b {
-		if !seen[v] {
-			result = append(result, v)
-			seen[v] = true
-		}
-	}
-	return result
 }
 
 func fatal(format string, args ...any) {
