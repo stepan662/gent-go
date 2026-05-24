@@ -16,12 +16,12 @@ func TestEvaluator(t *testing.T) {
 		want    bool
 		wantErr bool
 	}{
-		{"outputs.step.ok == true", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"ok": true}}}, true, false},
-		{"outputs.step.ok == true", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"ok": false}}}, false, false},
-		{"outputs.step.amount > 100", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"amount": 200}}}, true, false},
-		{"outputs.step.amount > 100", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"amount": 50}}}, false, false},
-		{"input.a == true && input.b == true", map[string]interface{}{"input": map[string]any{"a": true, "b": true}}, true, false},
-		{"input.a == true && input.b == true", map[string]interface{}{"input": map[string]any{"a": true, "b": false}}, false, false},
+		{"{{outputs.step.ok == true}}", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"ok": true}}}, true, false},
+		{"{{outputs.step.ok == true}}", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"ok": false}}}, false, false},
+		{"{{outputs.step.amount > 100}}", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"amount": 200}}}, true, false},
+		{"{{outputs.step.amount > 100}}", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"amount": 50}}}, false, false},
+		{"{{input.a == true && input.b == true}}", map[string]interface{}{"input": map[string]any{"a": true, "b": true}}, true, false},
+		{"{{input.a == true && input.b == true}}", map[string]interface{}{"input": map[string]any{"a": true, "b": false}}, false, false},
 		{"invalid %%% expr", nil, false, true},
 	}
 
@@ -55,10 +55,10 @@ func TestEvaluator_EvalBool_WithSelf(t *testing.T) {
 		self any
 		want bool
 	}{
-		{"self field true", "self.paid == true", map[string]any{"paid": true}, true},
-		{"self field false", "self.paid == true", map[string]any{"paid": false}, false},
-		{"self nested field", "self.result.ok == true", map[string]any{"result": map[string]any{"ok": true}}, true},
-		{"self nil when no action", "self == nil", nil, true},
+		{"self field true", "{{self.paid == true}}", map[string]any{"paid": true}, true},
+		{"self field false", "{{self.paid == true}}", map[string]any{"paid": false}, false},
+		{"self nested field", "{{self.result.ok == true}}", map[string]any{"result": map[string]any{"ok": true}}, true},
+		{"self nil when no action", "{{self == nil}}", nil, true},
 	}
 
 	for _, tt := range tests {

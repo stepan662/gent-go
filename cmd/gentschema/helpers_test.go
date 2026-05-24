@@ -4,17 +4,17 @@ import (
 	"encoding/json"
 	"testing"
 
-	main "gent/cmd/gentschema"
+	"gent/internal/gentschema"
 	"gent/internal/model"
 )
 
-func runGenerate(t *testing.T, defJSON string) main.SchemaFile {
+func runGenerate(t *testing.T, defJSON string) gentschema.SchemaFile {
 	t.Helper()
 	var def model.ProcessDefinition
 	if err := json.Unmarshal([]byte(defJSON), &def); err != nil {
 		t.Fatalf("unmarshal definition: %v", err)
 	}
-	out, err := main.Generate(&def)
+	out, err := gentschema.Generate(&def)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -27,11 +27,11 @@ func runGenerateErr(t *testing.T, defJSON string) error {
 	if err := json.Unmarshal([]byte(defJSON), &def); err != nil {
 		t.Fatalf("unmarshal definition: %v", err)
 	}
-	_, err := main.Generate(&def)
+	_, err := gentschema.Generate(&def)
 	return err
 }
 
-func schemaKeys(out main.SchemaFile) []string {
+func schemaKeys(out gentschema.SchemaFile) []string {
 	keys := make([]string, 0, len(out.Tasks))
 	for k := range out.Tasks {
 		keys = append(keys, k)
@@ -39,7 +39,7 @@ func schemaKeys(out main.SchemaFile) []string {
 	return keys
 }
 
-func defKeys(out main.SchemaFile) []string {
+func defKeys(out gentschema.SchemaFile) []string {
 	keys := make([]string, 0, len(out.Defs))
 	for k := range out.Defs {
 		keys = append(keys, k)

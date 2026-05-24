@@ -7,6 +7,7 @@ import (
 	"maps"
 
 	"gent/internal/db"
+	"gent/internal/gentschema"
 	"gent/internal/model"
 	"time"
 
@@ -94,10 +95,10 @@ func (h *Handlers) putDefinition(raw json.RawMessage) Reply {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return errReply(fmt.Errorf("decode: %w", err))
 	}
-	if err := req.Normalize(); err != nil {
+	if err := req.Validate(); err != nil {
 		return errReply(err)
 	}
-	if err := req.Validate(); err != nil {
+	if _, err := gentschema.Generate(&req.ProcessDefinition); err != nil {
 		return errReply(err)
 	}
 	if err := h.db.SaveDefinition(&req.ProcessDefinition); err != nil {

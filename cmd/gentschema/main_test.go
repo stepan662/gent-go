@@ -74,7 +74,7 @@ func TestGenerate_FlatStepsWithOutputs(t *testing.T) {
 			{
 				"id": "charge",
 				"transport": "http", "endpoint": "http://x",
-				"switch": {"self.charged == true": "#ship"},
+				"switch": {"{{self.charged == true}}": "#ship"},
 				"output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }
 			},
 			{
@@ -254,7 +254,7 @@ func TestGenerate_Input_SwitchOnlyStepSkippedInContext(t *testing.T) {
 			},
 			{
 				"id": "route",
-				"switch": {"outputs.charge.charged == true": "#ship"}
+				"switch": {"{{outputs.charge.charged == true}}": "#ship"}
 			},
 			{
 				"id": "ship",
@@ -366,8 +366,8 @@ func TestGenerate_Switch_SelfExpressionTypeChecked(t *testing.T) {
 					"required": ["charged"]
 				},
 				"switch": {
-					"self.charged == true": "#ship",
-					"self.charged == false": "#refund"
+					"{{self.charged == true}}": "#ship",
+					"{{self.charged == false}}": "#refund"
 				}
 			},
 			{ "id": "ship",   "transport": "http", "endpoint": "http://x" },
@@ -391,7 +391,7 @@ func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
 					"properties": { "charged": { "type": "boolean" } },
 					"required": ["charged"]
 				},
-				"switch": {"outputs.charge.charged == true": "#notify"}
+				"switch": {"{{outputs.charge.charged == true}}": "#notify"}
 			},
 			{ "id": "notify", "transport": "http", "endpoint": "http://x" }
 		]
@@ -424,7 +424,7 @@ func TestGenerate_RecursiveStep_OwnOutputOptionalInParams(t *testing.T) {
 				},
 				"required": ["finished_index", "done"]
 			},
-			"switch": { "!self.done": "#loop", "default": "$end" }
+			"switch": { "{{!self.done}}": "#loop", "default": "$end" }
 		}]
 	}`)
 	input := out.Tasks["loop"].Input
@@ -453,7 +453,7 @@ func TestGenerate_SwitchStep_NextStepNotReachableViaFallthrough(t *testing.T) {
 				"id": "decide",
 				"transport": "http", "endpoint": "http://x",
 				"output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] },
-				"switch": { "self.ok": "#work", "default": "$end" }
+				"switch": { "{{self.ok}}": "#work", "default": "$end" }
 			},
 			{
 				"id": "work",
@@ -528,7 +528,7 @@ func TestGenerate_ContextSets_ExclusiveBranch_SkippedStepOutputNullable(t *testi
 		"steps": [
 			{
 				"id": "gate",
-				"switch": { "input.take_fast": "#fast", "default": "#slow" }
+				"switch": { "{{input.take_fast}}": "#fast", "default": "#slow" }
 			},
 			{
 				"id": "fast",
@@ -575,7 +575,7 @@ func TestGenerate_ContextSets_PreBranchStepRequiredAtAllMergePoints(t *testing.T
 			},
 			{
 				"id": "gate",
-				"switch": { "outputs.pre.id == 1": "#path_a", "default": "#path_b" }
+				"switch": { "{{outputs.pre.id == 1}}": "#path_a", "default": "#path_b" }
 			},
 			{ "id": "path_a", "transport": "http", "endpoint": "http://x" },
 			{ "id": "path_b", "transport": "http", "endpoint": "http://x" },
@@ -610,7 +610,7 @@ func TestGenerate_ContextSets_DefaultEndSwitch_SuccessorRequiredNotOptional(t *t
 					"properties": { "ok": { "type": "boolean" } },
 					"required": ["ok"]
 				},
-				"switch": { "self.ok": "#work", "default": "$end" }
+				"switch": { "{{self.ok}}": "#work", "default": "$end" }
 			},
 			{
 				"id": "work",
@@ -625,6 +625,101 @@ func TestGenerate_ContextSets_DefaultEndSwitch_SuccessorRequiredNotOptional(t *t
 	}
 	// decide is required for work (only path: decide→work); output is non-nullable.
 	assertJSON(t, props["flag"], `{"type": "boolean"}`)
+}
+
+func TestGenerate_Switch_OneOfAllBooleanAccepted(t *testing.T) {
+	// A oneOf/anyOf schema where every variant is boolean is still boolean —
+	// isType must recurse into variants rather than just checking the top-level key.
+	runGenerate(t, `{
+		"name": "p", "version": 1,
+		"steps": [{
+			"id": "check",
+			"transport": "http", "endpoint": "http://x",
+			"output_schema": {
+				"type": "object",
+				"properties": {
+					"ok": { "oneOf": [{"type": "boolean"}, {"type": "boolean"}] }
+				},
+				"required": ["ok"]
+			},
+			"switch": { "{{self.ok}}": "#next", "default": "$end" }
+		},
+		{ "id": "next", "transport": "http", "endpoint": "http://x" }]
+	}`)
+}
+
+func TestGenerate_Switch_OneOfBooleanOptionalFieldRejected(t *testing.T) {
+	// oneOf:[boolean] on a non-required field becomes nullable after withNull wrapping,
+	// so it must be rejected even though the schema itself contains only boolean variants.
+	err := runGenerateErr(t, `{
+		"name": "p", "version": 1,
+		"input_schema": {
+			"type": "object",
+			"properties": { "go_then": { "oneOf": [{"type": "boolean"}] } }
+		},
+		"steps": [
+			{
+				"id": "route",
+				"switch": { "{{input.go_then}}": "#next", "default": "$end" }
+			},
+			{ "id": "next", "transport": "http", "endpoint": "http://x" }
+		]
+	}`)
+	if err == nil {
+		t.Fatal("expected error for nullable oneOf boolean switch expression, got nil")
+	}
+}
+
+func TestGenerate_Switch_NullableBooleanRejected(t *testing.T) {
+	// input.go_then is not in "required", so its inferred type is boolean|null.
+	// A nullable expression is not acceptable as a switch condition.
+	err := runGenerateErr(t, `{
+		"name": "p", "version": 1,
+		"input_schema": {
+			"type": "object",
+			"properties": { "go_then": { "type": "boolean" } }
+		},
+		"steps": [
+			{
+				"id": "route",
+				"switch": { "{{input.go_then}}": "#work", "default": "$end" }
+			},
+			{ "id": "work", "transport": "http", "endpoint": "http://x" }
+		]
+	}`)
+	if err == nil {
+		t.Fatal("expected error for nullable boolean switch expression, got nil")
+	}
+	if !strings.Contains(err.Error(), "boolean") {
+		t.Errorf("error should mention expected type, got: %v", err)
+	}
+}
+
+func TestGenerate_Switch_MixedTemplateRejectsStringResult(t *testing.T) {
+	// A mixed template like "{{self.ok}}_" produces a string, not a boolean.
+	// gentschema must reject it at schema-generation time.
+	err := runGenerateErr(t, `{
+		"name": "p", "version": 1,
+		"steps": [
+			{
+				"id": "check",
+				"transport": "http", "endpoint": "http://x",
+				"output_schema": {
+					"type": "object",
+					"properties": { "ok": { "type": "boolean" } },
+					"required": ["ok"]
+				},
+				"switch": { "{{self.ok}}_": "#next", "default": "$end" }
+			},
+			{ "id": "next", "transport": "http", "endpoint": "http://x" }
+		]
+	}`)
+	if err == nil {
+		t.Fatal("expected error for non-boolean switch expression, got nil")
+	}
+	if !strings.Contains(err.Error(), "boolean") {
+		t.Errorf("error should mention expected type, got: %v", err)
+	}
 }
 
 func TestGenerate_InvalidRef(t *testing.T) {

@@ -88,13 +88,20 @@ test("lifecycle — conditional routes to correct branch", async () => {
     body: {
       name,
       version: 1,
+      input_schema: {
+        type: "object",
+        properties: {
+          go_then: { type: "boolean" },
+        },
+        required: ["go_then"],
+      },
       steps: [
         {
           id: "start",
           transport: "http",
           endpoint: "http://localhost:19994/action",
           switch: {
-            "input.go_then == true": "#then_step",
+            "{{input.go_then}}": "#then_step",
             default: "#else_step",
           },
         },
@@ -129,6 +136,8 @@ test("lifecycle — conditional routes to correct branch", async () => {
   const i1 = await client.GET("/instances/{id}", {
     params: { path: { id: i1Create.data!.id } },
   });
+
+  expect(i1.error).toBeUndefined();
 
   expect((i1.data?.context?.outputs as any)?.then_step?.branch).toBe("then");
   expect((i1.data?.context?.outputs as any)?.else_step?.branch).toBe(undefined);

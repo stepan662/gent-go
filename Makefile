@@ -16,7 +16,8 @@ run:
 		$(if $(tcp),-tcp $(tcp)) \
 		$(if $(uds),-uds $(uds)) \
 		-poll $(poll) \
-		-log $(log)
+		-log $(log) \
+		$(ARGS)
 
 build:
 	$(BUILD_FLAGS) go build -o gent ./cmd/gent

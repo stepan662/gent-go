@@ -46,7 +46,7 @@ export const processDefinition = {
         required: ["finished_index", "done"],
       },
       switch: {
-        "!self.done": "#loop",
+        "{{!self.done}}": "#loop",
         default: "$end",
       },
     },

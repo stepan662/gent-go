@@ -83,8 +83,8 @@ var registry = func() []actionDef {
 							},
 						},
 						Switch: model.SwitchMap{
-							{When: "self.charged == true", Goto: "ship"},
-							{When: "self.charged == false", Goto: "refund"},
+							{When: "{{self.charged == true}}", Goto: "ship"},
+							{When: "{{self.charged == false}}", Goto: "refund"},
 						},
 					},
 					{

@@ -26,8 +26,8 @@
           }
         },
         "required": [
-          "tasks",
-          "task_index"
+          "task_index",
+          "tasks"
         ],
         "type": "object"
       },

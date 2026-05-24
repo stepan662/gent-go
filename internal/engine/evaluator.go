@@ -3,7 +3,6 @@ package engine
 import (
 	"fmt"
 
-	"gent/internal/exprtype"
 	tmpl "gent/internal/template"
 )
 
@@ -48,16 +47,16 @@ func (e Evaluator) Eval(expression string, contextData map[string]any) (bool, er
 	return e.EvalBool(expression, contextData, nil)
 }
 
-// EvalBool evaluates a boolean expression with self available as the step's own
-// action output. Used for switch case expressions.
+// EvalBool evaluates a template switch expression with self available as the
+// step's own action output. The template must evaluate to a boolean.
 func (Evaluator) EvalBool(expression string, contextData map[string]any, self any) (bool, error) {
-	result, err := exprtype.Eval(expression, evalEnv(contextData, self))
+	result, err := tmpl.EvalAny(expression, evalEnv(contextData, self))
 	if err != nil {
-		return false, fmt.Errorf("eval %q: %w", expression, err)
+		return false, fmt.Errorf("switch %q: %w", expression, err)
 	}
 	b, ok := result.(bool)
 	if !ok {
-		return false, fmt.Errorf("expression %q returned %T, expected bool", expression, result)
+		return false, fmt.Errorf("switch %q: expected bool, got %T", expression, result)
 	}
 	return b, nil
 }
