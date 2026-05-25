@@ -5,9 +5,11 @@
 //
 // Usage: bun run playground:run
 
-import { client, waitForInstance } from "../helpers/client.ts";
+import { client } from "../helpers/client.ts";
 import { processDefinition } from "./process.ts";
 import type { ProcessInput } from "./generated/types.ts";
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ─── 1. register the process definition ────────────────────────────────────
 
@@ -20,30 +22,42 @@ const { error: defErr } = await client.PUT("/definitions", {
 if (defErr) throw new Error(`registration failed: ${JSON.stringify(defErr)}`);
 console.log("  registered");
 
-// ─── 2. start an instance ──────────────────────────────────────────────────
+const rounds = 100_000;
+const maxInterval = 0;
 
-const input: ProcessInput = {
-  tasks: ["first", "second", "third", "fourth"],
-};
+for (let i = 0; i < rounds; i++) {
+  startInstance();
+  const interval = maxInterval * ((rounds - (i + 1)) / rounds);
+  console.log(`${i}: ${interval}`);
+  await sleep(interval);
+}
 
-console.log("\nStarting instance with input:", input);
-const { data: startData, error: startErr } = await client.POST("/instances", {
-  body: { process: processDefinition.name, input },
-});
-if (startErr) throw new Error(`start failed: ${JSON.stringify(startErr)}`);
+async function startInstance() {
+  // ─── 2. start an instance ──────────────────────────────────────────────────
 
-const id = startData!.id;
-console.log(`  instance id: ${id}`);
+  const start_time = Date.now();
+  const input: ProcessInput = {
+    tasks: 100,
+    start_time,
+  };
 
-// ─── 3. wait for completion ────────────────────────────────────────────────
+  const { data: startData, error: startErr } = await client.POST("/instances", {
+    body: { process: processDefinition.name, input },
+  });
+  if (startErr) throw new Error(`start failed: ${JSON.stringify(startErr)}`);
 
-console.log("\nWaiting for completion…");
-const status = await waitForInstance(id, 15_000);
+  // const id = startData!.id;
 
-const { data } = await client.GET("/instances/{id}", {
-  params: { path: { id } },
-});
+  // ─── 3. wait for completion ────────────────────────────────────────────────
 
-console.log(`\nStatus:  ${status}`);
-console.log("Outputs:", JSON.stringify(data?.context?.outputs, null, 2));
-if (data?.error) console.log("Error:  ", data.error);
+  // const status = await waitForInstance(id, 15_000);
+
+  // const { data } = await client.GET("/instances/{id}", {
+  //   params: { path: { id } },
+  // });
+  // if (data?.error) {
+  //   console.log("Error:  ", data.error);
+  // } else {
+  //   console.log(`finished in ${Date.now() - start_time}`);
+  // }
+}

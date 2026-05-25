@@ -23,9 +23,10 @@ export const processDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      tasks: { type: "array", item: { type: "string" } },
+      tasks: { type: "integer" },
+      start_time: { type: "number" },
     },
-    required: ["tasks"],
+    required: ["tasks", "start_time"],
   },
   steps: [
     {
@@ -47,7 +48,15 @@ export const processDefinition = {
       },
       switch: {
         "{{!self.done}}": "#loop",
-        default: "$end",
+        default: "#finish",
+      },
+    },
+    {
+      id: "finish",
+      transport: "http" as const,
+      endpoint: `http://localhost:${PORT}/finish`,
+      params: {
+        start_time: "{{input.start_time}}",
       },
     },
   ],

@@ -5,6 +5,19 @@
     "$ref": "#/$defs/input"
   },
   "tasks": {
+    "finish": {
+      "input": {
+        "properties": {
+          "start_time": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "start_time"
+        ],
+        "type": "object"
+      }
+    },
     "loop": {
       "input": {
         "properties": {
@@ -19,10 +32,7 @@
             ]
           },
           "tasks": {
-            "item": {
-              "type": "string"
-            },
-            "type": "array"
+            "type": "integer"
           }
         },
         "required": [
@@ -39,15 +49,16 @@
   "$defs": {
     "input": {
       "properties": {
+        "start_time": {
+          "type": "number"
+        },
         "tasks": {
-          "item": {
-            "type": "string"
-          },
-          "type": "array"
+          "type": "integer"
         }
       },
       "required": [
-        "tasks"
+        "tasks",
+        "start_time"
       ],
       "type": "object"
     },

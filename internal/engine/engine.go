@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"gent/internal/db"
@@ -18,15 +19,19 @@ type Engine struct {
 	eval      Evaluator
 	pollEvery time.Duration
 	log       *slog.Logger
+	sem       chan struct{}
 }
 
 // New creates an Engine. pollEvery controls how often SQLite is checked for work.
-func New(database *db.DB, pollEvery time.Duration, log *slog.Logger) *Engine {
+// maxConcurrent limits how many instances are processed in parallel and how many
+// are fetched per tick.
+func New(database *db.DB, pollEvery time.Duration, maxConcurrent int, log *slog.Logger) *Engine {
 	return &Engine{
 		db:        database,
 		eval:      Evaluator{},
 		pollEvery: pollEvery,
 		log:       log,
+		sem:       make(chan struct{}, maxConcurrent),
 	}
 }
 
@@ -35,7 +40,7 @@ func (e *Engine) Run(ctx context.Context) {
 	ticker := time.NewTicker(e.pollEvery)
 	defer ticker.Stop()
 
-	e.log.Info("engine started", "poll_interval", e.pollEvery)
+	e.log.Info("engine started", "poll_interval", e.pollEvery, "max_concurrent", cap(e.sem))
 	for {
 		select {
 		case <-ctx.Done():
@@ -47,17 +52,33 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
+// tick fetches pending instances and processes each in its own goroutine.
+// It blocks until all goroutines finish, so ticks never overlap and the same
+// instance is never advanced twice concurrently.
 func (e *Engine) tick(ctx context.Context) {
-	instances, err := e.db.PendingInstances()
+	instances, err := e.db.PendingInstances(cap(e.sem))
 	if err != nil {
 		e.log.Error("poll instances", "err", err)
 		return
 	}
+	var wg sync.WaitGroup
 	for _, inst := range instances {
-		if err := e.advance(ctx, inst); err != nil {
-			e.log.Error("advance instance", "id", inst.ID, "err", err)
+		select {
+		case e.sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return
 		}
+		wg.Add(1)
+		go func(inst *model.ProcessInstance) {
+			defer wg.Done()
+			defer func() { <-e.sem }()
+			if err := e.advance(ctx, inst); err != nil {
+				e.log.Error("advance instance", "id", inst.ID, "err", err)
+			}
+		}(inst)
 	}
+	wg.Wait()
 }
 
 // advance executes the next step in the instance's queue.

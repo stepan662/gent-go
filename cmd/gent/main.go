@@ -23,6 +23,7 @@ func main() {
 	tcpAddr := flag.String("tcp", "", "TCP listen address, e.g. 127.0.0.1:9090 (empty to disable)")
 	udsPath := flag.String("uds", "", "Unix socket path, e.g. /tmp/gent.sock (empty to disable)")
 	pollMs := flag.Int("poll", 500, "Engine poll interval in milliseconds")
+	maxConcurrent := flag.Int("max-concurrent", 100_000, "Max instances processed concurrently")
 	pprofAddr := flag.String("pprof", "", "pprof listen address, e.g. localhost:6060 (empty to disable)")
 	logLevel := flag.String("log", "debug", "Log level: debug, info, warn, error")
 	flag.Parse()
@@ -37,7 +38,7 @@ func main() {
 	defer database.Close()
 	log.Info("database opened", "path", *dbPath)
 
-	eng := engine.New(database, time.Duration(*pollMs)*time.Millisecond, log)
+	eng := engine.New(database, time.Duration(*pollMs)*time.Millisecond, *maxConcurrent, log)
 	handlers := api.NewHandlers(database)
 	srv := api.NewServer(handlers, log)
 

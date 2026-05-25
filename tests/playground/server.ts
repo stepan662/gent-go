@@ -10,19 +10,14 @@ import { PORT } from "./process.ts";
 
 const handlers: Handlers = {
   async loop(ctx) {
-    console.log(ctx);
-    console.log(
-      `processing task ${ctx.tasks[ctx.task_index]} (${ctx.task_index})`,
-    );
-    sleep(1000);
-
-    console.log(
-      `finished task ${ctx.tasks[ctx.task_index]} (${ctx.task_index})`,
-    );
     return {
       finished_index: ctx.task_index,
-      done: !(ctx.task_index < ctx.tasks.length),
+      done: !(ctx.task_index < ctx.tasks),
     };
+  },
+  async finish(ctx) {
+    console.log(`finished in ${Date.now() - ctx.start_time}`);
+    return {};
   },
 };
 

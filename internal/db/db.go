@@ -232,15 +232,16 @@ func (db *DB) ListInstances(status string) ([]*model.ProcessInstance, error) {
 	return out, rows.Err()
 }
 
-// PendingInstances returns all running instances whose next_retry_at is in the past (or null).
-func (db *DB) PendingInstances() ([]*model.ProcessInstance, error) {
+// PendingInstances returns up to limit running instances whose next_retry_at is in the past (or null).
+func (db *DB) PendingInstances(limit int) ([]*model.ProcessInstance, error) {
 	rows, err := db.conn.Query(
 		`SELECT id, process_name, process_version, step_queue, context_data,
 		        retry_count, next_retry_at, status, error, created_at, updated_at
 		 FROM process_instances
 		 WHERE status = 'running'
-		   AND (next_retry_at IS NULL OR next_retry_at <= ?)`,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		   AND (next_retry_at IS NULL OR next_retry_at <= ?)
+		 LIMIT ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), limit,
 	)
 	if err != nil {
 		return nil, err

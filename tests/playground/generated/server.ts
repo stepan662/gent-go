@@ -3,7 +3,7 @@
 
 import { createServer } from 'node:http'
 import Ajv from 'ajv'
-import type { LoopInput, LoopOutput } from './types.ts'
+import type { FinishInput, LoopInput, LoopOutput } from './types.ts'
 
 // Transport envelope — mirrors internal/transport/transport.go
 interface TaskRequest {
@@ -14,6 +14,7 @@ interface TaskRequest {
 
 // Implement this in server.ts and pass it to startServer().
 export interface Handlers {
+  finish: (ctx: FinishInput) => Promise<Record<string, unknown>>
   loop: (ctx: LoopInput) => Promise<LoopOutput>
 }
 
