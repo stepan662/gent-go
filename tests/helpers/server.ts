@@ -2,6 +2,63 @@ import { spawnSync, spawn, type ChildProcess } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
 import { BASE_URL, PORT } from "./constants.ts";
+import { createClientTyped } from "./client.ts";
+
+const ROOT = new URL("../../", import.meta.url).pathname;
+
+export async function buildGentBinary(): Promise<string> {
+  const bin = join(tmpdir(), `gent_${Date.now()}`);
+  const result = spawnSync("go", ["build", "-o", bin, "./cmd/gent"], {
+    cwd: ROOT,
+    env: { ...process.env, CGO_ENABLED: "1" },
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  if (result.status !== 0) throw new Error("Failed to build gent binary");
+  return bin;
+}
+
+function spawnProc(bin: string, port: number, db: string): ChildProcess {
+  return spawn(bin, ["--db", db, "--http", `:${port}`, "--log", "error"], {
+    stdio: "ignore",
+  });
+}
+
+async function waitUntilReady(port: number, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(`http://localhost:${port}/openapi.json`);
+      await r.body?.cancel();
+      if (r.ok) return;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`gent on port ${port} did not become ready within ${timeoutMs}ms`);
+}
+
+export interface GentProcess {
+  client: ReturnType<typeof createClientTyped>;
+  stop: () => void;  // SIGTERM — clean shutdown
+  crash: () => void; // SIGKILL — simulate a hard crash, lease stays in DB
+}
+
+export async function startGent(
+  bin: string,
+  port: number,
+  db: string,
+): Promise<GentProcess> {
+  const proc = spawnProc(bin, port, db);
+  await waitUntilReady(port);
+  return {
+    client: createClientTyped({ baseUrl: `http://localhost:${port}` }),
+    stop: () => proc.kill("SIGTERM"),
+    crash: () => proc.kill("SIGKILL"),
+  };
+}
+
+// ── Global shared server for vitest's globalSetup ─────────────────────────────
+
+let sharedServer: GentProcess | null = null;
 
 async function ping(): Promise<boolean> {
   try {
@@ -13,39 +70,14 @@ async function ping(): Promise<boolean> {
   }
 }
 
-let proc: ChildProcess | null = null;
-
 export async function setup() {
   if (await ping()) return;
-
-  const root = new URL("../../", import.meta.url).pathname;
-  const bin = join(tmpdir(), `gent_${Date.now()}`);
-  const db = join(tmpdir(), `gent_${Date.now()}.db`);
-
   console.log("\nBuilding test server…");
-  const build = spawnSync("go", ["build", "-o", bin, "./cmd/gent"], {
-    cwd: root,
-    env: { ...process.env, CGO_ENABLED: "1" },
-    stdio: ["ignore", "ignore", "inherit"],
-  });
-
-  if (build.status !== 0) throw new Error("Failed to build test server");
-
-  proc = spawn(bin, ["--db", db, "--http", `:${PORT}`, "--log", "error"], {
-    stdio: "ignore",
-  });
-
-  let ready = false;
-  for (let i = 0; i < 50; i++) {
-    if (await ping()) {
-      ready = true;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  if (!ready) throw new Error("Test server did not start within 10 s");
+  const bin = await buildGentBinary();
+  const db = join(tmpdir(), `gent_${Date.now()}.db`);
+  sharedServer = await startGent(bin, PORT as number, db);
 }
 
 export function teardown() {
-  proc?.kill("SIGTERM");
+  sharedServer?.stop();
 }

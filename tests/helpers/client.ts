@@ -4,17 +4,19 @@ import type { paths } from "../generated/api.ts";
 import { BASE_URL } from "./constants.ts";
 
 export const client = createClient<paths>({ baseUrl: BASE_URL });
-export const createClientTyped: typeof createClient<paths> = (options) => {
-  return createClient<paths>(options);
-};
+export const createClientTyped: typeof createClient<paths> = (options) =>
+  createClient<paths>(options);
+
+type ApiClient = Pick<typeof client, "GET">;
 
 export async function waitForInstance(
   id: string,
   timeoutMs = 5000,
+  apiClient: ApiClient = client,
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const { data, error } = await client.GET("/instances/{id}", {
+    const { data, error } = await apiClient.GET("/instances/{id}", {
       params: { path: { id } },
     });
     if (error) throw new Error(`get_instance failed: ${JSON.stringify(error)}`);
@@ -25,15 +27,51 @@ export async function waitForInstance(
   throw new Error(`instance ${id} did not complete within ${timeoutMs}ms`);
 }
 
-export function startMockService(
-  port: number,
-  response: Record<string, unknown> = { status: "ok", output: {} },
-) {
+interface MockServiceOptions {
+  // The JSON body sent for every response. Defaults to { status: "ok", output: {} }.
+  response?: Record<string, unknown>;
+  // How long to delay the very first request before responding.
+  // 0 (default) = respond immediately.
+  // Infinity     = never respond; use this to simulate a worker hanging mid-step.
+  firstRequestDelayMs?: number;
+}
+
+export function startMockService(port: number, options: MockServiceOptions = {}) {
+  const { response = { status: "ok", output: {} }, firstRequestDelayMs = 0 } =
+    options;
   const body = JSON.stringify(response);
-  const server = createServer((_req, res) => {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(body);
+
+  let count = 0;
+  let resolveFirst!: () => void;
+  const firstRequestReceived = new Promise<void>((r) => {
+    resolveFirst = r;
   });
+
+  const server = createServer((req, res) => {
+    count++;
+    req.socket.on("error", () => {}); // suppress ECONNRESET
+    res.on("error", () => {});
+
+    if (count === 1) resolveFirst();
+
+    const send = () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(body);
+    };
+
+    if (count === 1 && firstRequestDelayMs > 0) {
+      if (isFinite(firstRequestDelayMs)) setTimeout(send, firstRequestDelayMs);
+      // Infinity: hold the connection open until the caller closes it.
+    } else {
+      send();
+    }
+  });
+  server.on("clientError", () => {});
   server.listen(port);
-  return { stop: () => server.close() };
+
+  return {
+    firstRequestReceived,
+    requestCount: () => count,
+    stop: () => new Promise<void>((r) => server.close(() => r())),
+  };
 }

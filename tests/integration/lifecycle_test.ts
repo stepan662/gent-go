@@ -7,8 +7,7 @@ import {
 
 test("lifecycle — task step completes when service returns ok", async () => {
   const mock = startMockService(19992, {
-    status: "ok",
-    output: { done: true },
+    response: { status: "ok", output: { done: true } },
   });
 
   const name = `lifecycle_ok_${crypto.randomUUID()}`;
@@ -45,7 +44,7 @@ test("lifecycle — task step completes when service returns ok", async () => {
 });
 
 test("lifecycle — task step fails and retries then marks failed", async () => {
-  const mock = startMockService(19993, { status: "error", error: "boom" });
+  const mock = startMockService(19993, { response: { status: "error", error: "boom" } });
 
   const name = `lifecycle_fail_${crypto.randomUUID()}`;
   await client.PUT("/definitions", {
@@ -75,12 +74,10 @@ test("lifecycle — task step fails and retries then marks failed", async () => 
 
 test("lifecycle — conditional routes to correct branch", async () => {
   const thenMock = startMockService(19994, {
-    status: "ok",
-    output: { branch: "then" },
+    response: { status: "ok", output: { branch: "then" } },
   });
   const elseMock = startMockService(19995, {
-    status: "ok",
-    output: { branch: "else" },
+    response: { status: "ok", output: { branch: "else" } },
   });
 
   const name = `lifecycle_cond_${crypto.randomUUID()}`;
@@ -160,8 +157,7 @@ test("lifecycle — conditional routes to correct branch", async () => {
 
 test("lifecycle — task fails when output violates output_schema", async () => {
   const mock = startMockService(19996, {
-    status: "ok",
-    output: { wrong_field: true },
+    response: { status: "ok", output: { wrong_field: true } },
   });
 
   const name = `lifecycle_output_schema_${crypto.randomUUID()}`;
