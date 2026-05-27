@@ -84,6 +84,15 @@ func evalMember(n *ast.MemberNode, ctx map[string]any) (any, error) {
 func evalBinary(n *ast.BinaryNode, ctx map[string]any) (any, error) {
 	// Short-circuit operators are evaluated before the ops table lookup.
 	switch n.Operator {
+	case "??":
+		left, err := evalNode(n.Left, ctx)
+		if err != nil {
+			return nil, err
+		}
+		if left != nil {
+			return left, nil
+		}
+		return evalNode(n.Right, ctx)
 	case "&&":
 		left, err := evalNode(n.Left, ctx)
 		if err != nil {

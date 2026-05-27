@@ -200,6 +200,37 @@ func TestEval_Index_NilSubject_ReturnsNil(t *testing.T) {
 	assertEq(t, evalOK(t, "arr[0]", c), nil)
 }
 
+// --- Null coalescing ---
+
+func TestEval_NullCoalesce_NilLiteral_ReturnsRight(t *testing.T) {
+	assertEq(t, evalOK(t, "nil ?? 42", nil), 42)
+}
+
+func TestEval_NullCoalesce_NonNilLiteral_ReturnsLeft(t *testing.T) {
+	assertEq(t, evalOK(t, "1 ?? 42", nil), 1)
+}
+
+func TestEval_NullCoalesce_MissingField_ReturnsDefault(t *testing.T) {
+	assertEq(t, evalOK(t, "input.missing ?? 0", richCtx), 0)
+}
+
+func TestEval_NullCoalesce_PresentField_ReturnsField(t *testing.T) {
+	assertEq(t, evalOK(t, "input.order_id ?? 0", richCtx), 42)
+}
+
+func TestEval_NullCoalesce_StringDefault(t *testing.T) {
+	assertEq(t, evalOK(t, `input.missing ?? "default"`, richCtx), "default")
+}
+
+func TestEval_NullCoalesce_Chained(t *testing.T) {
+	assertEq(t, evalOK(t, "nil ?? nil ?? 3", nil), 3)
+}
+
+func TestEval_NullCoalesce_ShortCircuit(t *testing.T) {
+	// non-nil left — right side (unknown field) must not be evaluated
+	assertEq(t, evalOK(t, `"x" ?? input.no_such_field`, richCtx), "x")
+}
+
 // --- Unsupported ---
 
 func TestEval_FunctionCall_Unsupported(t *testing.T) {

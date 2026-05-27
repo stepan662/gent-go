@@ -8,6 +8,7 @@
 //   - Comparison: ==, !=, <, >, <=, >= → boolean
 //   - Logical: &&, || → boolean (short-circuit); ! → boolean
 //   - Conditional: cond ? a : b
+//   - Null coalescing: a ?? b (returns a if non-nil, else b)
 //
 // All other expr-lang constructs return ErrUnsupported, so the accepted subset
 // is identical for both InferType and Eval.

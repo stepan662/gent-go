@@ -63,6 +63,6 @@ export const processDefinition = {
   ],
   output: {
     processes:
-      "{{(outputs.recursion[0].output.processes != nil ? outputs.recursion[0].output.processes : 0) + (outputs.recursion[1].output.processes != nil ? outputs.recursion[1].output.processes : 0) + 1}}",
+      "{{(outputs.recursion[0].output.processes ?? 0) + (outputs.recursion[1].output.processes ?? 0) + 1}}",
   },
 } as const satisfies PutDefinitionBody;

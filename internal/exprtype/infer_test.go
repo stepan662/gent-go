@@ -213,6 +213,48 @@ func TestInfer_Conditional_FieldFromContext(t *testing.T) {
 		`{"type":"number"}`)
 }
 
+// --- Null coalescing ---
+
+func TestInfer_NullCoalesce_NullableField_SameType(t *testing.T) {
+	// optional integer field ?? integer literal → integer (null stripped)
+	c := ctx(t, `{
+		"type": "object",
+		"properties": { "count": {"type": "integer"} },
+		"required": []
+	}`)
+	assertSchema(t, infer(t, "count ?? 0", c), `{"type":"integer"}`)
+}
+
+func TestInfer_NullCoalesce_AlwaysNull_ReturnsRight(t *testing.T) {
+	assertSchema(t, infer(t, "nil ?? 0", nil), `{"type":"integer"}`)
+}
+
+func TestInfer_NullCoalesce_NonNullableLeft_ReturnsLeft(t *testing.T) {
+	c := ctx(t, richContextJSON)
+	assertSchema(t, infer(t, "input.order_id ?? 0", c), `{"type":"integer"}`)
+}
+
+func TestInfer_NullCoalesce_NumericWidening(t *testing.T) {
+	// nullable integer ?? number literal → number
+	c := ctx(t, `{
+		"type": "object",
+		"properties": { "count": {"type": "integer"} },
+		"required": []
+	}`)
+	assertSchema(t, infer(t, "count ?? 0.5", c), `{"type":"number"}`)
+}
+
+func TestInfer_NullCoalesce_DifferentTypes(t *testing.T) {
+	// nullable integer ?? string → oneOf[integer, string]
+	c := ctx(t, `{
+		"type": "object",
+		"properties": { "count": {"type": "integer"} },
+		"required": []
+	}`)
+	assertSchema(t, infer(t, `count ?? "n/a"`, c),
+		`{"oneOf":[{"type":"integer"},{"type":"string"}]}`)
+}
+
 // --- Unsupported constructs ---
 
 func TestInfer_FunctionCall_Unsupported(t *testing.T) {

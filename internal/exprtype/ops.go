@@ -46,6 +46,7 @@ var binaryOps = map[string]binOp{
 	"*":  {infer: inferArith, eval: numBinOp("*", func(a, b float64) float64 { return a * b })},
 	"/":  {infer: inferDiv, eval: evalDiv},
 	"%":  {infer: inferMod, eval: evalMod},
+	"??": {infer: inferNullCoalesce, eval: nil},
 }
 
 // unaryOps is the authoritative list of supported unary operators.
@@ -201,6 +202,32 @@ func numericPassthrough(operand map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("unary operator requires a numeric operand, got %q", t)
 	}
 	return operand, nil
+}
+
+// inferNullCoalesce infers the result type of a ?? b.
+// If left is always null, the result is right's type.
+// If left is never nullable, the result is left's type (right is unreachable).
+// If left is nullable, the result is the union of stripNull(left) and right.
+func inferNullCoalesce(left, right map[string]any) (map[string]any, error) {
+	if isNullType(left) {
+		return right, nil
+	}
+	nonNullLeft := stripNull(left)
+	if schemasEqual(left, nonNullLeft) {
+		return left, nil
+	}
+	if schemasEqual(nonNullLeft, right) {
+		return nonNullLeft, nil
+	}
+	lct, lOK := concreteTypeOf(nonNullLeft)
+	rct, rOK := concreteTypeOf(right)
+	if lOK && rOK && isNumeric(lct) && isNumeric(rct) {
+		if lct == rct {
+			return typeSchema(lct), nil
+		}
+		return typeSchema("number"), nil
+	}
+	return map[string]any{"oneOf": []any{nonNullLeft, right}}, nil
 }
 
 // ---- eval helpers ----
