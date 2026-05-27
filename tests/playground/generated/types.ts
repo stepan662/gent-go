@@ -2,20 +2,5 @@
 // Re-run `bun run playground:generate` after changing process.ts.
 
 export interface ProcessInput {
-  start_time: number;
-  tasks: number;
-}
-
-export interface FinishInput {
-  start_time: number;
-}
-
-export interface LoopInput {
-  task_index: number;
-  tasks: number;
-}
-
-export interface LoopOutput {
-  done: boolean;
-  finished_index: number;
+  ttl: number;
 }

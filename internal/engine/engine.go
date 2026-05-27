@@ -11,6 +11,8 @@ import (
 	"gent/internal/db"
 	"gent/internal/model"
 	"gent/internal/transport"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -129,11 +131,19 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 	var selfOutput any
 
 	if step.Call != nil {
-		out, done, err := e.executeAction(ctx, inst, step)
-		if done || err != nil {
-			return err
+		if step.Call.Type == model.CallTypeSpawn {
+			out, done, err := e.spawnProcesses(ctx, inst, step)
+			if done || err != nil {
+				return err
+			}
+			selfOutput = out
+		} else {
+			out, done, err := e.executeAction(ctx, inst, step)
+			if done || err != nil {
+				return err
+			}
+			selfOutput = out
 		}
-		selfOutput = out
 	}
 
 	gotoID, err := e.evalSwitch(inst, step, selfOutput)
@@ -307,6 +317,71 @@ func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error 
 	inst.NextRetryAt = nil
 	e.log.Error("instance failed", "id", inst.ID, "reason", reason)
 	return e.db.UpdateInstance(inst)
+}
+
+// spawnProcesses creates a new running instance for each entry in the spawn call,
+// evaluating input expressions against the parent context. Returns the list of
+// spawned instance IDs as the step output.
+func (e *Engine) spawnProcesses(ctx context.Context, inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
+	ids := make([]string, 0, len(step.Call.Processes))
+	for i, entry := range step.Call.Processes {
+		version := entry.Version
+		if version == 0 {
+			var err error
+			version, err = e.db.LatestVersion(entry.Name)
+			if err != nil {
+				return nil, true, e.failInstance(inst, fmt.Sprintf("step %q spawn[%d]: %v", step.ID, i, err))
+			}
+		}
+		def, err := e.db.GetDefinition(entry.Name, version)
+		if err != nil {
+			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q spawn[%d]: %v", step.ID, i, err))
+		}
+		input := make(map[string]any, len(entry.Input))
+		for k, expr := range entry.Input {
+			val, err := e.eval.EvalAny(expr, inst.ContextData)
+			if err != nil {
+				return nil, true, e.failInstance(inst, fmt.Sprintf("step %q spawn[%d] input %q: %v", step.ID, i, k, err))
+			}
+			input[k] = val
+		}
+		if err := def.ValidateInput(input); err != nil {
+			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q spawn[%d] input validation: %v", step.ID, i, err))
+		}
+		child := &model.ProcessInstance{
+			ID:             uuid.NewString(),
+			ProcessName:    def.Name,
+			ProcessVersion: def.Version,
+			StepQueue:      def.Steps,
+			ContextData:    map[string]any{"input": input, "outputs": map[string]any{}, "output_order": []string{}},
+			Status:         model.StatusRunning,
+		}
+		if err := e.db.SaveInstance(child); err != nil {
+			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q spawn[%d] save: %v", step.ID, i, err))
+		}
+		e.log.Info("spawned child instance", "parent", inst.ID, "child", child.ID, "process", child.ProcessName)
+		ids = append(ids, child.ID)
+	}
+
+	if inst.ContextData["outputs"] == nil {
+		inst.ContextData["outputs"] = map[string]any{}
+	}
+	inst.ContextData["outputs"].(map[string]any)[step.ID] = ids
+
+	var order []string
+	switch v := inst.ContextData["output_order"].(type) {
+	case []string:
+		order = v
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				order = append(order, s)
+			}
+		}
+	}
+	inst.ContextData["output_order"] = append(order, step.ID)
+
+	return ids, false, nil
 }
 
 // resolveHeaders evaluates each header value expression against the instance

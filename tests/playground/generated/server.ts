@@ -3,7 +3,7 @@
 
 import { createServer } from 'node:http'
 import Ajv from 'ajv'
-import type { FinishInput, LoopInput, LoopOutput } from './types.ts'
+import type {  } from './types.ts'
 
 // Transport envelope — mirrors internal/transport/transport.go
 interface TaskRequest {
@@ -14,27 +14,11 @@ interface TaskRequest {
 
 // Implement this in server.ts and pass it to startServer().
 export interface Handlers {
-  finish: (ctx: FinishInput) => Promise<Record<string, unknown>>
-  loop: (ctx: LoopInput) => Promise<LoopOutput>
 }
 
 // Output schemas baked in for runtime validation via AJV.
 const stepSchemas: Record<string, object> = {
-  "loop": {
-    "properties": {
-      "done": {
-        "type": "boolean"
-      },
-      "finished_index": {
-        "type": "number"
-      }
-    },
-    "required": [
-      "finished_index",
-      "done"
-    ],
-    "type": "object"
-  }
+
 }
 
 const ajv = new Ajv()

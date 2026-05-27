@@ -24,16 +24,26 @@ type CallType string
 const (
 	CallTypeREST   CallType = "rest"
 	CallTypeScript CallType = "script"
+	CallTypeSpawn  CallType = "spawn"
 )
+
+// SpawnEntry describes a single process to spawn within a "spawn" call.
+type SpawnEntry struct {
+	Name    string            `json:"name"`
+	Version int               `json:"version,omitempty"` // 0 = latest
+	Input   map[string]string `json:"input,omitempty"`   // expression map, evaluated like Step.Params
+}
 
 // Call describes how to invoke a step's action. It is a discriminated union on Type.
 //   - "rest":   Endpoint (required), Headers (optional, expression-evaluated)
 //   - "script": Exec (required)
+//   - "spawn":  Processes (required) — starts one or more child process instances
 type Call struct {
-	Type     CallType          `json:"type"`
-	Endpoint string            `json:"endpoint,omitempty"` // rest
-	Headers  map[string]string `json:"headers,omitempty"`  // rest, values are expressions
-	Exec     string            `json:"exec,omitempty"`     // script
+	Type      CallType          `json:"type"`
+	Endpoint  string            `json:"endpoint,omitempty"`  // rest
+	Headers   map[string]string `json:"headers,omitempty"`   // rest, values are expressions
+	Exec      string            `json:"exec,omitempty"`      // script
+	Processes []SpawnEntry      `json:"processes,omitempty"` // spawn
 }
 
 // JSONSchemaBytes returns the JSON Schema for Call as a discriminated union
@@ -58,6 +68,28 @@ func (Call) JSONSchemaBytes() ([]byte, error) {
 					"exec": {"type": "string"}
 				},
 				"required": ["type", "exec"],
+				"additionalProperties": false
+			},
+			{
+				"type": "object",
+				"properties": {
+					"type": {"type": "string", "const": "spawn"},
+					"processes": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"properties": {
+								"name":    {"type": "string"},
+								"version": {"type": "integer"},
+								"input":   {"type": "object", "additionalProperties": {"type": "string"}}
+							},
+							"required": ["name"],
+							"additionalProperties": false
+						},
+						"minItems": 1
+					}
+				},
+				"required": ["type", "processes"],
 				"additionalProperties": false
 			}
 		],
@@ -239,8 +271,17 @@ func validateStep(s *Step, stepIDs map[string]struct{}) error {
 			if s.Call.Exec == "" {
 				return fmt.Errorf("step %q: call.exec is required for type %q", s.ID, s.Call.Type)
 			}
-default:
-			return fmt.Errorf("step %q: call.type must be one of: rest, script, grpc", s.ID)
+		case CallTypeSpawn:
+			if len(s.Call.Processes) == 0 {
+				return fmt.Errorf("step %q: call.processes is required for type %q", s.ID, s.Call.Type)
+			}
+			for i, p := range s.Call.Processes {
+				if p.Name == "" {
+					return fmt.Errorf("step %q: call.processes[%d].name is required", s.ID, i)
+				}
+			}
+		default:
+			return fmt.Errorf("step %q: call.type must be one of: rest, script, spawn", s.ID)
 		}
 	}
 	if hasSwitch {

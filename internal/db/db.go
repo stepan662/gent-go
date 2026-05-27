@@ -9,13 +9,13 @@ import (
 	"io/fs"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/pgdriver"
 	"github.com/uptrace/bun/migrate"
-	_ "github.com/mattn/go-sqlite3"
 
 	"gent/internal/model"
 )
@@ -43,6 +43,8 @@ func OpenSQLite(path string) (*DB, error) {
 // DSN format: postgres://user:password@host:port/database?sslmode=disable
 func OpenPostgres(dsn string) (*DB, error) {
 	sqldb := sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(dsn)))
+	sqldb.SetMaxOpenConns(50)
+	sqldb.SetMaxIdleConns(25)
 	return open(bun.NewDB(sqldb, pgdialect.New()))
 }
 

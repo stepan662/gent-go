@@ -24,7 +24,7 @@ const { error: defErr } = await client.PUT("/definitions", {
 if (defErr) throw new Error(`registration failed: ${JSON.stringify(defErr)}`);
 console.log("  registered");
 
-const rounds = 10;
+const rounds = 1;
 const maxInterval = 100;
 
 for (let i = 0; i < rounds; i++) {
@@ -37,10 +37,8 @@ for (let i = 0; i < rounds; i++) {
 async function startInstance() {
   // ─── 2. start an instance ──────────────────────────────────────────────────
 
-  const start_time = Date.now();
   const input: ProcessInput = {
-    tasks: 100,
-    start_time,
+    ttl: 5,
   };
 
   const { error: startErr } = await client.POST("/instances", {

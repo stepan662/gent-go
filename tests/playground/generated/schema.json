@@ -4,76 +4,15 @@
   "process_input": {
     "$ref": "#/$defs/input"
   },
-  "tasks": {
-    "finish": {
-      "input": {
-        "properties": {
-          "start_time": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "start_time"
-        ],
-        "type": "object"
-      }
-    },
-    "loop": {
-      "input": {
-        "properties": {
-          "task_index": {
-            "oneOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "integer"
-              }
-            ]
-          },
-          "tasks": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "task_index",
-          "tasks"
-        ],
-        "type": "object"
-      },
-      "output": {
-        "$ref": "#/$defs/loop_output"
-      }
-    }
-  },
   "$defs": {
     "input": {
       "properties": {
-        "start_time": {
-          "type": "number"
-        },
-        "tasks": {
+        "ttl": {
           "type": "integer"
         }
       },
       "required": [
-        "tasks",
-        "start_time"
-      ],
-      "type": "object"
-    },
-    "loop_output": {
-      "properties": {
-        "done": {
-          "type": "boolean"
-        },
-        "finished_index": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "finished_index",
-        "done"
+        "ttl"
       ],
       "type": "object"
     }

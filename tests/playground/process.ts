@@ -23,38 +23,30 @@ export const processDefinition = {
   input_schema: {
     type: "object",
     properties: {
-      tasks: { type: "integer" },
-      start_time: { type: "number" },
+      ttl: { type: "integer" },
     },
-    required: ["tasks", "start_time"],
+    required: ["ttl"],
   },
   steps: [
     {
-      id: "loop",
-      call: { type: "rest" as const, endpoint: `http://localhost:${PORT}/loop` },
-      params: {
-        tasks: "{{input.tasks}}",
-        task_index:
-          "{{outputs.loop.finished_index != nil ? outputs.loop.finished_index + 1 : 0}}",
-      },
-      output_schema: {
-        type: "object",
-        properties: {
-          finished_index: { type: "number" },
-          done: { type: "boolean" },
-        },
-        required: ["finished_index", "done"],
-      },
+      id: "recursion_condition",
       switch: {
-        "{{!self.done}}": "#loop",
-        default: "#finish",
+        "{{input.ttl > 0}}": "#recursion",
+        default: "$end",
       },
     },
     {
-      id: "finish",
-      call: { type: "rest" as const, endpoint: `http://localhost:${PORT}/finish` },
-      params: {
-        start_time: "{{input.start_time}}",
+      id: "recursion",
+      call: {
+        type: "spawn",
+        processes: [
+          {
+            name: "order-pipeline",
+            input: {
+              ttl: "{{input.ttl - 1}}",
+            },
+          },
+        ],
       },
     },
   ],
