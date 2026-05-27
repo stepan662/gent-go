@@ -35,15 +35,24 @@ type ChildProcessEntry struct {
 }
 
 // Call describes how to invoke a step's action. It is a discriminated union on Type.
-//   - "rest":   Endpoint (required), Headers (optional, expression-evaluated)
-//   - "script": Exec (required)
-//   - "spawn":  Processes (required) — starts one or more child process instances
+//   - "rest":          Endpoint (required), Headers (optional), OutputSchema (optional)
+//   - "script":        Exec (required), OutputSchema (optional)
+//   - "child_process": Processes (required), ChildOutputSchema (optional per-child schema)
+//
+// OutputSchema (rest/script): when set, the call response is validated and stored in
+// context for downstream steps. Without it, the output is only available as "self"
+// within the same step's switch and is not persisted.
+//
+// ChildOutputSchema (child_process): when set, each child's computed output is
+// validated before the parent resumes.
 type Call struct {
 	Type      CallType          `json:"type"`
-	Endpoint  string            `json:"endpoint,omitempty"`  // rest
-	Headers   map[string]string `json:"headers,omitempty"`   // rest, values are expressions
-	Exec      string            `json:"exec,omitempty"`      // script
-	Processes []ChildProcessEntry `json:"processes,omitempty"` // child_process
+	Endpoint  string            `json:"endpoint,omitempty"`           // rest
+	Headers   map[string]string `json:"headers,omitempty"`            // rest, values are expressions
+	Exec      string            `json:"exec,omitempty"`               // script
+	OutputSchema map[string]any `json:"output_schema,omitempty"`      // rest/script: validate & persist output
+	Processes []ChildProcessEntry `json:"processes,omitempty"`        // child_process
+	ChildOutputSchema map[string]any `json:"child_output_schema,omitempty"` // child_process: validate each child's output
 }
 
 // JSONSchemaBytes returns the JSON Schema for Call as a discriminated union
@@ -54,9 +63,10 @@ func (Call) JSONSchemaBytes() ([]byte, error) {
 			{
 				"type": "object",
 				"properties": {
-					"type":     {"type": "string", "const": "rest"},
-					"endpoint": {"type": "string"},
-					"headers":  {"type": "object", "additionalProperties": {"type": "string"}}
+					"type":          {"type": "string", "const": "rest"},
+					"endpoint":      {"type": "string"},
+					"headers":       {"type": "object", "additionalProperties": {"type": "string"}},
+					"output_schema": {"type": "object"}
 				},
 				"required": ["type", "endpoint"],
 				"additionalProperties": false
@@ -64,8 +74,9 @@ func (Call) JSONSchemaBytes() ([]byte, error) {
 			{
 				"type": "object",
 				"properties": {
-					"type": {"type": "string", "const": "script"},
-					"exec": {"type": "string"}
+					"type":          {"type": "string", "const": "script"},
+					"exec":          {"type": "string"},
+					"output_schema": {"type": "object"}
 				},
 				"required": ["type", "exec"],
 				"additionalProperties": false
@@ -87,7 +98,8 @@ func (Call) JSONSchemaBytes() ([]byte, error) {
 							"additionalProperties": false
 						},
 						"minItems": 1
-					}
+					},
+					"child_output_schema": {"type": "object"}
 				},
 				"required": ["type", "processes"],
 				"additionalProperties": false
@@ -192,13 +204,12 @@ func (SwitchMap) JSONSchemaBytes() ([]byte, error) {
 // Switch expressions have access to the full context and to this step's own action
 // output under the name "self".
 type Step struct {
-	ID           string            `json:"id"                  validate:"required"`
-	Call         *Call             `json:"call,omitempty"`
-	TimeoutMs    int               `json:"timeout_ms,omitempty"`
-	Retries      int               `json:"retries,omitempty"`
-	OutputSchema map[string]any    `json:"output_schema,omitempty"`
-	Params       map[string]string `json:"params,omitempty"`
-	Switch       SwitchMap         `json:"switch,omitempty"`
+	ID        string            `json:"id"           validate:"required"`
+	Call      *Call             `json:"call,omitempty"`
+	TimeoutMs int               `json:"timeout_ms,omitempty"`
+	Retries   int               `json:"retries,omitempty"`
+	Params    map[string]string `json:"params,omitempty"`
+	Switch    SwitchMap         `json:"switch,omitempty"`
 }
 
 // ProcessDefinition is the immutable versioned blueprint for a process.
@@ -230,12 +241,22 @@ func (d *ProcessDefinition) Normalize() error {
 		d.OutputSchema = normalized
 	}
 	for _, s := range d.Steps {
-		if len(s.OutputSchema) > 0 {
-			normalized, err := schema.Normalize(s.OutputSchema)
+		if s.Call == nil {
+			continue
+		}
+		if len(s.Call.OutputSchema) > 0 {
+			normalized, err := schema.Normalize(s.Call.OutputSchema)
 			if err != nil {
-				return fmt.Errorf("step %q output_schema: %w", s.ID, err)
+				return fmt.Errorf("step %q call.output_schema: %w", s.ID, err)
 			}
-			s.OutputSchema = normalized
+			s.Call.OutputSchema = normalized
+		}
+		if len(s.Call.ChildOutputSchema) > 0 {
+			normalized, err := schema.Normalize(s.Call.ChildOutputSchema)
+			if err != nil {
+				return fmt.Errorf("step %q call.child_output_schema: %w", s.ID, err)
+			}
+			s.Call.ChildOutputSchema = normalized
 		}
 	}
 	return nil
@@ -309,7 +330,15 @@ func validateStep(s *Step, stepIDs map[string]struct{}) error {
 			}
 		}
 	}
-	return checkSchemaDoc(fmt.Sprintf("step %q output_schema", s.ID), s.OutputSchema)
+	if s.Call != nil {
+		if err := checkSchemaDoc(fmt.Sprintf("step %q call.output_schema", s.ID), s.Call.OutputSchema); err != nil {
+			return err
+		}
+		if err := checkSchemaDoc(fmt.Sprintf("step %q call.child_output_schema", s.ID), s.Call.ChildOutputSchema); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func checkSchemaDoc(field string, schema map[string]any) error {
@@ -332,9 +361,14 @@ func (d *ProcessDefinition) ValidateOutput(output any) error {
 	return validateSchema(d.OutputSchema, output)
 }
 
-// ValidateOutput checks output data against OutputSchema. No-op if OutputSchema is nil.
-func (s *Step) ValidateOutput(output any) error {
-	return validateSchema(s.OutputSchema, output)
+// ValidateOutput checks output data against call.OutputSchema. No-op if unset.
+func (c *Call) ValidateOutput(output any) error {
+	return validateSchema(c.OutputSchema, output)
+}
+
+// ValidateChildOutput checks a single child's output against call.ChildOutputSchema. No-op if unset.
+func (c *Call) ValidateChildOutput(output any) error {
+	return validateSchema(c.ChildOutputSchema, output)
 }
 
 func validateSchema(schema map[string]any, data any) error {

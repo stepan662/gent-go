@@ -72,15 +72,15 @@ func Generate(def *model.ProcessDefinition) (SchemaFile, error) {
 
 func collectNamedOutputs(steps []*model.Step, named map[string]map[string]any) {
 	for _, s := range steps {
-		if len(s.OutputSchema) > 0 {
-			named[s.ID+"_output"] = s.OutputSchema
+		if s.Call != nil && len(s.Call.OutputSchema) > 0 {
+			named[s.ID+"_output"] = s.Call.OutputSchema
 		}
 	}
 }
 
 func collectTaskRefs(steps []*model.Step, out map[string]TaskSchemas) {
 	for _, s := range steps {
-		if len(s.OutputSchema) > 0 {
+		if s.Call != nil && len(s.Call.OutputSchema) > 0 {
 			out[s.ID] = TaskSchemas{Output: schemaRef(s.ID + "_output")}
 		}
 	}
@@ -128,7 +128,7 @@ func buildInputs(steps []*model.Step, _ []string, tasks map[string]TaskSchemas, 
 		if len(s.Switch) > 0 {
 			req := required[s.ID]
 			opt := optional[s.ID]
-			if s.Call != nil && len(s.OutputSchema) > 0 {
+			if s.Call != nil && len(s.Call.OutputSchema) > 0 {
 				req = append(req, s.ID)
 				var filtered []string
 				for _, id := range opt {
@@ -192,7 +192,7 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 
 	hasOutput := make([]bool, n)
 	for i, s := range steps {
-		hasOutput[i] = len(s.OutputSchema) > 0
+		hasOutput[i] = s.Call != nil && len(s.Call.OutputSchema) > 0
 	}
 
 	allTrue := func() []bool { s := make([]bool, n); for i := range s { s[i] = true }; return s }
@@ -307,7 +307,10 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 
 func addSelfSchema(ctx map[string]any, s *model.Step) {
 	props, _ := ctx["properties"].(map[string]any)
-	selfSchema := map[string]any(s.OutputSchema)
+	var selfSchema map[string]any
+	if s.Call != nil {
+		selfSchema = s.Call.OutputSchema
+	}
 	if len(selfSchema) == 0 {
 		selfSchema = map[string]any{"type": "object"}
 	}

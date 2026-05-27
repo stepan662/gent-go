@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -16,6 +17,7 @@ import (
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/pgdriver"
 	"github.com/uptrace/bun/migrate"
+	"github.com/xeipuuv/gojsonschema"
 
 	"gent/internal/model"
 )
@@ -383,7 +385,7 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 		return err
 	}
 
-	// All succeeded — fetch the parent to get the spawn order and patch its context.
+	// All succeeded — fetch the parent to get spawn order, child output schema, and patch its context.
 	var parentRow instanceRow
 	if err := db.bun.NewSelect().
 		Model(&parentRow).
@@ -411,10 +413,17 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 		}
 	}
 
+	// Read child_output_schema if the parent declared one.
+	var childOutputSchema map[string]any
+	if s, ok := parentCtx["_spawn_child_output_schema"]; ok {
+		childOutputSchema, _ = s.(map[string]any)
+	}
+
 	// Build the step output array in spawn order.
+	// Output is only included per child when child_output_schema is declared and validates.
 	type childResult struct {
-		ID     string         `json:"id"`
-		Output map[string]any `json:"output"`
+		ID     string `json:"id"`
+		Output any    `json:"output,omitempty"`
 	}
 	results := make([]childResult, 0, len(spawnOrder))
 	for _, id := range spawnOrder {
@@ -422,15 +431,35 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 		if !ok {
 			continue
 		}
-		var ctxData map[string]any
-		if err := json.Unmarshal([]byte(row.ContextData), &ctxData); err != nil {
-			return fmt.Errorf("unmarshal child context: %w", err)
+		result := childResult{ID: id}
+		if len(childOutputSchema) > 0 {
+			var ctxData map[string]any
+			if err := json.Unmarshal([]byte(row.ContextData), &ctxData); err != nil {
+				return fmt.Errorf("unmarshal child context: %w", err)
+			}
+			output := ctxData["output"]
+			if err := validateChildOutput(childOutputSchema, output); err != nil {
+				// Treat schema violation as a child failure — cascade to all waiting ancestors.
+				reason := fmt.Sprintf("child process %q output validation: %v", id, err)
+				ancestors := child.CallStack
+				if len(ancestors) > 0 {
+					_, uerr := db.bun.NewUpdate().
+						TableExpr("process_instances").
+						Set("status = ?", string(model.StatusFailed)).
+						Set("error = ?", reason).
+						Set("updated_at = ?", time.Now().UTC()).
+						Where("id IN (?)", bun.In(ancestors)).
+						Where("status = ?", string(model.StatusWaiting)).
+						Exec(ctx)
+					if uerr != nil {
+						return uerr
+					}
+				}
+				return nil
+			}
+			result.Output = output
 		}
-		var output map[string]any
-		if o, ok := ctxData["output"]; ok {
-			output, _ = o.(map[string]any)
-		}
-		results = append(results, childResult{ID: id, Output: output})
+		results = append(results, result)
 	}
 
 	if parentCtx["outputs"] == nil {
@@ -494,4 +523,22 @@ func toInstances(rows []instanceRow) ([]*model.ProcessInstance, error) {
 		out[i] = inst
 	}
 	return out, nil
+}
+
+func validateChildOutput(schema map[string]any, output any) error {
+	result, err := gojsonschema.Validate(
+		gojsonschema.NewGoLoader(schema),
+		gojsonschema.NewGoLoader(output),
+	)
+	if err != nil {
+		return fmt.Errorf("schema validation error: %w", err)
+	}
+	if !result.Valid() {
+		msgs := make([]string, len(result.Errors()))
+		for i, e := range result.Errors() {
+			msgs[i] = e.String()
+		}
+		return fmt.Errorf("%s", strings.Join(msgs, "; "))
+	}
+	return nil
 }

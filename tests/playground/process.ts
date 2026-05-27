@@ -38,7 +38,7 @@ export const processDefinition = {
     {
       id: "recursion",
       call: {
-        type: "spawn",
+        type: "child_process",
         processes: [
           {
             name: "order-pipeline",

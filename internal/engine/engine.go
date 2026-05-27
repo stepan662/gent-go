@@ -227,29 +227,31 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		return nil, true, e.retryOrFail(inst, step, resp.Error)
 	}
 
-	if err := step.ValidateOutput(resp.Output); err != nil {
+	if err := step.Call.ValidateOutput(resp.Output); err != nil {
 		return nil, true, e.failInstance(inst, fmt.Sprintf("step %q output validation: %v", step.ID, err))
 	}
 
-	// Store output under outputs.<step_id> for unambiguous addressing.
-	if inst.ContextData["outputs"] == nil {
-		inst.ContextData["outputs"] = map[string]any{}
-	}
-	inst.ContextData["outputs"].(map[string]any)[step.ID] = resp.Output
+	// Only persist output to context when output_schema is declared.
+	// Without it the output is only available as "self" within this step's switch.
+	if len(step.Call.OutputSchema) > 0 {
+		if inst.ContextData["outputs"] == nil {
+			inst.ContextData["outputs"] = map[string]any{}
+		}
+		inst.ContextData["outputs"].(map[string]any)[step.ID] = resp.Output
 
-	// Track step completion order so outputs can be serialized in step order.
-	var order []string
-	switch v := inst.ContextData["output_order"].(type) {
-	case []string:
-		order = v
-	case []any:
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				order = append(order, s)
+		var order []string
+		switch v := inst.ContextData["output_order"].(type) {
+		case []string:
+			order = v
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					order = append(order, s)
+				}
 			}
 		}
+		inst.ContextData["output_order"] = append(order, step.ID)
 	}
-	inst.ContextData["output_order"] = append(order, step.ID)
 	inst.RetryCount = 0
 
 	return resp.Output, false, nil
@@ -382,12 +384,13 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 		ids = append(ids, child.ID)
 	}
 
-	// Store spawn order in parent context so TryWakeParent can build ordered output.
+	// Store metadata TryWakeParent needs: spawn order (placeholder) and child output schema.
 	if inst.ContextData["outputs"] == nil {
 		inst.ContextData["outputs"] = map[string]any{}
 	}
-	// Placeholder — TryWakeParent will replace this with the enriched array on wake.
+	// Placeholder — TryWakeParent replaces this with the enriched array on wake.
 	inst.ContextData["outputs"].(map[string]any)[step.ID] = ids
+	inst.ContextData["_spawn_child_output_schema"] = step.Call.ChildOutputSchema
 
 	var order []string
 	switch v := inst.ContextData["output_order"].(type) {

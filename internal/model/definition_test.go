@@ -63,9 +63,9 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 		}
 	})
 
-	t.Run("step OutputSchema $defs are flattened to root", func(t *testing.T) {
+	t.Run("step call.output_schema $defs are flattened to root", func(t *testing.T) {
 		step := validStep("charge")
-		step.OutputSchema = map[string]any{
+		step.Call.OutputSchema = map[string]any{
 			"type": "object",
 			"$defs": map[string]any{
 				"Result": map[string]any{"type": "object", "properties": map[string]any{
@@ -80,15 +80,15 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 		if err := d.Normalize(); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defs, _ := step.OutputSchema["$defs"].(map[string]any)
+		defs, _ := step.Call.OutputSchema["$defs"].(map[string]any)
 		if defs == nil || defs["Result"] == nil {
-			t.Fatal("$defs/Result missing in OutputSchema after normalize")
+			t.Fatal("$defs/Result missing in call.output_schema after normalize")
 		}
 	})
 
-	t.Run("all step OutputSchemas are normalized", func(t *testing.T) {
+	t.Run("all step call.output_schemas are normalized", func(t *testing.T) {
 		step1 := validStep("charge")
-		step1.OutputSchema = map[string]any{
+		step1.Call.OutputSchema = map[string]any{
 			"type": "object",
 			"$defs": map[string]any{
 				"Tracking": map[string]any{"type": "object"},
@@ -98,7 +98,7 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 			},
 		}
 		step2 := validStep("notify")
-		step2.OutputSchema = map[string]any{
+		step2.Call.OutputSchema = map[string]any{
 			"type": "object",
 			"$defs": map[string]any{
 				"Result": map[string]any{"type": "object"},
@@ -111,11 +111,11 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 		if err := d.Normalize(); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defs1, _ := step1.OutputSchema["$defs"].(map[string]any)
+		defs1, _ := step1.Call.OutputSchema["$defs"].(map[string]any)
 		if defs1 == nil || defs1["Tracking"] == nil {
 			t.Fatal("step1 $defs/Tracking missing after normalize")
 		}
-		defs2, _ := step2.OutputSchema["$defs"].(map[string]any)
+		defs2, _ := step2.Call.OutputSchema["$defs"].(map[string]any)
 		if defs2 == nil || defs2["Result"] == nil {
 			t.Fatal("step2 $defs/Result missing after normalize")
 		}
@@ -134,9 +134,9 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid $ref in step OutputSchema returns error with step ID", func(t *testing.T) {
+	t.Run("invalid $ref in step call.output_schema returns error with step ID", func(t *testing.T) {
 		step := validStep("charge")
-		step.OutputSchema = map[string]any{
+		step.Call.OutputSchema = map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"x": map[string]any{"$ref": "#/$defs/Missing"}},
 		}
@@ -405,14 +405,17 @@ func TestProcessDefinition_ValidateInput_Nullable(t *testing.T) {
 
 func TestStep_ValidateOutput_Nullable(t *testing.T) {
 	step := &Step{
-		ID:   "charge",
-		Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-		OutputSchema: map[string]any{
-			"type":     "object",
-			"required": []any{"charged"},
-			"properties": map[string]any{
-				"charged": map[string]any{"type": "boolean"},
-				"receipt": map[string]any{"type": []any{"string", "null"}},
+		ID: "charge",
+		Call: &Call{
+			Type:     CallTypeREST,
+			Endpoint: "http://x",
+			OutputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"charged"},
+				"properties": map[string]any{
+					"charged": map[string]any{"type": "boolean"},
+					"receipt": map[string]any{"type": []any{"string", "null"}},
+				},
 			},
 		},
 	}
@@ -453,7 +456,7 @@ func TestStep_ValidateOutput_Nullable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := step.ValidateOutput(tt.output)
+			err := step.Call.ValidateOutput(tt.output)
 			if tt.wantErr && err == nil {
 				t.Error("expected error, got nil")
 			}

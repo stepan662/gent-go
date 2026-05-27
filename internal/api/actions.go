@@ -71,15 +71,18 @@ var registry = func() []actionDef {
 				},
 				Steps: []*model.Step{
 					{
-						ID:        "charge",
-						Call:      &model.Call{Type: model.CallTypeREST, Endpoint: "http://localhost:9001/charge"},
-						TimeoutMs: 5000, Retries: 3,
-						OutputSchema: map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"charged": map[string]any{"type": "boolean"},
+						ID: "charge",
+						Call: &model.Call{
+							Type:     model.CallTypeREST,
+							Endpoint: "http://localhost:9001/charge",
+							OutputSchema: map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"charged": map[string]any{"type": "boolean"},
+								},
 							},
 						},
+						TimeoutMs: 5000, Retries: 3,
 						Switch: model.SwitchMap{
 							{When: "self.charged == true", Goto: "ship"},
 							{When: "self.charged == false", Goto: "refund"},
