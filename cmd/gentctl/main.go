@@ -83,16 +83,18 @@ func runApply(server string, defs []any) {
 }
 
 func runValidate(server string, defs []any) {
-	var resp any
+	var resp json.RawMessage
 	if err := call(server+"/definitions/validate", http.MethodPost, defs, &resp); err != nil {
 		fatal("%v", err)
 	}
-	out, _ := json.MarshalIndent(resp, "", "  ")
-	os.Stdout.Write(out)
+	var buf bytes.Buffer
+	json.Indent(&buf, resp, "", "  ")
+	os.Stdout.Write(buf.Bytes())
 	os.Stdout.Write([]byte("\n"))
 }
 
-// call sends body as JSON to url, unwraps the gent API envelope, and decodes data into out.
+// call sends body as JSON to url and decodes the response into out.
+// The HTTP API returns the data directly on success (2xx) and {"error":"..."} on failure (4xx).
 func call(url, method string, body any, out any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -115,19 +117,17 @@ func call(url, method string, body any, out any) error {
 		return fmt.Errorf("read response: %w", err)
 	}
 
-	var envelope struct {
-		OK    bool            `json:"ok"`
-		Data  json.RawMessage `json:"data"`
-		Error string          `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	if !envelope.OK {
-		return fmt.Errorf("server: %s", envelope.Error)
+	if resp.StatusCode >= 400 {
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &errResp); err != nil {
+			return fmt.Errorf("server error (status %d)", resp.StatusCode)
+		}
+		return fmt.Errorf("server: %s", errResp.Error)
 	}
 	if out != nil {
-		return json.Unmarshal(envelope.Data, out)
+		return json.Unmarshal(raw, out)
 	}
 	return nil
 }

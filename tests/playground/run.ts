@@ -50,7 +50,7 @@ async function startInstance() {
   // ─── 2. start an instance ──────────────────────────────────────────────────
 
   const input: ProcessInput = {
-    ttl: 13,
+    ttl: 8,
   };
 
   const { data: startData, error: startErr } = await client.POST("/instances", {

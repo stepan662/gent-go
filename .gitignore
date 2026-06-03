@@ -1,5 +1,7 @@
 # Binary
 /gent
+/gentschema
+/gentctl
 
 # SQLite databases
 *.db
@@ -24,4 +26,3 @@ tests/generated/
 tests/node_modules/
 /p_schema.json
 /p.json
-/gentschema

@@ -5,15 +5,7 @@
     "$ref": "#/$defs/input"
   },
   "process_output": {
-    "properties": {
-      "processes": {
-        "type": "number"
-      }
-    },
-    "required": [
-      "processes"
-    ],
-    "type": "object"
+    "$ref": "#/$defs/output"
   },
   "tasks": {
     "recursion": {
@@ -29,12 +21,26 @@
   "$defs": {
     "input": {
       "properties": {
+        "root": {
+          "type": "boolean"
+        },
         "ttl": {
           "type": "integer"
         }
       },
       "required": [
         "ttl"
+      ],
+      "type": "object"
+    },
+    "output": {
+      "properties": {
+        "processes": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "processes"
       ],
       "type": "object"
     },
