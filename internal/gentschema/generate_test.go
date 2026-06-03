@@ -1,4 +1,4 @@
-package main_test
+package gentschema_test
 
 import (
 	"strings"
@@ -73,7 +73,7 @@ func TestGenerate_FlatStepsWithOutputs(t *testing.T) {
 			{
 				"id": "charge",
 				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }},
-				"switch": {"{{self.charged == true}}": "#ship"}
+				"switch": [{"when": "{{self.charged == true}}", "goto": "#ship"}]
 			},
 			{
 				"id": "ship",
@@ -91,8 +91,6 @@ func TestGenerate_FlatStepsWithOutputs(t *testing.T) {
 }
 
 func TestGenerate_InnerDefsPromotedToRoot(t *testing.T) {
-	// input_schema has its own $defs/Address — after flattenNamedSchemas these
-	// should be promoted to the root $defs with scoped names.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [{"id":"s1","call":{"type":"rest","endpoint":"http://x"}}],
@@ -110,7 +108,6 @@ func TestGenerate_InnerDefsPromotedToRoot(t *testing.T) {
 		}
 	}`)
 	assertJSON(t, out.ProcessInput, `{"$ref": "#/$defs/input"}`)
-	// input schema at root $defs — no inner $defs, $ref rewritten to root
 	assertJSON(t, out.Defs["input"], `{
 		"type": "object",
 		"properties": { "addr": { "$ref": "#/$defs/Address" } }
@@ -122,8 +119,6 @@ func TestGenerate_InnerDefsPromotedToRoot(t *testing.T) {
 }
 
 func TestGenerate_InnerDefsConflictRenamed(t *testing.T) {
-	// Both input_schema and charge output_schema have an inner $defs/Item.
-	// After promotion both should be in root $defs under distinct names.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"input_schema": {
@@ -140,7 +135,6 @@ func TestGenerate_InnerDefsConflictRenamed(t *testing.T) {
 			}}
 		}]
 	}`)
-	// Both "Item" defs must exist in root $defs under different names.
 	var itemCount int
 	for k := range out.Defs {
 		if k == "Item" || strings.HasPrefix(k, "Item_") {
@@ -231,8 +225,6 @@ func TestGenerate_Input_TaskWithNoOutputSkippedInContext(t *testing.T) {
 }
 
 func TestGenerate_Input_SwitchOnlyStepSkippedInContext(t *testing.T) {
-	// A switch-only step (no action) produces no output and should not appear
-	// in the accumulated context for subsequent steps.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -242,7 +234,7 @@ func TestGenerate_Input_SwitchOnlyStepSkippedInContext(t *testing.T) {
 			},
 			{
 				"id": "route",
-				"switch": {"{{outputs.charge.charged == true}}": "#ship"}
+				"switch": [{"when": "{{outputs.charge.charged == true}}", "goto": "#ship"}]
 			},
 			{
 				"id": "ship",
@@ -250,7 +242,6 @@ func TestGenerate_Input_SwitchOnlyStepSkippedInContext(t *testing.T) {
 			}
 		]
 	}`)
-	// ship should see charge's output but not any "route" output (switch-only steps have none)
 	if _, ok := out.Tasks["route"]; ok {
 		t.Error("switch-only step should not appear in tasks")
 	}
@@ -311,9 +302,6 @@ func TestGenerate_Input_ParamsOnlyTask(t *testing.T) {
 }
 
 func TestGenerate_Input_Params_OneOfOutputPropertyAccess(t *testing.T) {
-	// save_order has a oneOf output (object|string). check_fraud accesses
-	// outputs.save_order.valid — the inferred type must be boolean|null, not
-	// the full oneOf[object,string].
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -340,8 +328,6 @@ func TestGenerate_Input_Params_OneOfOutputPropertyAccess(t *testing.T) {
 }
 
 func TestGenerate_Switch_SelfExpressionTypeChecked(t *testing.T) {
-	// Switch expressions with "self" should be type-checked against the step's
-	// own OutputSchema.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -352,21 +338,19 @@ func TestGenerate_Switch_SelfExpressionTypeChecked(t *testing.T) {
 					"properties": { "charged": { "type": "boolean" } },
 					"required": ["charged"]
 				}},
-				"switch": {
-					"{{self.charged == true}}": "#ship",
-					"{{self.charged == false}}": "#refund"
-				}
+				"switch": [
+					{"when": "{{self.charged == true}}", "goto": "#ship"},
+					{"when": "{{self.charged == false}}", "goto": "#refund"}
+				]
 			},
 			{ "id": "ship",   "call": {"type": "rest", "endpoint": "http://x"} },
 			{ "id": "refund", "call": {"type": "rest", "endpoint": "http://x"} }
 		]
 	}`)
-	// All steps present; no error means type inference succeeded
 	assertJSON(t, out.Tasks["charge"].Output, `{"$ref": "#/$defs/charge_output"}`)
 }
 
 func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
-	// Switch expressions can also reference prior outputs without "self".
 	runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -377,7 +361,7 @@ func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
 					"properties": { "charged": { "type": "boolean" } },
 					"required": ["charged"]
 				}},
-				"switch": {"{{outputs.charge.charged == true}}": "#notify"}
+				"switch": [{"when": "{{outputs.charge.charged == true}}", "goto": "#notify"}]
 			},
 			{ "id": "notify", "call": {"type": "rest", "endpoint": "http://x"} }
 		]
@@ -385,9 +369,6 @@ func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
 }
 
 func TestGenerate_RecursiveStep_OwnOutputOptionalInParams(t *testing.T) {
-	// A step that switches back to itself must be able to reference its own previous
-	// output in params. The output is optional (nullable) because it doesn't exist
-	// on the first iteration.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"input_schema": {
@@ -409,7 +390,7 @@ func TestGenerate_RecursiveStep_OwnOutputOptionalInParams(t *testing.T) {
 				"tasks": "{{input.tasks}}",
 				"task_index": "{{outputs.loop.finished_index ? outputs.loop.finished_index : 0}}"
 			},
-			"switch": { "{{!self.done}}": "#loop", "default": "$end" }
+			"switch": [{"when": "{{!self.done}}", "goto": "#loop"}, {"when": "default", "goto": "$end"}]
 		}]
 	}`)
 	assertJSON(t, out.Tasks["loop"].Input, `{"$ref": "#/$defs/loop_input"}`)
@@ -418,27 +399,22 @@ func TestGenerate_RecursiveStep_OwnOutputOptionalInParams(t *testing.T) {
 	if props == nil {
 		t.Fatal("loop input should have properties")
 	}
-	// task_index is a conditional: outputs.loop.finished_index (nullable number) or 0 (integer)
 	if props["task_index"] == nil {
 		t.Error("task_index param should be inferred")
 	}
-	// tasks comes from required input field → non-nullable array
 	if props["tasks"] == nil {
 		t.Error("tasks param should be inferred")
 	}
 }
 
 func TestGenerate_SwitchStep_NextStepNotReachableViaFallthrough(t *testing.T) {
-	// A step with a switch does not fall through to the next step in the list.
-	// The next step's required context must not include that step's output unless
-	// it is also reachable from a non-switch predecessor.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
 			{
 				"id": "decide",
 				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] }},
-				"switch": { "{{self.ok}}": "#work", "default": "$end" }
+				"switch": [{"when": "{{self.ok}}", "goto": "#work"}, {"when": "default", "goto": "$end"}]
 			},
 			{
 				"id": "work",
@@ -447,7 +423,6 @@ func TestGenerate_SwitchStep_NextStepNotReachableViaFallthrough(t *testing.T) {
 			}
 		]
 	}`)
-	// work is only reachable via decide's switch, so decide's output is required for work.
 	assertJSON(t, out.Tasks["work"].Input, `{"$ref": "#/$defs/work_input"}`)
 	workInput, _ := out.Defs["work_input"].(map[string]any)
 	props, _ := workInput["properties"].(map[string]any)
@@ -457,17 +432,7 @@ func TestGenerate_SwitchStep_NextStepNotReachableViaFallthrough(t *testing.T) {
 	assertJSON(t, props["flag"], `{"type": "boolean"}`)
 }
 
-// ─── context-set / CFG tests ──────────────────────────────────────────────────
-//
-// These tests verify that computeContextSets correctly classifies step outputs as
-// required (always present before a step runs) or optional (present only on some
-// paths), and that param type inference reflects that distinction:
-//   - required output → field access is non-nullable
-//   - optional output → field access is nullable (anyOf / type array with null)
-
 func TestGenerate_ContextSets_LinearChain_RequiredOutputNonNullable(t *testing.T) {
-	// A always runs before B (no branching). B's param accesses a required field
-	// of A's output; the inferred type must be non-nullable.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -492,18 +457,10 @@ func TestGenerate_ContextSets_LinearChain_RequiredOutputNonNullable(t *testing.T
 	if props == nil {
 		t.Fatal("B input should have properties")
 	}
-	// A is required before B → outputs.A is required → .ok is non-nullable boolean.
 	assertJSON(t, props["flag"], `{"type": "boolean"}`)
 }
 
 func TestGenerate_ContextSets_ExclusiveBranch_SkippedStepOutputNullable(t *testing.T) {
-	// gate(switch) → fast  (one path)
-	//              → slow  (other path, default)
-	// fast falls through to slow; slow falls through to merge.
-	//
-	// fast is only on the gate→fast→slow→merge path, not the gate→slow→merge path,
-	// so its output is optional at merge. Accessing it in params must yield a
-	// nullable type.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"input_schema": {
@@ -514,7 +471,7 @@ func TestGenerate_ContextSets_ExclusiveBranch_SkippedStepOutputNullable(t *testi
 		"steps": [
 			{
 				"id": "gate",
-				"switch": { "{{input.take_fast}}": "#fast", "default": "#slow" }
+				"switch": [{"when": "{{input.take_fast}}", "goto": "#fast"}, {"when": "default", "goto": "#slow"}]
 			},
 			{
 				"id": "fast",
@@ -538,16 +495,10 @@ func TestGenerate_ContextSets_ExclusiveBranch_SkippedStepOutputNullable(t *testi
 	if props == nil {
 		t.Fatal("merge input should have properties")
 	}
-	// fast is optional at merge → outputs.fast is nullable → .speed is nullable number.
 	assertJSON(t, props["s"], `{"type": ["number", "null"]}`)
 }
 
 func TestGenerate_ContextSets_PreBranchStepRequiredAtAllMergePoints(t *testing.T) {
-	// pre always runs before gate; gate branches to path_a or path_b (default);
-	// path_a falls through to path_b; path_b falls through to post.
-	//
-	// Every path to post goes through pre, so pre's output must be required
-	// (non-nullable) in post's params even though a branch intervenes.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -561,7 +512,7 @@ func TestGenerate_ContextSets_PreBranchStepRequiredAtAllMergePoints(t *testing.T
 			},
 			{
 				"id": "gate",
-				"switch": { "{{outputs.pre.id == 1}}": "#path_a", "default": "#path_b" }
+				"switch": [{"when": "{{outputs.pre.id == 1}}", "goto": "#path_a"}, {"when": "default", "goto": "#path_b"}]
 			},
 			{ "id": "path_a", "call": {"type": "rest", "endpoint": "http://x"} },
 			{ "id": "path_b", "call": {"type": "rest", "endpoint": "http://x"} },
@@ -578,15 +529,10 @@ func TestGenerate_ContextSets_PreBranchStepRequiredAtAllMergePoints(t *testing.T
 	if props == nil {
 		t.Fatal("post input should have properties")
 	}
-	// pre is required on every path to post → outputs.pre.id is non-nullable integer.
 	assertJSON(t, props["pre_id"], `{"type": "integer"}`)
 }
 
 func TestGenerate_ContextSets_DefaultEndSwitch_SuccessorRequiredNotOptional(t *testing.T) {
-	// decide has switch: self.ok→work, default→$end.
-	// work is reachable only from decide's explicit switch case.
-	// Because every path to work goes through decide, decide's output is required
-	// (not optional) at work — the $end branch does not create an edge to work.
 	out := runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -597,7 +543,7 @@ func TestGenerate_ContextSets_DefaultEndSwitch_SuccessorRequiredNotOptional(t *t
 					"properties": { "ok": { "type": "boolean" } },
 					"required": ["ok"]
 				}},
-				"switch": { "{{self.ok}}": "#work", "default": "$end" }
+				"switch": [{"when": "{{self.ok}}", "goto": "#work"}, {"when": "default", "goto": "$end"}]
 			},
 			{
 				"id": "work",
@@ -612,13 +558,10 @@ func TestGenerate_ContextSets_DefaultEndSwitch_SuccessorRequiredNotOptional(t *t
 	if props == nil {
 		t.Fatal("work input should have properties")
 	}
-	// decide is required for work (only path: decide→work); output is non-nullable.
 	assertJSON(t, props["flag"], `{"type": "boolean"}`)
 }
 
 func TestGenerate_Switch_OneOfAllBooleanAccepted(t *testing.T) {
-	// A oneOf/anyOf schema where every variant is boolean is still boolean —
-	// isType must recurse into variants rather than just checking the top-level key.
 	runGenerate(t, `{
 		"name": "p", "version": 1,
 		"steps": [{
@@ -630,15 +573,13 @@ func TestGenerate_Switch_OneOfAllBooleanAccepted(t *testing.T) {
 				},
 				"required": ["ok"]
 			}},
-			"switch": { "{{self.ok}}": "#next", "default": "$end" }
+			"switch": [{"when": "{{self.ok}}", "goto": "#next"}, {"when": "default", "goto": "$end"}]
 		},
 		{ "id": "next", "call": {"type": "rest", "endpoint": "http://x"} }]
 	}`)
 }
 
 func TestGenerate_Switch_OneOfBooleanOptionalFieldRejected(t *testing.T) {
-	// oneOf:[boolean] on a non-required field becomes nullable after withNull wrapping,
-	// so it must be rejected even though the schema itself contains only boolean variants.
 	err := runGenerateErr(t, `{
 		"name": "p", "version": 1,
 		"input_schema": {
@@ -648,7 +589,7 @@ func TestGenerate_Switch_OneOfBooleanOptionalFieldRejected(t *testing.T) {
 		"steps": [
 			{
 				"id": "route",
-				"switch": { "{{input.go_then}}": "#next", "default": "$end" }
+				"switch": [{"when": "{{input.go_then}}", "goto": "#next"}, {"when": "default", "goto": "$end"}]
 			},
 			{ "id": "next", "call": {"type": "rest", "endpoint": "http://x"} }
 		]
@@ -659,8 +600,6 @@ func TestGenerate_Switch_OneOfBooleanOptionalFieldRejected(t *testing.T) {
 }
 
 func TestGenerate_Switch_NullableBooleanRejected(t *testing.T) {
-	// input.go_then is not in "required", so its inferred type is boolean|null.
-	// A nullable expression is not acceptable as a switch condition.
 	err := runGenerateErr(t, `{
 		"name": "p", "version": 1,
 		"input_schema": {
@@ -670,7 +609,7 @@ func TestGenerate_Switch_NullableBooleanRejected(t *testing.T) {
 		"steps": [
 			{
 				"id": "route",
-				"switch": { "{{input.go_then}}": "#work", "default": "$end" }
+				"switch": [{"when": "{{input.go_then}}", "goto": "#work"}, {"when": "default", "goto": "$end"}]
 			},
 			{ "id": "work", "call": {"type": "rest", "endpoint": "http://x"} }
 		]
@@ -684,8 +623,6 @@ func TestGenerate_Switch_NullableBooleanRejected(t *testing.T) {
 }
 
 func TestGenerate_Switch_MixedTemplateRejectsStringResult(t *testing.T) {
-	// A mixed template like "{{self.ok}}_" produces a string, not a boolean.
-	// gentschema must reject it at schema-generation time.
 	err := runGenerateErr(t, `{
 		"name": "p", "version": 1,
 		"steps": [
@@ -696,7 +633,7 @@ func TestGenerate_Switch_MixedTemplateRejectsStringResult(t *testing.T) {
 					"properties": { "ok": { "type": "boolean" } },
 					"required": ["ok"]
 				}},
-				"switch": { "{{self.ok}}_": "#next", "default": "$end" }
+				"switch": [{"when": "{{self.ok}}_", "goto": "#next"}, {"when": "default", "goto": "$end"}]
 			},
 			{ "id": "next", "call": {"type": "rest", "endpoint": "http://x"} }
 		]
@@ -724,3 +661,4 @@ func TestGenerate_InvalidRef(t *testing.T) {
 		t.Errorf("error should mention the missing ref, got: %v", err)
 	}
 }
+

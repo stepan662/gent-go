@@ -94,24 +94,21 @@ test("lifecycle — conditional routes to correct branch", async () => {
         {
           id: "start",
           call: { type: "rest" as const, endpoint: `http://localhost:${thenMock.port}/action` },
-          switch: {
-            "{{input.go_then}}": "#then_step",
-            default: "#else_step",
-          },
+          switch: [{ when: "{{input.go_then}}", goto: "#then_step" }, { when: "default", goto: "#else_step" }],
         },
         {
           id: "then_step",
           call: { type: "rest" as const, endpoint: `http://localhost:${thenMock.port}/action`, output_schema: { type: "object" } },
           timeout_ms: 1000,
           retries: 0,
-          switch: { default: "$end" },
+          switch: [{ when: "default", goto: "$end" }],
         },
         {
           id: "else_step",
           call: { type: "rest" as const, endpoint: `http://localhost:${elseMock.port}/action`, output_schema: { type: "object" } },
           timeout_ms: 1000,
           retries: 0,
-          switch: { default: "$end" },
+          switch: [{ when: "default", goto: "$end" }],
         },
       ],
     },

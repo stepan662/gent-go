@@ -1,13 +1,18 @@
 // Registers the order-pipeline and starts one instance.
-// Requires gent to be running on localhost:8080.
-//   Start gent: go run ./cmd/gent --http :8080
-//   Start tasks: bun run playground:server   (in another terminal)
+// Requires gent to be running on localhost:8888.
+//   Start gent:   go run ./cmd/gent --http :8888
+//   Start tasks:  bun run playground:server   (in another terminal)
 //
 // Usage: bun run playground:run
 
-import { processDefinition } from "./process.ts";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import type { ProcessInput } from "./generated/types.ts";
 import { createClientTyped, waitForInstance } from "../helpers/client.ts";
+
+const PROCESS_NAME = "order-pipeline";
+const repoRoot = join(import.meta.dirname, "../..");
+const processYaml = join(import.meta.dirname, "process.yaml");
 
 const client = createClientTyped({ baseUrl: "http://localhost:8888" });
 
@@ -15,14 +20,21 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ─── 1. register the process definition ────────────────────────────────────
 
-console.log(
-  `\nRegistering "${processDefinition.name}" v${processDefinition.version}…`,
+console.log(`\nRegistering "${PROCESS_NAME}"…`);
+const reg = spawnSync(
+  "go",
+  [
+    "run",
+    "./cmd/gentctl",
+    "apply",
+    "--server",
+    "http://localhost:8888",
+    "-f",
+    processYaml,
+  ],
+  { cwd: repoRoot, encoding: "utf8", stdio: "inherit" },
 );
-const { error: defErr } = await client.PUT("/definitions", {
-  body: processDefinition,
-});
-if (defErr) throw new Error(`registration failed: ${JSON.stringify(defErr)}`);
-console.log("  registered");
+if (reg.status !== 0) throw new Error("gentctl apply failed");
 
 const rounds = 1;
 const maxInterval = 100;
@@ -42,7 +54,7 @@ async function startInstance() {
   };
 
   const { data: startData, error: startErr } = await client.POST("/instances", {
-    body: { process: processDefinition.name, input },
+    body: { process: PROCESS_NAME, input },
   });
   if (startErr) throw new Error(`start failed: ${JSON.stringify(startErr)}`);
 

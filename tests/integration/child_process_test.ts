@@ -16,7 +16,7 @@ test("child_process — recursive spawn completes with correct aggregated output
       steps: [
         {
           id: "recursion_condition",
-          switch: { "{{input.ttl > 0}}": "#recursion", default: "$end" },
+          switch: [{ when: "{{input.ttl > 0}}", goto: "#recursion" }, { when: "default", goto: "$end" }],
         },
         {
           id: "recursion",

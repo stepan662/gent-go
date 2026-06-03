@@ -51,6 +51,12 @@ type DefinitionSummary struct {
 	Version int    `json:"version"`
 }
 
+type BatchApplyResult struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Saved   bool   `json:"saved"`
+}
+
 type InstanceStatusResp struct {
 	ID         string         `json:"id"`
 	Process    string         `json:"process"`
@@ -333,6 +339,93 @@ func patchInputSchema(spec map[string]any, inputSchema map[string]any) error {
 	props["input"] = inputSchema
 	reqSchema["required"] = []string{"process", "input"}
 	return nil
+}
+
+// batchGetter resolves definitions from an in-memory batch first, then falls back to the DB.
+// This lets child-process references within the same batch validate correctly.
+type batchGetter struct {
+	batch []*model.ProcessDefinition
+	db    *db.DB
+}
+
+func (g *batchGetter) GetDefinition(name string, version int) (*model.ProcessDefinition, error) {
+	for _, d := range g.batch {
+		if d.Name == name && (version == 0 || d.Version == version) {
+			return d, nil
+		}
+	}
+	return g.db.GetDefinition(name, version)
+}
+
+func (g *batchGetter) LatestVersion(name string) (int, error) {
+	latest := 0
+	for _, d := range g.batch {
+		if d.Name == name && d.Version > latest {
+			latest = d.Version
+		}
+	}
+	if latest > 0 {
+		return latest, nil
+	}
+	return g.db.LatestVersion(name)
+}
+
+func (h *Handlers) putDefinitions(raw json.RawMessage) Reply {
+	var defs []model.ProcessDefinition
+	if err := json.Unmarshal(raw, &defs); err != nil {
+		return errReply(fmt.Errorf("decode: %w", err))
+	}
+	ptrs := make([]*model.ProcessDefinition, len(defs))
+	for i := range defs {
+		ptrs[i] = &defs[i]
+	}
+	getter := &batchGetter{batch: ptrs, db: h.db}
+	for _, def := range ptrs {
+		if err := def.Validate(); err != nil {
+			return errReply(fmt.Errorf("%s v%d: %w", def.Name, def.Version, err))
+		}
+		if _, err := gentschema.Generate(def); err != nil {
+			return errReply(fmt.Errorf("%s v%d: %w", def.Name, def.Version, err))
+		}
+		if err := gentschema.ValidateChildProcessRefs(def, getter); err != nil {
+			return errReply(fmt.Errorf("%s v%d: %w", def.Name, def.Version, err))
+		}
+	}
+	results := make([]BatchApplyResult, len(ptrs))
+	for i, def := range ptrs {
+		if err := h.db.SaveDefinition(def); err != nil {
+			return errReply(fmt.Errorf("save %s v%d: %w", def.Name, def.Version, err))
+		}
+		results[i] = BatchApplyResult{Name: def.Name, Version: def.Version, Saved: true}
+	}
+	return okReply(results)
+}
+
+func (h *Handlers) validateDefinitions(raw json.RawMessage) Reply {
+	var defs []model.ProcessDefinition
+	if err := json.Unmarshal(raw, &defs); err != nil {
+		return errReply(fmt.Errorf("decode: %w", err))
+	}
+	ptrs := make([]*model.ProcessDefinition, len(defs))
+	for i := range defs {
+		ptrs[i] = &defs[i]
+	}
+	getter := &batchGetter{batch: ptrs, db: h.db}
+	schemas := make([]gentschema.SchemaFile, 0, len(ptrs))
+	for _, def := range ptrs {
+		if err := def.Validate(); err != nil {
+			return errReply(fmt.Errorf("%s v%d: %w", def.Name, def.Version, err))
+		}
+		sf, err := gentschema.Generate(def)
+		if err != nil {
+			return errReply(fmt.Errorf("%s v%d: %w", def.Name, def.Version, err))
+		}
+		if err := gentschema.ValidateChildProcessRefs(def, getter); err != nil {
+			return errReply(fmt.Errorf("%s v%d: %w", def.Name, def.Version, err))
+		}
+		schemas = append(schemas, sf)
+	}
+	return okReply(schemas)
 }
 
 func okReply(v interface{}) Reply {

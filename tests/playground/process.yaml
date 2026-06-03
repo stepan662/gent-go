@@ -1,0 +1,37 @@
+name: order-pipeline
+version: 1
+input_schema:
+  type: object
+  properties:
+    ttl:
+      type: integer
+    root:
+      type: boolean
+  required:
+    - ttl
+steps:
+  - id: recursion_condition
+    switch:
+      - when: "{{input.ttl > 0}}"
+        goto: "#recursion"
+      - when: default
+        goto: $end
+  - id: recursion
+    call:
+      type: child_process
+      processes:
+        - name: order-pipeline
+          input:
+            ttl: "{{input.ttl - 1}}"
+        - name: order-pipeline
+          input:
+            ttl: "{{input.ttl - 1}}"
+      child_output_schema:
+        type: object
+        properties:
+          processes:
+            type: number
+        required:
+          - processes
+output:
+  processes: "{{(outputs.recursion[0].output.processes ?? 0) + (outputs.recursion[1].output.processes ?? 0) + 1}}"

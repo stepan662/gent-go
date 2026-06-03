@@ -6,7 +6,8 @@
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 import { startServer, type Handlers } from "./generated/server.ts";
-import { PORT } from "./process.ts";
+
+const PORT = 3001;
 
 const handlers: Handlers = {};
 

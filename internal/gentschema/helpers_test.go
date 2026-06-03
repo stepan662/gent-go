@@ -1,4 +1,4 @@
-package main_test
+package gentschema_test
 
 import (
 	"encoding/json"
@@ -29,14 +29,6 @@ func runGenerateErr(t *testing.T, defJSON string) error {
 	}
 	_, err := gentschema.Generate(&def)
 	return err
-}
-
-func schemaKeys(out gentschema.SchemaFile) []string {
-	keys := make([]string, 0, len(out.Tasks))
-	for k := range out.Tasks {
-		keys = append(keys, k)
-	}
-	return keys
 }
 
 func defKeys(out gentschema.SchemaFile) []string {

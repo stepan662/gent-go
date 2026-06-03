@@ -1,7 +1,6 @@
 package model
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -127,65 +126,50 @@ type SwitchCase struct {
 type SwitchMap []SwitchCase
 
 func (s SwitchMap) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.WriteByte('{')
+	type wireCase struct {
+		When string `json:"when"`
+		Goto string `json:"goto"`
+	}
+	items := make([]wireCase, len(s))
 	for i, c := range s {
-		if i > 0 {
-			buf.WriteByte(',')
-		}
-		key, _ := json.Marshal(c.When)
 		gotoWire := c.Goto
 		if gotoWire != GotoEnd {
 			gotoWire = "#" + gotoWire
 		}
-		val, _ := json.Marshal(gotoWire)
-		buf.Write(key)
-		buf.WriteByte(':')
-		buf.Write(val)
+		items[i] = wireCase{When: c.When, Goto: gotoWire}
 	}
-	buf.WriteByte('}')
-	return buf.Bytes(), nil
+	return json.Marshal(items)
 }
 
 func (s *SwitchMap) UnmarshalJSON(data []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	t, err := dec.Token()
-	if err != nil {
-		return err
+	var items []struct {
+		When string `json:"when"`
+		Goto string `json:"goto"`
 	}
-	if delim, ok := t.(json.Delim); !ok || delim != '{' {
-		return fmt.Errorf("switch: expected object, got %v", t)
+	if err := json.Unmarshal(data, &items); err != nil {
+		return fmt.Errorf("switch: %w", err)
 	}
 	*s = (*s)[:0]
-	for dec.More() {
-		keyTok, err := dec.Token()
-		if err != nil {
-			return err
+	for _, item := range items {
+		if item.Goto == "" {
+			return fmt.Errorf("switch: goto is required")
 		}
-		when, ok := keyTok.(string)
-		if !ok {
-			return fmt.Errorf("switch: key must be a string")
-		}
-		var goto_ string
-		if err := dec.Decode(&goto_); err != nil {
-			return err
-		}
+		goto_ := item.Goto
 		if goto_ != GotoEnd {
 			if !strings.HasPrefix(goto_, "#") {
 				return fmt.Errorf("switch: goto %q must be %q or a step reference like \"#step-id\"", goto_, GotoEnd)
 			}
 			goto_ = goto_[1:]
 		}
-		*s = append(*s, SwitchCase{When: when, Goto: goto_})
+		*s = append(*s, SwitchCase{When: item.When, Goto: goto_})
 	}
-	_, err = dec.Token() // closing '}'
-	return err
+	return nil
 }
 
 // JSONSchemaBytes returns the JSON Schema for SwitchMap so that OpenAPI
 // reflection produces the correct schema for its wire format.
 func (SwitchMap) JSONSchemaBytes() ([]byte, error) {
-	return []byte(`{"type":"object","additionalProperties":{"type":"string"}}`), nil
+	return []byte(`{"type":"array","items":{"type":"object","properties":{"when":{"type":"string"},"goto":{"type":"string"}},"required":["when","goto"],"additionalProperties":false}}`), nil
 }
 
 // Step is a single unit of work in a process definition.

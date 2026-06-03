@@ -478,7 +478,7 @@ func TestSwitchMap_MarshalUnmarshal(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	want := `{"self.paid == true":"#ship","self.paid == false":"#refund"}`
+	want := `[{"when":"self.paid == true","goto":"#ship"},{"when":"self.paid == false","goto":"#refund"}]`
 	if string(data) != want {
 		t.Errorf("marshal: got %s, want %s", data, want)
 	}

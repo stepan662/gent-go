@@ -156,6 +156,42 @@ var registry = func() []actionDef {
 			},
 		},
 		{
+			Name:    "put_definitions_batch",
+			Method:  http.MethodPut,
+			Path:    "/definitions/batch",
+			Summary: "Register or update multiple process definitions in one call",
+			Tags:    []string{"Definitions"},
+			Req: []model.ProcessDefinition{
+				{
+					Name:    "child_process",
+					Version: 1,
+					Steps:   []*model.Step{{ID: "run", Call: &model.Call{Type: model.CallTypeREST, Endpoint: "http://localhost:9001/run"}}},
+				},
+			},
+			Resp: []BatchApplyResult{{Name: "child_process", Version: 1, Saved: true}},
+			handle: func(h *Handlers, env Envelope) Reply {
+				return h.putDefinitions(env.Payload)
+			},
+		},
+		{
+			Name:    "validate_definitions",
+			Method:  http.MethodPost,
+			Path:    "/definitions/validate",
+			Summary: "Validate process definitions and return inferred JSON schemas (no save)",
+			Tags:    []string{"Definitions"},
+			Req: []model.ProcessDefinition{
+				{
+					Name:    "order_pipeline",
+					Version: 1,
+					Steps:   []*model.Step{{ID: "charge", Call: &model.Call{Type: model.CallTypeREST, Endpoint: "http://localhost:9001/charge"}}},
+				},
+			},
+			Resp: []map[string]any{{"process": "order_pipeline", "version": 1}},
+			handle: func(h *Handlers, env Envelope) Reply {
+				return h.validateDefinitions(env.Payload)
+			},
+		},
+		{
 			Name:    "get_instance",
 			Method:  http.MethodGet,
 			Path:    "/instances/{id}",
