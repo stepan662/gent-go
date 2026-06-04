@@ -2,7 +2,7 @@
 
 ## CLI
 - [] commands mirroring the API capabilities
-- [] yaml support
+- [x] yaml support
 
 ## server
 - [] versioning channels
