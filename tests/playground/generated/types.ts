@@ -6,6 +6,12 @@ export interface ProcessInput {
   ttl: number;
 }
 
+export interface FinishInput {}
+
+export type FinishOutput = {
+  id: string;
+}[];
+
 export interface RecursionInput {}
 
 export type RecursionOutput = {

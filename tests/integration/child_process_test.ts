@@ -1,6 +1,112 @@
 import { expect, test } from "vitest";
 import { client, waitForInstance } from "../helpers/client.ts";
 
+test("child_process — step without child_output_schema after a step with one does not fail", async () => {
+  const id = crypto.randomUUID();
+  const leafWithOutput = `leaf_with_output_${id}`;
+  const leafNoOutput = `leaf_no_output_${id}`;
+  const parentName = `parent_${id}`;
+
+  await client.PUT("/definitions", {
+    body: {
+      name: leafWithOutput,
+      version: 1,
+      steps: [{ id: "done", switch: [{ when: "default", goto: "$end" }] }],
+      output: { value: "{{1}}" },
+    },
+  });
+
+  await client.PUT("/definitions", {
+    body: {
+      name: leafNoOutput,
+      version: 1,
+      steps: [{ id: "done", switch: [{ when: "default", goto: "$end" }] }],
+    },
+  });
+
+  await client.PUT("/definitions", {
+    body: {
+      name: parentName,
+      version: 1,
+      steps: [
+        {
+          id: "step_a",
+          call: {
+            type: "child_process" as const,
+            processes: [{ name: leafWithOutput }],
+            child_output_schema: {
+              type: "object",
+              properties: { value: { type: "number" } },
+              required: ["value"],
+            },
+          },
+        },
+        {
+          id: "step_b",
+          call: {
+            type: "child_process" as const,
+            processes: [{ name: leafNoOutput }],
+          },
+        },
+      ],
+    },
+  });
+
+  const { data, error } = await client.POST("/instances", { body: { process: parentName } });
+  expect(error).toBeUndefined();
+
+  const status = await waitForInstance(data!.id, 10_000);
+  expect(status).toBe("completed");
+});
+
+// Regression: when a child process fails output validation, the error message must include
+// the child's process name so the caller can identify which process caused the failure.
+test("child_process — output validation failure error includes process name", async () => {
+  const id = crypto.randomUUID();
+  const childName = `child_no_output_${id}`;
+  const parentName = `parent_strict_${id}`;
+
+  // Child produces no output.
+  await client.PUT("/definitions", {
+    body: {
+      name: childName,
+      version: 1,
+      steps: [{ id: "done", switch: [{ when: "default", goto: "$end" }] }],
+    },
+  });
+
+  // Parent declares a schema the child can never satisfy.
+  await client.PUT("/definitions", {
+    body: {
+      name: parentName,
+      version: 1,
+      steps: [
+        {
+          id: "spawn",
+          call: {
+            type: "child_process" as const,
+            processes: [{ name: childName }],
+            child_output_schema: {
+              type: "object",
+              properties: { required_field: { type: "string" } },
+              required: ["required_field"],
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  const { data, error } = await client.POST("/instances", { body: { process: parentName } });
+  expect(error).toBeUndefined();
+
+  const status = await waitForInstance(data!.id, 10_000);
+  expect(status).toBe("failed");
+
+  const { data: inst } = await client.GET("/instances/{id}", { params: { path: { id: data!.id } } });
+  expect(inst?.error).toContain(childName);
+});
+
 test("child_process — recursive spawn completes with correct aggregated output", async () => {
   const processName = `child_process_${crypto.randomUUID()}`;
 

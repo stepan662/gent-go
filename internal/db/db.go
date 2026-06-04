@@ -359,17 +359,17 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 	}
 
 	// Check for any failure.
-	var failedID, failedErr string
+	var failedID, failedProcess, failedErr string
 	for _, s := range siblingRows {
 		if s.Status == string(model.StatusFailed) {
-			failedID, failedErr = s.ID, s.Error
+			failedID, failedProcess, failedErr = s.ID, s.ProcessName, s.Error
 			break
 		}
 	}
 
 	if failedID != "" {
 		// Cascade failure to all waiting ancestors in one UPDATE.
-		reason := fmt.Sprintf("child process %q failed: %s", failedID, failedErr)
+		reason := fmt.Sprintf("child process %q (%s) failed: %s", failedID, failedProcess, failedErr)
 		ancestors := child.CallStack
 		if len(ancestors) == 0 {
 			return nil
@@ -442,7 +442,7 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 			output := ctxData["output"]
 			if err := validateChildOutput(childOutputSchema, output); err != nil {
 				// Treat schema violation as a child failure — cascade to all waiting ancestors.
-				reason := fmt.Sprintf("child process %q output validation: %v", id, err)
+				reason := fmt.Sprintf("child process %q (%s) output validation: %v", id, row.ProcessName, err)
 				ancestors := child.CallStack
 				if len(ancestors) > 0 {
 					_, uerr := db.bun.NewUpdate().

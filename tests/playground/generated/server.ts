@@ -18,13 +18,30 @@ export interface Handlers {
 
 // Output schemas baked in for runtime validation via AJV.
 const stepSchemas: Record<string, object> = {
-  "recursion": {
+  "finish": {
+    "type": "array",
     "items": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "recursion": {
+    "type": "array",
+    "items": {
+      "type": "object",
       "properties": {
         "id": {
           "type": "string"
         },
         "output": {
+          "type": "object",
           "properties": {
             "processes": {
               "type": "number"
@@ -32,17 +49,14 @@ const stepSchemas: Record<string, object> = {
           },
           "required": [
             "processes"
-          ],
-          "type": "object"
+          ]
         }
       },
       "required": [
         "id",
         "output"
-      ],
-      "type": "object"
-    },
-    "type": "array"
+      ]
+    }
   }
 }
 

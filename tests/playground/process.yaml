@@ -38,7 +38,7 @@ steps:
     call:
       type: child_process
       processes:
-        - name: child            
+        - name: child
 output:
   processes: "{{(outputs.recursion[0].output.processes ?? 0) + (outputs.recursion[1].output.processes ?? 0) + 1}}"
 

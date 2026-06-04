@@ -411,6 +411,8 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 		if schemaBytes, err := json.Marshal(step.Call.ChildOutputSchema); err == nil {
 			inst.ContextData["_spawn_child_output_schema"] = string(schemaBytes)
 		}
+	} else {
+		delete(inst.ContextData, "_spawn_child_output_schema")
 	}
 
 	var order []string

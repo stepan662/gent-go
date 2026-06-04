@@ -8,6 +8,15 @@
     "$ref": "#/$defs/output"
   },
   "tasks": {
+    "finish": {
+      "call_type": "child_process",
+      "input": {
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/finish_output"
+      }
+    },
     "recursion": {
       "call_type": "child_process",
       "input": {
@@ -19,7 +28,22 @@
     }
   },
   "$defs": {
+    "finish_output": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
     "input": {
+      "type": "object",
       "properties": {
         "root": {
           "type": "boolean"
@@ -30,10 +54,10 @@
       },
       "required": [
         "ttl"
-      ],
-      "type": "object"
+      ]
     },
     "output": {
+      "type": "object",
       "properties": {
         "processes": {
           "type": "number"
@@ -41,16 +65,18 @@
       },
       "required": [
         "processes"
-      ],
-      "type": "object"
+      ]
     },
     "recursion_output": {
+      "type": "array",
       "items": {
+        "type": "object",
         "properties": {
           "id": {
             "type": "string"
           },
           "output": {
+            "type": "object",
             "properties": {
               "processes": {
                 "type": "number"
@@ -58,17 +84,14 @@
             },
             "required": [
               "processes"
-            ],
-            "type": "object"
+            ]
           }
         },
         "required": [
           "id",
           "output"
-        ],
-        "type": "object"
-      },
-      "type": "array"
+        ]
+      }
     }
   }
 }
