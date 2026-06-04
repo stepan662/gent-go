@@ -322,12 +322,12 @@ func buildInputs(steps []*model.Step, _ []string, tasks map[string]TaskSchemas, 
 				if c.When == "default" {
 					continue
 				}
-				inferred, err := template.InferType(c.When, switchCtx)
+				inferred, err := template.InferType(c.When, schema.Load(switchCtx))
 				if err != nil {
 					return nil, fmt.Errorf("step %q switch when %q: %w", s.ID, c.When, err)
 				}
-				if !isType(inferred, "boolean") {
-					return nil, fmt.Errorf("step %q switch when %q: expression must evaluate to boolean, got %q", s.ID, c.When, schemaTypeName(inferred))
+				if !isType(inferred.Raw(), "boolean") {
+					return nil, fmt.Errorf("step %q switch when %q: expression must evaluate to boolean, got %q", s.ID, c.When, schemaTypeName(inferred.Raw()))
 				}
 			}
 		}
@@ -498,11 +498,11 @@ func inferObjectSchema(exprs map[string]string, ctx map[string]any, errFmt func(
 	props := make(map[string]any, len(exprs))
 	required := make([]string, 0, len(exprs))
 	for name, expr := range exprs {
-		inferred, err := template.InferType(expr, ctx)
+		inferred, err := template.InferType(expr, schema.Load(ctx))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", errFmt(name), err)
 		}
-		props[name] = inferred
+		props[name] = inferred.Raw()
 		required = append(required, name)
 	}
 	return map[string]any{"type": "object", "properties": props, "required": required}, nil

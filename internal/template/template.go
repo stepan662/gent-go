@@ -11,13 +11,14 @@ import (
 	"fmt"
 	"strings"
 
-	"gent/internal/exprtype"
+	"gent/internal/expression"
+	"gent/internal/schema"
 )
 
 // EvalAny evaluates s as a template string against ctx.
 func EvalAny(s string, ctx map[string]any) (any, error) {
 	if expr, ok := singleExpr(s); ok {
-		val, err := exprtype.Eval(expr, ctx)
+		val, err := expression.Eval(expr, ctx)
 		if err != nil {
 			return nil, fmt.Errorf("template %q: %w", s, err)
 		}
@@ -29,12 +30,12 @@ func EvalAny(s string, ctx map[string]any) (any, error) {
 	return evalMixed(s, ctx)
 }
 
-// InferType infers the JSON Schema type of template s against schema.
-func InferType(s string, schema map[string]any) (map[string]any, error) {
+// InferType infers the JSON Schema type of template s against sc.
+func InferType(s string, sc schema.Schema) (schema.Schema, error) {
 	if expr, ok := singleExpr(s); ok {
-		return exprtype.InferType(expr, schema)
+		return expression.InferType(expr, sc)
 	}
-	return map[string]any{"type": "string"}, nil
+	return schema.Load(map[string]any{"type": "string"}), nil
 }
 
 // singleExpr reports whether s is exactly "{{expr}}" with nothing outside.
@@ -68,7 +69,7 @@ func evalMixed(s string, ctx map[string]any) (string, error) {
 		}
 		expr := rest[:end]
 		rest = rest[end+2:]
-		val, err := exprtype.Eval(expr, ctx)
+		val, err := expression.Eval(expr, ctx)
 		if err != nil {
 			return "", fmt.Errorf("template expression %q: %w", expr, err)
 		}
