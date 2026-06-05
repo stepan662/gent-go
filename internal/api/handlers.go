@@ -499,7 +499,7 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 		// Content dedup: if channel already points to identical content, skip saving.
 		if currentV, err := h.db.GetChannel(def.Name, channel); err == nil {
 			if currentDef, err := h.db.GetDefinition(def.Name, currentV); err == nil {
-				if definitionsEqual(def, currentDef) {
+				if definitionsEqual(def, currentDef, def.Name) {
 					batchVersions[def.Name] = currentV
 					results = append(results, BatchApplyResult{Name: def.Name, Version: currentV, Saved: false})
 					continue
@@ -833,19 +833,37 @@ func topoSort(defs []*model.ProcessDefinition) ([]*model.ProcessDefinition, erro
 	return sorted, nil
 }
 
-// definitionsEqual compares two definitions by their canonical JSON, ignoring the version field.
-func definitionsEqual(a, b *model.ProcessDefinition) bool {
+// definitionsEqual compares two definitions by their canonical JSON.
+// selfName is the name of the definition being checked; self-referential child
+// entry versions are zeroed before comparison because they always point to
+// "current latest" and must not prevent dedup on unchanged content.
+func definitionsEqual(a, b *model.ProcessDefinition, selfName string) bool {
 	type canonical struct {
-		Name        string             `json:"name"`
-		Steps       []*model.Step      `json:"steps"`
-		InputSchema any                `json:"input_schema,omitempty"`
-		Output      map[string]string  `json:"output,omitempty"`
+		Name        string            `json:"name"`
+		Steps       []*model.Step     `json:"steps"`
+		InputSchema any               `json:"input_schema,omitempty"`
+		Output      map[string]string `json:"output,omitempty"`
 	}
-	toCanon := func(d *model.ProcessDefinition) canonical {
-		return canonical{Name: d.Name, Steps: d.Steps, InputSchema: d.InputSchema, Output: d.Output}
+	prepare := func(d *model.ProcessDefinition) canonical {
+		// Deep-copy steps via JSON round-trip so we can zero self-ref versions.
+		var steps []*model.Step
+		if data, err := json.Marshal(d.Steps); err == nil {
+			_ = json.Unmarshal(data, &steps)
+		}
+		for _, step := range steps {
+			if step.Call == nil || step.Call.Type != model.CallTypeChildProcess {
+				continue
+			}
+			for i, p := range step.Call.Processes {
+				if p.Name == selfName {
+					step.Call.Processes[i].Version = 0
+				}
+			}
+		}
+		return canonical{Name: d.Name, Steps: steps, InputSchema: d.InputSchema, Output: d.Output}
 	}
-	ba, _ := json.Marshal(toCanon(a))
-	bb, _ := json.Marshal(toCanon(b))
+	ba, _ := json.Marshal(prepare(a))
+	bb, _ := json.Marshal(prepare(b))
 	return bytes.Equal(ba, bb)
 }
 
