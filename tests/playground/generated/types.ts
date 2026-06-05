@@ -2,7 +2,6 @@
 // Re-run `bun run playground:generate` after changing process.yaml.
 
 export interface ProcessInput {
-  root?: boolean;
   ttl: number;
 }
 

@@ -45,9 +45,6 @@
     "input": {
       "type": "object",
       "properties": {
-        "root": {
-          "type": "boolean"
-        },
         "ttl": {
           "type": "integer"
         }

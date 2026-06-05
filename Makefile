@@ -21,6 +21,7 @@ run:
 
 build:
 	$(BUILD_FLAGS) go build -tags "sqlite_omit_load_extension" -ldflags="-s -w" -o gent ./cmd/gent
+	$(BUILD_FLAGS) go build -ldflags="-s -w" -o gentctl ./cmd/gentctl
 
 test: test-unit test-int
 
@@ -40,4 +41,4 @@ test-int: client
 	cd tests && ~/.bun/bin/bun run typecheck && ~/.bun/bin/bun run test
 
 clean:
-	rm -f gent $(db)
+	rm -f gent gentctl $(db)

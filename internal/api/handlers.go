@@ -545,6 +545,10 @@ func (h *Handlers) resolveChildVersions(def *model.ProcessDefinition, channel st
 			if entry.Version != 0 {
 				continue
 			}
+			if entry.Name == def.Name {
+				step.Call.Processes[i].Version = def.Version
+				continue
+			}
 			if v, ok := batchVersions[entry.Name]; ok {
 				step.Call.Processes[i].Version = v
 				continue
@@ -804,6 +808,9 @@ func topoSort(defs []*model.ProcessDefinition) ([]*model.ProcessDefinition, erro
 				continue
 			}
 			for _, entry := range step.Call.Processes {
+				if entry.Name == name {
+					continue // self-reference is valid recursion, not a cycle
+				}
 				if _, inBatch := byName[entry.Name]; inBatch {
 					if err := visit(entry.Name); err != nil {
 						return err

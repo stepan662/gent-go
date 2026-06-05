@@ -6,8 +6,6 @@ input_schema:
   properties:
     ttl:
       type: integer
-    root:
-      type: boolean
   required:
     - ttl
 steps:

@@ -102,6 +102,16 @@ test("apply --auto-update-parents cascades to parent on same channel", () => {
   expect(r.stdout).toContain(parentName);
 });
 
+test("apply — accepts self-referential (recursive) process", () => {
+  const name = uid("recursive");
+  const file = writeDefs([childDef(name, 1, name)]);
+
+  const r = runCli(bin, ["apply", "-f", file]);
+
+  expect(r.ok).toBe(true);
+  expect(r.stdout).toContain(`saved: ${name}@v1`);
+});
+
 test("apply — exits non-zero and prints error for invalid definition", () => {
   const file = writeDefs([{ name: "bad", version: 1, steps: [] }]); // steps must not be empty
 

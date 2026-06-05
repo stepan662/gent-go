@@ -10,15 +10,13 @@ let cachedBin: string | null = null;
 
 export function buildGentctlBinary(): string {
   if (cachedBin) return cachedBin;
-  const bin = join(tmpdir(), `gentctl_test_${process.pid}`);
-  const result = spawnSync("go", ["build", "-o", bin, "./cmd/gentctl"], {
+  const result = spawnSync("make", ["build"], {
     cwd: ROOT,
-    env: { ...process.env, CGO_ENABLED: "1" },
     stdio: ["ignore", "ignore", "inherit"],
   });
   if (result.status !== 0) throw new Error("Failed to build gentctl binary");
-  cachedBin = bin;
-  return bin;
+  cachedBin = join(ROOT, "gentctl");
+  return cachedBin;
 }
 
 export interface CliResult {
@@ -43,10 +41,11 @@ export function runCli(bin: string, args: string[]): CliResult {
 
 /** Write one or more process definitions to a temp YAML file and return the path. */
 export function writeDefs(defs: object[]): string {
-  const path = join(tmpdir(), `gent_cli_test_${Date.now()}_${Math.random().toString(36).slice(2)}.yaml`);
-  const yaml = defs
-    .map((d) => jsonToYaml(d))
-    .join("\n---\n");
+  const path = join(
+    tmpdir(),
+    `gent_cli_test_${Date.now()}_${Math.random().toString(36).slice(2)}.yaml`,
+  );
+  const yaml = defs.map((d) => jsonToYaml(d)).join("\n---\n");
   writeFileSync(path, yaml, "utf8");
   return path;
 }
@@ -58,29 +57,44 @@ function jsonToYaml(value: unknown, indent = 0): string {
   if (typeof value === "boolean") return String(value);
   if (typeof value === "number") return String(value);
   if (typeof value === "string") {
-    if (/[:#{}[\],&*?|<>=!%@`]/.test(value) || value === "" || value === "true" || value === "false" || value === "null") {
+    if (
+      /[:#{}[\],&*?|<>=!%@`]/.test(value) ||
+      value === "" ||
+      value === "true" ||
+      value === "false" ||
+      value === "null"
+    ) {
       return JSON.stringify(value);
     }
     return value;
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return "[]";
-    return value.map((v) => {
-      const rendered = jsonToYaml(v, indent + 1);
-      const lines = rendered.split("\n");
-      // First line uses "- " prefix; continuation lines keep their indentation.
-      return [`${pad}- ${lines[0].trimStart()}`, ...lines.slice(1)].join("\n");
-    }).join("\n");
+    return value
+      .map((v) => {
+        const rendered = jsonToYaml(v, indent + 1);
+        const lines = rendered.split("\n");
+        // First line uses "- " prefix; continuation lines keep their indentation.
+        return [`${pad}- ${lines[0].trimStart()}`, ...lines.slice(1)].join(
+          "\n",
+        );
+      })
+      .join("\n");
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>);
     if (entries.length === 0) return "{}";
     return entries
       .map(([k, v]) => {
-        if (v === null || v === undefined || (typeof v !== "object" && !Array.isArray(v))) {
+        if (
+          v === null ||
+          v === undefined ||
+          (typeof v !== "object" && !Array.isArray(v))
+        ) {
           return `${pad}${k}: ${jsonToYaml(v, indent + 1)}`;
         }
-        if (Array.isArray(v) && (v as unknown[]).length === 0) return `${pad}${k}: []`;
+        if (Array.isArray(v) && (v as unknown[]).length === 0)
+          return `${pad}${k}: []`;
         // Objects and non-empty arrays always use block (next-line) style.
         return `${pad}${k}:\n${jsonToYaml(v, indent + 1)}`;
       })

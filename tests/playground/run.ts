@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { ProcessInput } from "./generated/types.ts";
 import { createClientTyped, waitForInstance } from "../helpers/client.ts";
+import { buildGentctlBinary } from "../helpers/cli.ts";
 
 const PROCESS_NAME = "order-pipeline";
 const repoRoot = join(import.meta.dirname, "../..");
@@ -21,17 +22,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // ─── 1. register the process definition ────────────────────────────────────
 
 console.log(`\nRegistering "${PROCESS_NAME}"…`);
+const bin = buildGentctlBinary();
 const reg = spawnSync(
-  "go",
-  [
-    "run",
-    "./cmd/gentctl",
-    "apply",
-    "--server",
-    "http://localhost:8888",
-    "-f",
-    processYaml,
-  ],
+  bin,
+  ["apply", "--server", "http://localhost:8888", "-f", processYaml],
   { cwd: repoRoot, encoding: "utf8", stdio: "inherit" },
 );
 if (reg.status !== 0) throw new Error("gentctl apply failed");
