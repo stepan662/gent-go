@@ -14,7 +14,7 @@
 //
 // Environment:
 //
-//	GENT_SERVER  base URL of the gent server (default: http://localhost:8080)
+//	GENT_SERVER  base URL of the gent server (default: http://localhost:8448)
 package main
 
 import (
@@ -39,9 +39,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	cfg := loadConfig()
 	server := os.Getenv("GENT_SERVER")
 	if server == "" {
-		server = "http://localhost:8080"
+		server = cfg.Server
+	}
+	if server == "" {
+		server = "http://localhost:8448"
 	}
 
 	cmd := os.Args[1]
@@ -58,6 +62,8 @@ func main() {
 		runPromoteCmd(server, args)
 	case "status":
 		runStatusCmd(server, args)
+	case "config":
+		runConfigCmd(args)
 	default:
 		fmt.Fprintf(os.Stderr, "gentctl: unknown command %q\n", cmd)
 		usage()
@@ -390,6 +396,89 @@ func (m *multiFlag) Set(v string) error {
 	return nil
 }
 
+type gentConfig struct {
+	Server string `yaml:"server,omitempty"`
+}
+
+func configFilePath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "gent", "config.yaml"), nil
+}
+
+func loadConfig() gentConfig {
+	path, err := configFilePath()
+	if err != nil {
+		return gentConfig{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return gentConfig{}
+	}
+	var cfg gentConfig
+	yaml.Unmarshal(data, &cfg)
+	return cfg
+}
+
+func saveConfig(cfg gentConfig) error {
+	path, err := configFilePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
+func runConfigCmd(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: gentctl config get <key>")
+		fmt.Fprintln(os.Stderr, "       gentctl config set <key> <value>")
+		os.Exit(1)
+	}
+	sub, key := args[0], args[1]
+	switch sub {
+	case "get":
+		cfg := loadConfig()
+		switch key {
+		case "server":
+			if cfg.Server == "" {
+				fmt.Println("(not set)")
+			} else {
+				fmt.Println(cfg.Server)
+			}
+		default:
+			fatal("unknown config key %q", key)
+		}
+	case "set":
+		if len(args) < 3 {
+			fatal("usage: gentctl config set <key> <value>")
+		}
+		val := args[2]
+		cfg := loadConfig()
+		switch key {
+		case "server":
+			cfg.Server = val
+		default:
+			fatal("unknown config key %q", key)
+		}
+		if err := saveConfig(cfg); err != nil {
+			fatal("save config: %v", err)
+		}
+		path, _ := configFilePath()
+		fmt.Printf("set server = %s  (%s)\n", val, path)
+	default:
+		fatal("unknown config subcommand %q", sub)
+	}
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage:
   gentctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
@@ -399,10 +488,15 @@ func usage() {
   gentctl channel delete <process> <channel>
   gentctl promote  --from <channel> --to <channel> [--process <name>]
   gentctl status   --channel <channel>
+  gentctl config   get <key>
+  gentctl config   set <key> <value>
 
 Flags:
   -f        definition file (YAML or JSON, multi-doc --- supported)
-  --server  gent server URL (default: $GENT_SERVER or http://localhost:8080)`)
+  --server  gent server URL (overrides $GENT_SERVER and config file)
+
+Config keys:
+  server    gent server base URL`)
 }
 
 func fatal(format string, args ...any) {

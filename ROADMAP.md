@@ -3,6 +3,8 @@
 ## CLI
 - [] commands mirroring the API capabilities
 - [x] yaml support
+- [x] config file with the url to the server
+- [] test with different auth types + add helpers for gentctl
 
 ## server
 - [x] versioning channels
