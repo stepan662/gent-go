@@ -5,8 +5,8 @@
 - [x] yaml support
 
 ## server
-- [] versioning channels
-- [] child process compatibility check and versioning made convenient
+- [x] versioning channels
+- [x] child process compatibility check and versioning made convenient
 - [] external tasks (outgoing request to start, incoming request to complete), human or long running
 - [] non-idempotent tasks - steps which can't be safely repateated
 

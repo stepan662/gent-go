@@ -296,39 +296,63 @@ func (db *DB) GetDependencyVersion(parentName string, parentVersion int, stepID 
 	return row.ChildVersion, nil
 }
 
-func (db *DB) FindStaleParents(channel string, changedVersions map[string]int) ([]VersionedDef, error) {
-	if len(changedVersions) == 0 {
-		return nil, nil
+// FindParentsOf returns all processes on channel that have deps referencing any
+// of the given children. stale = dep version doesn't match the target; current = matches.
+// A parent is stale if ANY of its relevant deps are mismatched.
+func (db *DB) FindParentsOf(channel string, childVersions map[string]int) (stale, current []VersionedDef, err error) {
+	if len(childVersions) == 0 {
+		return nil, nil, nil
 	}
-	conditions := make([]string, 0, len(changedVersions))
+	placeholders := make([]string, 0, len(childVersions))
 	args := []any{channel}
-	for childName, newVersion := range changedVersions {
-		conditions = append(conditions, "(pd.child_name = ? AND pd.child_version != ?)")
-		args = append(args, childName, newVersion)
+	for name := range childVersions {
+		placeholders = append(placeholders, "?")
+		args = append(args, name)
 	}
 	query := fmt.Sprintf(`
-		SELECT DISTINCT pd.parent_name, pc.version AS parent_version
+		SELECT pd.parent_name, pc.version AS parent_version, pd.child_name, pd.child_version AS baked_version
 		FROM process_dependencies pd
 		JOIN process_channels pc ON pc.name = pd.parent_name AND pc.channel = ?
 		WHERE pd.parent_version = pc.version
-		  AND (%s)
-	`, strings.Join(conditions, " OR "))
-	var stale []struct {
+		  AND pd.child_name IN (%s)
+	`, strings.Join(placeholders, ", "))
+	var rows []struct {
 		ParentName    string `bun:"parent_name"`
 		ParentVersion int    `bun:"parent_version"`
+		ChildName     string `bun:"child_name"`
+		BakedVersion  int    `bun:"baked_version"`
 	}
-	if err := db.bun.NewRaw(query, args...).Scan(context.Background(), &stale); err != nil {
-		return nil, err
+	if err := db.bun.NewRaw(query, args...).Scan(context.Background(), &rows); err != nil {
+		return nil, nil, err
 	}
-	out := make([]VersionedDef, 0, len(stale))
-	for _, r := range stale {
-		def, err := db.GetDefinition(r.ParentName, r.ParentVersion)
-		if err != nil {
-			return nil, err
+	type entry struct {
+		version int
+		isStale bool
+	}
+	byName := make(map[string]*entry, len(rows))
+	for _, r := range rows {
+		e := byName[r.ParentName]
+		if e == nil {
+			e = &entry{version: r.ParentVersion}
+			byName[r.ParentName] = e
 		}
-		out = append(out, VersionedDef{Version: r.ParentVersion, Def: def})
+		if r.BakedVersion != childVersions[r.ChildName] {
+			e.isStale = true
+		}
 	}
-	return out, nil
+	for name, e := range byName {
+		def, defErr := db.GetDefinition(name, e.version)
+		if defErr != nil {
+			return nil, nil, defErr
+		}
+		vd := VersionedDef{Version: e.version, Def: def}
+		if e.isStale {
+			stale = append(stale, vd)
+		} else {
+			current = append(current, vd)
+		}
+	}
+	return stale, current, nil
 }
 
 func (db *DB) FindStaleRefs(channel string) ([]StaleRefRow, error) {

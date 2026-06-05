@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=http://localhost:8888/process-schema.json
+name: child
+input_schema:
+  type: object
+  properties:
+    asb:
+      type: boolean
+steps:
+  - id: one
+    switch:
+      - when: default
+        goto: $end

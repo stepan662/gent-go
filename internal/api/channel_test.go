@@ -383,6 +383,53 @@ func TestApplyBatch_CycleDetection(t *testing.T) {
 	}
 }
 
+// TestApplyBatch_AutoUpdateParents_CascadeOnUnchangedChild verifies that cascade
+// fires even when the submitted child deduplicates (no new version created).
+// Before the fix, changedVersions was empty for deduped children → cascade never ran.
+func TestApplyBatch_AutoUpdateParents_CascadeOnUnchangedChild(t *testing.T) {
+	h, cleanup := newTestHandlers(t)
+	defer cleanup()
+
+	child2 := switchDef("child")
+	child2["steps"] = []any{map[string]any{"id": "s2", "switch": []any{
+		map[string]any{"when": "default", "goto": "$end"},
+	}}}
+
+	// child@v1 + parent@v1 on "latest".
+	batchApply(h, "latest", false, switchDef("child"), childProcessDef("parent", "child", 0))
+
+	// Advance child to v2 WITHOUT auto-update → parent is now stale (still refs child@v1).
+	batchApply(h, "latest", false, child2)
+
+	// Apply child@v2 again (deduplicates) WITH auto-update-parents.
+	// child is unchanged but parent is stale → cascade must fire and update parent.
+	r := batchApply(h, "latest", true, child2)
+	if !r.OK {
+		t.Fatalf("apply failed: %s", r.Error)
+	}
+	var results []BatchApplyResult
+	json.Unmarshal(r.Data, &results)
+	names := map[string]BatchApplyResult{}
+	for _, res := range results {
+		names[res.Name] = res
+	}
+
+	childRes, hasChild := names["child"]
+	if !hasChild || childRes.Saved || childRes.Version != 2 {
+		t.Errorf("expected child unchanged@v2 in results, got %+v", names)
+	}
+	parentRes, hasParent := names["parent"]
+	if !hasParent {
+		t.Errorf("expected parent in results (cascade should fire), got %+v", names)
+	}
+	if hasParent && parentRes.Version < 2 {
+		t.Errorf("expected parent to be updated/reused at ≥v2, got v%d", parentRes.Version)
+	}
+	if channelVersion(listChannels(h, t, "parent"), "latest") < 2 {
+		t.Error("expected latest/parent to be updated after cascade on unchanged child")
+	}
+}
+
 func TestApplyBatch_AutoUpdateParents_Basic(t *testing.T) {
 	h, cleanup := newTestHandlers(t)
 	defer cleanup()

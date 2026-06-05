@@ -530,14 +530,9 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 	}
 
 	if autoUpdateParents {
-		// Cascade only for processes that actually got new versions.
-		changedVersions := make(map[string]int)
-		for name, newV := range batchVersions {
-			if oldV, existed := oldChannelVersions[name]; !existed || oldV != newV {
-				changedVersions[name] = newV
-			}
-		}
-		cascadeResults, err := h.cascadeUpdate(channel, changedVersions, batchVersions)
+		// Include all submitted processes so cascade fires even when child deduplicates.
+		// FindStaleParents filters to only actually-stale parents, so this is safe.
+		cascadeResults, err := h.cascadeUpdate(channel, maps.Clone(batchVersions), batchVersions)
 		if err != nil {
 			return nil, err
 		}
@@ -592,11 +587,13 @@ func (h *Handlers) buildResolvedDeps(def *model.ProcessDefinition, selfVersion i
 func (h *Handlers) cascadeUpdate(channel string, changedVersions map[string]int, allUpdated map[string]int) ([]BatchApplyResult, error) {
 	var results []BatchApplyResult
 
+	var lastCurrent []db.VersionedDef
 	for {
-		stale, err := h.db.FindStaleParents(channel, changedVersions)
+		stale, current, err := h.db.FindParentsOf(channel, allUpdated)
 		if err != nil {
-			return nil, fmt.Errorf("cascade: find stale parents: %w", err)
+			return nil, fmt.Errorf("cascade: find parents: %w", err)
 		}
+		lastCurrent = current
 
 		foundUpdate := false
 		for _, vd := range stale {
@@ -622,7 +619,6 @@ func (h *Handlers) cascadeUpdate(channel string, changedVersions map[string]int,
 				if err := h.db.SaveChannel(vd.Def.Name, channel, reuseV); err != nil {
 					return nil, fmt.Errorf("auto-update channel %s: %w", vd.Def.Name, err)
 				}
-				changedVersions[vd.Def.Name] = reuseV
 				allUpdated[vd.Def.Name] = reuseV
 				results = append(results, BatchApplyResult{Name: vd.Def.Name, Version: reuseV, Saved: false})
 				foundUpdate = true
@@ -645,7 +641,6 @@ func (h *Handlers) cascadeUpdate(channel string, changedVersions map[string]int,
 				return nil, fmt.Errorf("auto-update channel %s: %w", vd.Def.Name, err)
 			}
 
-			changedVersions[vd.Def.Name] = newVersion
 			allUpdated[vd.Def.Name] = newVersion
 			results = append(results, BatchApplyResult{Name: vd.Def.Name, Version: newVersion, Saved: true})
 			foundUpdate = true
@@ -653,6 +648,17 @@ func (h *Handlers) cascadeUpdate(channel string, changedVersions map[string]int,
 
 		if !foundUpdate {
 			break
+		}
+	}
+
+	// Report up-to-date parents from the final iteration so they appear in output.
+	reported := make(map[string]bool, len(results))
+	for _, r := range results {
+		reported[r.Name] = true
+	}
+	for _, vd := range lastCurrent {
+		if !reported[vd.Def.Name] {
+			results = append(results, BatchApplyResult{Name: vd.Def.Name, Version: vd.Version, Saved: false})
 		}
 	}
 

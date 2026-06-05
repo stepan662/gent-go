@@ -38,12 +38,3 @@ steps:
         - name: child
 output:
   processes: "{{(outputs.recursion[0].output.processes ?? 0) + (outputs.recursion[1].output.processes ?? 0) + 1}}"
-
----
-# yaml-language-server: $schema=http://localhost:8888/process-schema.json
-name: child
-steps:
-  - id: one
-    switch:
-      - when: default
-        goto: $end
