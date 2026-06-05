@@ -198,6 +198,106 @@ func TestApplyBatch_ContentDedup_SelfRef(t *testing.T) {
 	}
 }
 
+// TestApplyBatch_ContentDedup_ReuseOlderVersion verifies that the hash-based dedup
+// reuses an older version (not just the latest) when content matches.
+// Scenario: child@v1+parent@v1 exist, then child is updated → v2+parent@v2.
+// Applying the original content to a new channel must reuse v1, not create v3.
+func TestApplyBatch_ContentDedup_ReuseOlderVersion(t *testing.T) {
+	h, cleanup := newTestHandlers(t)
+	defer cleanup()
+
+	// Step 1: child@v1 + parent@v1 (deps: child@v1) on "latest".
+	batchApply(h, "latest", false, switchDef("child"), childProcessDef("parent", "child", 0))
+
+	// Step 2: update child → child@v2, cascade → parent@v2 (deps: child@v2).
+	child2 := switchDef("child")
+	child2["steps"] = []any{map[string]any{"id": "s2", "switch": []any{
+		map[string]any{"when": "default", "goto": "$end"},
+	}}}
+	batchApply(h, "latest", true, child2)
+
+	// Step 3: apply original content to "staging" — child hash matches v1, parent
+	// resolves child@v1 in deps so its hash also matches v1. Neither should be saved.
+	r := batchApply(h, "staging", false,
+		switchDef("child"),
+		childProcessDef("parent", "child", 0),
+	)
+	if !r.OK {
+		t.Fatalf("apply to staging failed: %s", r.Error)
+	}
+	var results []BatchApplyResult
+	json.Unmarshal(r.Data, &results)
+	for _, res := range results {
+		if res.Saved {
+			t.Errorf("expected dedup for %s@v%d (older version reuse), got Saved=true", res.Name, res.Version)
+		}
+	}
+	if v := channelVersion(listChannels(h, t, "child"), "staging"); v != 1 {
+		t.Errorf("expected staging/child=v1, got v%d", v)
+	}
+	if v := channelVersion(listChannels(h, t, "parent"), "staging"); v != 1 {
+		t.Errorf("expected staging/parent=v1 (older version reuse), got v%d", v)
+	}
+}
+
+// TestApplyBatch_ContentDedup_ChildVersionPerChannel verifies that the same parent
+// YAML resolves to different versions on different channels (because the child is at
+// different versions), and that the hash correctly reuses the right existing version.
+func TestApplyBatch_ContentDedup_ChildVersionPerChannel(t *testing.T) {
+	h, cleanup := newTestHandlers(t)
+	defer cleanup()
+
+	child2 := switchDef("child")
+	child2["steps"] = []any{map[string]any{"id": "s2", "switch": []any{
+		map[string]any{"when": "default", "goto": "$end"},
+	}}}
+
+	// ch-a: child@v1, parent@v1 (deps: child@v1).
+	batchApply(h, "ch-a", false, switchDef("child"), childProcessDef("parent", "child", 0))
+
+	// ch-b: child@v2 only (same parent YAML will be applied next).
+	batchApply(h, "ch-b", false, child2)
+
+	// Apply same parent YAML to ch-b — child resolves to v2 on ch-b,
+	// so deps differ from parent@v1 and a new parent@v2 must be saved.
+	r := batchApply(h, "ch-b", false, childProcessDef("parent", "child", 0))
+	if !r.OK {
+		t.Fatalf("apply parent to ch-b failed: %s", r.Error)
+	}
+	var res []BatchApplyResult
+	json.Unmarshal(r.Data, &res)
+	for _, item := range res {
+		if item.Name == "parent" && !item.Saved {
+			t.Errorf("expected parent to be saved on ch-b (different child version → different hash)")
+		}
+		if item.Name == "parent" && item.Version != 2 {
+			t.Errorf("expected parent@v2 on ch-b, got v%d", item.Version)
+		}
+	}
+
+	// ch-c: apply child@v1 content → reuses v1.
+	// Then apply same parent YAML → child resolves to v1 on ch-c,
+	// deps match parent@v1 → must reuse v1, not create v3.
+	batchApply(h, "ch-c", false, switchDef("child"))
+	r2 := batchApply(h, "ch-c", false, childProcessDef("parent", "child", 0))
+	if !r2.OK {
+		t.Fatalf("apply parent to ch-c failed: %s", r2.Error)
+	}
+	var res2 []BatchApplyResult
+	json.Unmarshal(r2.Data, &res2)
+	for _, item := range res2 {
+		if item.Name == "parent" && item.Saved {
+			t.Errorf("expected parent to be deduplicated on ch-c (same content+deps as v1), got Saved=true @v%d", item.Version)
+		}
+		if item.Name == "parent" && item.Version != 1 {
+			t.Errorf("expected parent to reuse v1 on ch-c (child@v1 in deps), got v%d", item.Version)
+		}
+	}
+	if v := channelVersion(listChannels(h, t, "parent"), "ch-c"); v != 1 {
+		t.Errorf("expected ch-c/parent=v1, got v%d", v)
+	}
+}
+
 func TestApplyBatch_NewVersionOnChange(t *testing.T) {
 	h, cleanup := newTestHandlers(t)
 	defer cleanup()
@@ -317,6 +417,40 @@ func TestApplyBatch_AutoUpdateParents_Basic(t *testing.T) {
 	entries := listChannels(h, t, "parent")
 	if channelVersion(entries, "stable") < 2 {
 		t.Errorf("expected stable/parent ≥ v2, got %+v", entries)
+	}
+}
+
+func TestApplyBatch_AutoUpdateParents_CascadeDedup(t *testing.T) {
+	h, cleanup := newTestHandlers(t)
+	defer cleanup()
+
+	// Establish child@v1 + parent@v1 on "latest".
+	batchApply(h, "latest", false, switchDef("child"), childProcessDef("parent", "child", 0))
+
+	// Update child on "latest" with auto-update — creates child@v2, parent@v2.
+	child2 := switchDef("child")
+	child2["steps"] = []any{map[string]any{"id": "s2", "switch": []any{
+		map[string]any{"when": "default", "goto": "$end"},
+	}}}
+	batchApply(h, "latest", true, child2)
+	// Now: child@v2, parent@v2 on "latest".
+
+	// Apply the same updated child to a new channel with auto-update-parents.
+	// child dedupes to v2; cascade for parent should reuse v2 — not create v3.
+	r := batchApply(h, "staging", true, child2, childProcessDef("parent", "child", 0))
+	if !r.OK {
+		t.Fatalf("apply to staging failed: %s", r.Error)
+	}
+	var results []BatchApplyResult
+	json.Unmarshal(r.Data, &results)
+	for _, res := range results {
+		if res.Saved {
+			t.Errorf("expected no new versions on staging (all content already exists), got Saved=true for %s@v%d", res.Name, res.Version)
+		}
+	}
+	// staging/parent must point to the already-existing v2.
+	if channelVersion(listChannels(h, t, "parent"), "staging") != 2 {
+		t.Errorf("expected staging/parent to reuse v2")
 	}
 }
 

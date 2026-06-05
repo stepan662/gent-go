@@ -2,14 +2,17 @@ package api
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"sort"
+	"time"
 
 	"gent/internal/db"
 	"gent/internal/gentschema"
 	"gent/internal/model"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -164,7 +167,7 @@ func (h *Handlers) putDefinition(raw json.RawMessage) Reply {
 	if err := gentschema.ValidateChildProcessRefs(&req.ProcessDefinition, version, h.db); err != nil {
 		return errReply(err)
 	}
-	if err := h.db.SaveDefinition(&req.ProcessDefinition, version, nil); err != nil {
+	if err := h.db.SaveDefinition(&req.ProcessDefinition, version, nil, ""); err != nil {
 		return errReply(fmt.Errorf("save: %w", err))
 	}
 	return okReply(map[string]interface{}{"saved": true, "name": req.Name, "version": version})
@@ -486,34 +489,21 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 			return nil, fmt.Errorf("%s: %w", def.Name, err)
 		}
 
-		// Content dedup: compare raw JSON + resolved deps.
-		// When already on channel, compare against that version; otherwise compare
-		// against the globally highest version (latestV) so that applying the same
-		// content to a new channel reuses the existing version rather than creating one.
-		currentV, onChannel := 0, false
-		if v, chErr := h.db.GetChannel(def.Name, channel); chErr == nil {
-			currentV, onChannel = v, true
-		}
-		if onChannel {
+		// Track old channel pointer for cascade detection.
+		if currentV, chErr := h.db.GetChannel(def.Name, channel); chErr == nil {
 			oldChannelVersions[def.Name] = currentV
 		}
-		dedupV := currentV
-		if !onChannel {
-			dedupV = latestV
-		}
-		if dedupV > 0 {
-			rawNew, _ := json.Marshal(def)
-			if rawOld, err := h.db.GetDefinitionRaw(def.Name, dedupV); err == nil && bytes.Equal(rawNew, rawOld) {
-				oldDeps, _ := h.db.GetDependencies(def.Name, dedupV)
-				if depsEqual(newDeps, oldDeps) {
-					if err := h.db.SaveChannel(def.Name, channel, dedupV); err != nil {
-						return nil, fmt.Errorf("channel %s: %w", def.Name, err)
-					}
-					batchVersions[def.Name] = dedupV
-					results = append(results, BatchApplyResult{Name: def.Name, Version: dedupV, Saved: false})
-					continue
-				}
+
+		// Content dedup: compute hash and look up any existing version with identical content.
+		rawNew, _ := json.Marshal(def)
+		hash := contentHash(rawNew, newDeps)
+		if v, err := h.db.FindVersionByHash(def.Name, hash); err == nil {
+			if err := h.db.SaveChannel(def.Name, channel, v); err != nil {
+				return nil, fmt.Errorf("channel %s: %w", def.Name, err)
 			}
+			batchVersions[def.Name] = v
+			results = append(results, BatchApplyResult{Name: def.Name, Version: v, Saved: false})
+			continue
 		}
 
 		// Build a validation copy with baked-in versions for gentschema.
@@ -529,7 +519,7 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 			return nil, fmt.Errorf("%s: %w", def.Name, err)
 		}
 
-		if err := h.db.SaveDefinition(def, newVersion, newDeps); err != nil {
+		if err := h.db.SaveDefinition(def, newVersion, newDeps, hash); err != nil {
 			return nil, fmt.Errorf("save %s: %w", def.Name, err)
 		}
 		if err := h.db.SaveChannel(def.Name, channel, newVersion); err != nil {
@@ -625,6 +615,20 @@ func (h *Handlers) cascadeUpdate(channel string, changedVersions map[string]int,
 				return nil, fmt.Errorf("auto-update %s: %w", vd.Def.Name, err)
 			}
 
+			// Content dedup via hash: reuse any existing version with identical snapshot.
+			rawNew, _ := json.Marshal(vd.Def)
+			hash := contentHash(rawNew, newDeps)
+			if reuseV, err := h.db.FindVersionByHash(vd.Def.Name, hash); err == nil {
+				if err := h.db.SaveChannel(vd.Def.Name, channel, reuseV); err != nil {
+					return nil, fmt.Errorf("auto-update channel %s: %w", vd.Def.Name, err)
+				}
+				changedVersions[vd.Def.Name] = reuseV
+				allUpdated[vd.Def.Name] = reuseV
+				results = append(results, BatchApplyResult{Name: vd.Def.Name, Version: reuseV, Saved: false})
+				foundUpdate = true
+				continue
+			}
+
 			defForValidation := applyDepsToDefCopy(vd.Def, newDeps)
 			getter := &batchGetter{db: h.db}
 			if _, err := gentschema.Generate(defForValidation, newVersion); err != nil {
@@ -634,7 +638,7 @@ func (h *Handlers) cascadeUpdate(channel string, changedVersions map[string]int,
 				return nil, fmt.Errorf("auto-update %s: child input incompatible after upgrade: %w", vd.Def.Name, err)
 			}
 
-			if err := h.db.SaveDefinition(vd.Def, newVersion, newDeps); err != nil {
+			if err := h.db.SaveDefinition(vd.Def, newVersion, newDeps, hash); err != nil {
 				return nil, fmt.Errorf("auto-update save %s: %w", vd.Def.Name, err)
 			}
 			if err := h.db.SaveChannel(vd.Def.Name, channel, newVersion); err != nil {
@@ -872,25 +876,22 @@ func applyDepsToDefCopy(def *model.ProcessDefinition, deps []db.DependencyRow) *
 	return &copy
 }
 
-// depsEqual returns true if a and b contain the same (stepID, childIdx, childName, childVersion) entries.
-func depsEqual(a, b []db.DependencyRow) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	type depVal struct {
-		childName    string
-		childVersion int
-	}
-	am := make(map[stepChildKey]depVal, len(a))
-	for _, d := range a {
-		am[stepChildKey{d.StepID, d.ChildIdx}] = depVal{d.ChildName, d.ChildVersion}
-	}
-	for _, d := range b {
-		if av, ok := am[stepChildKey{d.StepID, d.ChildIdx}]; !ok || av != (depVal{d.ChildName, d.ChildVersion}) {
-			return false
+// contentHash returns a SHA256 hex digest over rawJSON and the sorted deps,
+// uniquely identifying a (definition, resolved-children) snapshot.
+func contentHash(rawJSON []byte, deps []db.DependencyRow) string {
+	h := sha256.New()
+	h.Write(rawJSON)
+	sorted := append([]db.DependencyRow(nil), deps...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].StepID != sorted[j].StepID {
+			return sorted[i].StepID < sorted[j].StepID
 		}
+		return sorted[i].ChildIdx < sorted[j].ChildIdx
+	})
+	for _, d := range sorted {
+		fmt.Fprintf(h, "\x00%s\x00%d\x00%s\x00%d", d.StepID, d.ChildIdx, d.ChildName, d.ChildVersion)
 	}
-	return true
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // subtree collects the definition for rootName and all its dependencies (recursively)

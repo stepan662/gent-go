@@ -99,6 +99,7 @@ type definitionRow struct {
 	Name          string    `bun:"name,pk"`
 	Version       int       `bun:"version,pk"`
 	Definition    string    `bun:"definition,notnull"`
+	ContentHash   string    `bun:"content_hash,notnull"`
 	CreatedAt     time.Time `bun:"created_at,notnull"`
 }
 
@@ -148,16 +149,17 @@ type VersionedDef struct {
 	Def     *model.ProcessDefinition
 }
 
-func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []DependencyRow) error {
+func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []DependencyRow, hash string) error {
 	data, err := json.Marshal(def)
 	if err != nil {
 		return err
 	}
 	row := &definitionRow{
-		Name:       def.Name,
-		Version:    version,
-		Definition: string(data),
-		CreatedAt:  time.Now().UTC(),
+		Name:        def.Name,
+		Version:     version,
+		Definition:  string(data),
+		ContentHash: hash,
+		CreatedAt:   time.Now().UTC(),
 	}
 	return db.bun.RunInTx(context.Background(), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().
@@ -246,6 +248,24 @@ func (db *DB) GetDefinitionRaw(name string, version int) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(row.Definition), nil
+}
+
+// FindVersionByHash returns the highest version of name whose content_hash matches hash,
+// or an error if none exists. Old rows saved before migration have hash="" and never match.
+func (db *DB) FindVersionByHash(name, hash string) (int, error) {
+	var v sql.NullInt64
+	err := db.bun.NewSelect().
+		TableExpr("process_definitions").
+		ColumnExpr("MAX(version)").
+		Where("name = ? AND content_hash = ?", name, hash).
+		Scan(context.Background(), &v)
+	if err != nil {
+		return 0, err
+	}
+	if !v.Valid {
+		return 0, fmt.Errorf("no version found for %q with given hash", name)
+	}
+	return int(v.Int64), nil
 }
 
 func (db *DB) GetDependencies(name string, version int) ([]DependencyRow, error) {
