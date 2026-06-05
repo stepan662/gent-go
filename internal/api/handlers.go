@@ -471,6 +471,11 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 	var results []BatchApplyResult
 
 	for _, def := range sorted {
+		// Normalize schemas to canonical form before any comparison or storage.
+		if err := def.Normalize(); err != nil {
+			return nil, fmt.Errorf("%s: normalize: %w", def.Name, err)
+		}
+
 		// Server assigns the next version; user-supplied value is ignored.
 		latestV, _ := h.db.LatestVersion(def.Name)
 		newVersion := latestV + 1
@@ -541,7 +546,8 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 }
 
 // buildResolvedDeps returns dependency rows for all child_process entries in def,
-// resolving version=0 refs via selfVersion (self-refs), batchVersions, or the channel.
+// resolving version=0 refs via batchVersions or the channel.
+// Self-references are excluded — the engine always runs them at the caller's own version.
 // It does not mutate def — the raw definition is stored as-is.
 func (h *Handlers) buildResolvedDeps(def *model.ProcessDefinition, selfVersion int, channel string, batchVersions map[string]int) ([]db.DependencyRow, error) {
 	var deps []db.DependencyRow
@@ -550,11 +556,12 @@ func (h *Handlers) buildResolvedDeps(def *model.ProcessDefinition, selfVersion i
 			continue
 		}
 		for i, entry := range step.Call.Processes {
+			if entry.Name == def.Name {
+				continue // self-refs excluded; engine handles them via inst.ProcessVersion
+			}
 			version := entry.Version
 			if version == 0 {
-				if entry.Name == def.Name {
-					version = selfVersion
-				} else if v, ok := batchVersions[entry.Name]; ok {
+				if v, ok := batchVersions[entry.Name]; ok {
 					version = v
 				} else {
 					v, err := h.db.GetChannel(entry.Name, channel)
@@ -829,6 +836,8 @@ type stepChildKey struct {
 }
 
 // applyDepsToDefCopy returns a deep copy of def with resolved child versions baked in.
+// Self-refs (entry.Name == def.Name) keep version=0 since gentschema handles them
+// separately and the engine resolves them via inst.ProcessVersion.
 // Used to produce a validation copy for gentschema — the raw def stored in DB is unchanged.
 func applyDepsToDefCopy(def *model.ProcessDefinition, deps []db.DependencyRow) *model.ProcessDefinition {
 	data, _ := json.Marshal(def)
