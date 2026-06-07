@@ -198,6 +198,55 @@ func TestApplyBatch_ContentDedup_SelfRef(t *testing.T) {
 	}
 }
 
+// TestApplyBatch_VersionedSelfRefCreatesDep verifies that a child_process entry that
+// names the same process but with an explicit version is stored as a dependency row,
+// not silently dropped as a self-reference.
+func TestApplyBatch_VersionedSelfRefCreatesDep(t *testing.T) {
+	h, cleanup := newTestHandlers(t)
+	defer cleanup()
+
+	// v1: plain recursive process (no versioned self-ref).
+	v1 := map[string]any{
+		"name": "recursive",
+		"steps": []any{
+			map[string]any{"id": "recurse", "call": map[string]any{
+				"type":      "child_process",
+				"processes": []any{map[string]any{"name": "recursive"}},
+			}},
+		},
+	}
+	batchApply(h, "latest", false, v1)
+
+	// v2: references recursive@v1 explicitly — this is a real versioned dep, not a self-ref.
+	v2 := map[string]any{
+		"name": "recursive",
+		"steps": []any{
+			map[string]any{"id": "recurse", "call": map[string]any{
+				"type": "child_process",
+				"processes": []any{
+					map[string]any{"name": "recursive", "version": 1},
+					map[string]any{"name": "recursive"},
+				},
+			}},
+		},
+	}
+	r := batchApply(h, "latest", false, v2)
+	if !r.OK {
+		t.Fatalf("apply v2 failed: %s", r.Error)
+	}
+
+	deps, err := h.db.GetDependencies("recursive", 2)
+	if err != nil {
+		t.Fatalf("GetDependencies: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep row for recursive@v2, got %d: %+v", len(deps), deps)
+	}
+	if deps[0].ChildName != "recursive" || deps[0].ChildVersion != 1 {
+		t.Errorf("expected dep on recursive@v1, got %+v", deps[0])
+	}
+}
+
 // TestApplyBatch_ContentDedup_ReuseOlderVersion verifies that the hash-based dedup
 // reuses an older version (not just the latest) when content matches.
 // Scenario: child@v1+parent@v1 exist, then child is updated → v2+parent@v2.

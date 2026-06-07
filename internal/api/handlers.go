@@ -553,7 +553,7 @@ func (h *Handlers) buildResolvedDeps(def *model.ProcessDefinition, selfVersion i
 			continue
 		}
 		for i, entry := range step.Call.Processes {
-			if entry.Name == def.Name {
+			if entry.Name == def.Name && (entry.Version == 0 || entry.Version == selfVersion) {
 				continue // self-refs excluded; engine handles them via inst.ProcessVersion
 			}
 			version := entry.Version
