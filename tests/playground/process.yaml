@@ -17,7 +17,7 @@ steps:
 
   - id: finale
     params:
-      previous_result: "{{outputs.start.ok}}"
+      error: "{{error != null ? error.code : 'hi'}}"
     call:
       type: rest
       endpoint: http://localhost:3001/finale

@@ -35,7 +35,40 @@ func InferType(s string, sc schema.Schema) (schema.Schema, error) {
 	if expr, ok := singleExpr(s); ok {
 		return expression.InferType(expr, sc)
 	}
+	if strings.Contains(s, "{{") {
+		if err := checkMixedNullability(s, sc); err != nil {
+			return schema.Schema{}, err
+		}
+	}
 	return schema.FromNode(&schema.SchemaNode{Type: schema.SchemaType{"string"}}), nil
+}
+
+// checkMixedNullability rejects mixed templates where any expression may be null.
+// Null values would silently become the string "null" at runtime, which is almost
+// never intentional. The user must add a ?? default to make the intent explicit.
+func checkMixedNullability(s string, sc schema.Schema) error {
+	rest := s
+	for {
+		start := strings.Index(rest, "{{")
+		if start == -1 {
+			break
+		}
+		rest = rest[start+2:]
+		end := strings.Index(rest, "}}")
+		if end == -1 {
+			break
+		}
+		expr := rest[:end]
+		rest = rest[end+2:]
+		inferred, err := expression.InferType(expr, sc)
+		if err != nil {
+			return fmt.Errorf("template expression %q: %w", expr, err)
+		}
+		if schema.HasNullType(inferred.Node()) {
+			return fmt.Errorf("template expression %q may be null; use ?? to provide a default value", expr)
+		}
+	}
+	return nil
 }
 
 // singleExpr reports whether s is exactly "{{expr}}" with nothing outside.
