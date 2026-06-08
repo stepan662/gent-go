@@ -1,4 +1,4 @@
-package gentschema_test
+package validationtest
 
 import (
 	"encoding/json"
@@ -6,27 +6,23 @@ import (
 	"strings"
 	"testing"
 
-	"gent/internal/gentschema"
 	"gent/internal/model"
 	"gent/internal/schema"
+	"gent/internal/validation"
 )
 
-// stubGetter implements DefinitionGetter using a name-keyed map.
-// All stubs are treated as v1; version mismatches are not checked.
 type stubGetter map[string]*model.ProcessDefinition
 
 func (s stubGetter) GetDefinition(name string, version int) (*model.ProcessDefinition, error) {
-	def, ok := s[name]
+	d, ok := s[name]
 	if !ok {
-		return nil, fmt.Errorf("definition %q v%d not found", name, version)
+		return nil, fmt.Errorf("%s not found", name)
 	}
-	return def, nil
+	return d, nil
 }
-
 func (s stubGetter) LatestVersion(name string) (int, error) {
-	_, ok := s[name]
-	if !ok {
-		return 0, fmt.Errorf("no definitions found for %q", name)
+	if _, ok := s[name]; !ok {
+		return 0, fmt.Errorf("%s not found", name)
 	}
 	return 1, nil
 }
@@ -99,16 +95,16 @@ const parentInputSchema = `{
 	"required": ["amount", "name"]
 }`
 
-func assertValidateOK(t *testing.T, def *model.ProcessDefinition, getter gentschema.DefinitionGetter) {
+func assertValidateOK(t *testing.T, def *model.ProcessDefinition, getter validation.DefinitionGetter) {
 	t.Helper()
-	if err := gentschema.ValidateChildProcessRefs(def, 1, getter); err != nil {
+	if err := validation.ValidateChildProcessRefs(def, 1, getter); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
 
-func assertValidateErr(t *testing.T, def *model.ProcessDefinition, getter gentschema.DefinitionGetter, wantSubstr string) {
+func assertValidateErr(t *testing.T, def *model.ProcessDefinition, getter validation.DefinitionGetter, wantSubstr string) {
 	t.Helper()
-	err := gentschema.ValidateChildProcessRefs(def, 1, getter)
+	err := validation.ValidateChildProcessRefs(def, 1, getter)
 	if err == nil {
 		t.Errorf("expected error containing %q, got nil", wantSubstr)
 		return
@@ -253,7 +249,7 @@ func TestValidateChildProcessRefs_badExpression(t *testing.T) {
 	def := parentDef(t, "", []model.ChildProcessEntry{
 		{Name: "worker", Version: 1, Input: map[string]string{"x": "{{input.amount}}"}},
 	})
-	if err := gentschema.ValidateChildProcessRefs(def, 1, getter); err == nil {
+	if err := validation.ValidateChildProcessRefs(def, 1, getter); err == nil {
 		t.Error("expected error for unresolvable expression, got nil")
 	}
 }

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"gent/internal/db"
-	"gent/internal/gentschema"
+	"gent/internal/validation"
 	"gent/internal/model"
 
 	"github.com/google/uuid"
@@ -161,10 +161,10 @@ func (h *Handlers) putDefinition(raw json.RawMessage) Reply {
 	}
 	latestV, _ := h.db.LatestVersion(req.Name)
 	version := latestV + 1
-	if _, err := gentschema.Generate(&req.ProcessDefinition, version); err != nil {
+	if _, err := validation.Generate(&req.ProcessDefinition, version); err != nil {
 		return errReply(err)
 	}
-	if err := gentschema.ValidateChildProcessRefs(&req.ProcessDefinition, version, h.db); err != nil {
+	if err := validation.ValidateChildProcessRefs(&req.ProcessDefinition, version, h.db); err != nil {
 		return errReply(err)
 	}
 	if err := h.db.SaveDefinition(&req.ProcessDefinition, version, nil, ""); err != nil {
@@ -506,16 +506,16 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 			continue
 		}
 
-		// Build a validation copy with baked-in versions for gentschema.
+		// Build a validation copy with baked-in versions for validation.
 		defForValidation := applyDepsToDefCopy(def, newDeps)
 		getter := &batchGetter{batch: sorted, versions: batchVersions, db: h.db}
 		if err := def.Validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", def.Name, err)
 		}
-		if _, err := gentschema.Generate(defForValidation, newVersion); err != nil {
+		if _, err := validation.Generate(defForValidation, newVersion); err != nil {
 			return nil, fmt.Errorf("%s: %w", def.Name, err)
 		}
-		if err := gentschema.ValidateChildProcessRefs(defForValidation, newVersion, getter); err != nil {
+		if err := validation.ValidateChildProcessRefs(defForValidation, newVersion, getter); err != nil {
 			return nil, fmt.Errorf("%s: %w", def.Name, err)
 		}
 
@@ -627,10 +627,10 @@ func (h *Handlers) cascadeUpdate(channel string, changedVersions map[string]int,
 
 			defForValidation := applyDepsToDefCopy(vd.Def, newDeps)
 			getter := &batchGetter{db: h.db}
-			if _, err := gentschema.Generate(defForValidation, newVersion); err != nil {
+			if _, err := validation.Generate(defForValidation, newVersion); err != nil {
 				return nil, fmt.Errorf("auto-update %s: schema incompatible after child upgrade: %w", vd.Def.Name, err)
 			}
-			if err := gentschema.ValidateChildProcessRefs(defForValidation, newVersion, getter); err != nil {
+			if err := validation.ValidateChildProcessRefs(defForValidation, newVersion, getter); err != nil {
 				return nil, fmt.Errorf("auto-update %s: child input incompatible after upgrade: %w", vd.Def.Name, err)
 			}
 
@@ -954,16 +954,16 @@ func (h *Handlers) validateDefinitions(raw json.RawMessage) Reply {
 		ptrs[i] = &defs[i]
 	}
 	getter := &batchGetter{batch: ptrs, versions: map[string]int{}, db: h.db}
-	schemas := make([]gentschema.SchemaFile, 0, len(ptrs))
+	schemas := make([]validation.SchemaFile, 0, len(ptrs))
 	for _, def := range ptrs {
 		if err := def.Validate(); err != nil {
 			return errReply(fmt.Errorf("%s: %w", def.Name, err))
 		}
-		sf, err := gentschema.Generate(def, 0)
+		sf, err := validation.Generate(def, 0)
 		if err != nil {
 			return errReply(fmt.Errorf("%s: %w", def.Name, err))
 		}
-		if err := gentschema.ValidateChildProcessRefs(def, 0, getter); err != nil {
+		if err := validation.ValidateChildProcessRefs(def, 0, getter); err != nil {
 			return errReply(fmt.Errorf("%s: %w", def.Name, err))
 		}
 		schemas = append(schemas, sf)

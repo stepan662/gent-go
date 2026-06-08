@@ -1,27 +1,26 @@
-package gentschema_test
+package validationtest
 
 import (
 	"encoding/json"
 	"testing"
 
-	"gent/internal/gentschema"
 	"gent/internal/model"
+	"gent/internal/validation"
 )
 
-func runGenerate(t *testing.T, defJSON string) gentschema.SchemaFile {
+func runGenerate(t *testing.T, defJSON string) validation.SchemaFile {
 	t.Helper()
 	var def model.ProcessDefinition
 	if err := json.Unmarshal([]byte(defJSON), &def); err != nil {
 		t.Fatalf("unmarshal definition: %v", err)
 	}
-	// Extract version from raw JSON; model no longer carries it.
 	var raw map[string]any
 	json.Unmarshal([]byte(defJSON), &raw)
 	version := 0
 	if v, ok := raw["version"].(float64); ok {
 		version = int(v)
 	}
-	out, err := gentschema.Generate(&def, version)
+	out, err := validation.Generate(&def, version)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -40,11 +39,11 @@ func runGenerateErr(t *testing.T, defJSON string) error {
 	if v, ok := raw["version"].(float64); ok {
 		version = int(v)
 	}
-	_, err := gentschema.Generate(&def, version)
+	_, err := validation.Generate(&def, version)
 	return err
 }
 
-func defKeys(out gentschema.SchemaFile) []string {
+func defKeys(out validation.SchemaFile) []string {
 	keys := make([]string, 0, len(out.Defs))
 	for k := range out.Defs {
 		keys = append(keys, k)
@@ -54,7 +53,6 @@ func defKeys(out gentschema.SchemaFile) []string {
 
 func assertJSON(t *testing.T, got any, wantJSON string) {
 	t.Helper()
-	// Round-trip through map[string]any so both sides use alphabetical key order.
 	raw, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("marshal got: %v", err)

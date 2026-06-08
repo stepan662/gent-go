@@ -1,5 +1,5 @@
-// Package gentschema infers and type-checks JSON Schemas for process definitions.
-package gentschema
+// Package validation infers and type-checks JSON Schemas for process definitions.
+package validation
 
 import (
 	"encoding/json"
@@ -684,11 +684,11 @@ func contextSchema(preceding []string, optional []string, tasks map[string]TaskS
 			},
 			Required: []string{"step", "message", "code"},
 		}
-		if errOptional {
-			props["error"] = schema.WithNull(errSchema)
-		} else {
+		if errRequired {
 			props["error"] = errSchema
 			required = append(required, "error")
+		} else {
+			props["error"] = schema.WithNull(errSchema)
 		}
 	}
 	return &schema.SchemaNode{

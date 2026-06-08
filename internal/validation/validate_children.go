@@ -1,4 +1,4 @@
-package gentschema
+package validation
 
 import (
 	"fmt"
