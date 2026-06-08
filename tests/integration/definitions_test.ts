@@ -10,7 +10,6 @@ const validDef = {
       id: "step1",
       call: { type: "rest" as const, endpoint: "http://localhost:19990/action" },
       timeout_ms: 1000,
-      retries: 0,
     },
   ],
 };

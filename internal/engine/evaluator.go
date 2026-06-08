@@ -11,11 +11,15 @@ func evalEnv(contextData map[string]any, self any) map[string]any {
 	if outputs == nil {
 		outputs = map[string]any{}
 	}
-	return map[string]any{
+	env := map[string]any{
 		"input":   contextData["input"],
 		"outputs": outputs,
 		"self":    self,
 	}
+	if errCtx, ok := contextData["$error"]; ok {
+		env["error"] = errCtx
+	}
+	return env
 }
 
 func evalAny(expression string, contextData map[string]any) (any, error) {

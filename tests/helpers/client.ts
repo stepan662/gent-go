@@ -29,8 +29,10 @@ export async function waitForInstance(
 }
 
 interface MockServiceOptions {
-  // The JSON body sent for every response. Defaults to { status: "ok", output: {} }.
+  // The JSON body sent for every response. Defaults to {}.
   response?: Record<string, unknown>;
+  // HTTP status code to return. Defaults to 200.
+  statusCode?: number;
   // How long to delay the very first request before responding.
   // 0 (default) = respond immediately.
   // Infinity     = never respond; use this to simulate a worker hanging mid-step.
@@ -38,8 +40,7 @@ interface MockServiceOptions {
 }
 
 export async function startMockService(port: number, options: MockServiceOptions = {}) {
-  const { response = { status: "ok", output: {} }, firstRequestDelayMs = 0 } =
-    options;
+  const { response = {}, statusCode = 200, firstRequestDelayMs = 0 } = options;
   const body = JSON.stringify(response);
 
   let count = 0;
@@ -56,7 +57,7 @@ export async function startMockService(port: number, options: MockServiceOptions
     if (count === 1) resolveFirst();
 
     const send = () => {
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(statusCode, { "Content-Type": "application/json" });
       res.end(body);
     };
 

@@ -25,14 +25,14 @@ func ValidateChildProcessRefs(def *model.ProcessDefinition, currentVersion int, 
 		return err
 	}
 
-	required, optional := computeContextSets(def.Steps)
+	required, optional, mustErr, mayErr := computeContextSets(def.Steps)
 
 	for _, s := range def.Steps {
 		if s.Call == nil || s.Call.Type != model.CallTypeChildProcess {
 			continue
 		}
 
-		ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput)
+		ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
 		if len(defs) > 0 {
 			ctx = withDefs(ctx, defs)
 		}

@@ -19,7 +19,7 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
   // firstRequestDelayMs: Infinity keeps the connection open so the step
   // stays in-flight when we crash the worker.
   const mock = await startMockService(0, {
-    response: { status: "ok", output: { done: true } },
+    response: { done: true },
     firstRequestDelayMs: Infinity,
   });
 
@@ -36,7 +36,6 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
             call: { type: "rest" as const, endpoint: `http://localhost:${mock.port}/action` },
             // Long enough that the step never times out before the crash.
             timeout_ms: 120_000,
-            retries: 0,
           },
         ],
       },

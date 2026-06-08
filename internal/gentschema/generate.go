@@ -102,8 +102,8 @@ func Generate(def *model.ProcessDefinition, version int) (SchemaFile, error) {
 }
 
 func inferProcessOutput(def *model.ProcessDefinition, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, defs map[string]*schema.SchemaNode) (*schema.SchemaNode, error) {
-	req, opt := outputContextSets(def)
-	ctx := contextSchema(req, opt, tasks, processInput)
+	req, opt, errReq, errOpt := outputContextSets(def)
+	ctx := contextSchema(req, opt, tasks, processInput, errReq, errOpt)
 	if len(defs) > 0 {
 		ctx = withDefs(ctx, defs)
 	}
@@ -112,44 +112,32 @@ func inferProcessOutput(def *model.ProcessDefinition, tasks map[string]TaskSchem
 	})
 }
 
-func outputContextSets(def *model.ProcessDefinition) (required, optional []string) {
+func outputContextSets(def *model.ProcessDefinition) (required, optional []string, errRequired, errOptional bool) {
 	steps := def.Steps
 	n := len(steps)
 	if n == 0 {
 		return
 	}
 
-	reqMap, optMap := computeContextSets(steps)
+	reqMap, optMap, mustErrMap, mayErrMap := computeContextSets(steps)
 
 	type endSet struct {
-		must map[string]bool
-		may  map[string]bool
+		must   map[string]bool
+		may    map[string]bool
+		errMin bool // error is always present on this terminal path
+		errMax bool // error is sometimes present on this terminal path
 	}
 
 	var terminals []endSet
-	for i, s := range steps {
-		isTerminal := false
-		if len(s.Switch) == 0 && i == n-1 {
-			isTerminal = true
-		}
-		for _, c := range s.Switch {
-			if c.Goto == model.GotoEnd {
-				isTerminal = true
-				break
-			}
-		}
-		if !isTerminal {
-			continue
-		}
 
+	addTerminal := func(s *model.Step, includeOwnOutput bool, errMin, errMax bool) {
 		must := make(map[string]bool)
 		for _, id := range reqMap[s.ID] {
 			must[id] = true
 		}
-		if stepHasOutput(s) {
+		if includeOwnOutput && stepHasOutput(s) {
 			must[s.ID] = true
 		}
-
 		may := make(map[string]bool)
 		for id := range must {
 			may[id] = true
@@ -157,8 +145,34 @@ func outputContextSets(def *model.ProcessDefinition) (required, optional []strin
 		for _, id := range optMap[s.ID] {
 			may[id] = true
 		}
+		terminals = append(terminals, endSet{must: must, may: may, errMin: errMin, errMax: errMax})
+	}
+	for i, s := range steps {
+		isNormal := (len(s.Switch) == 0 && i == n-1) ||
+			func() bool {
+				for _, c := range s.Switch {
+					if c.Goto == model.GotoEnd {
+						return true
+					}
+				}
+				return false
+			}()
+		isErrEnd := func() bool {
+			for _, ec := range s.OnError {
+				if ec.Goto == model.GotoEnd {
+					return true
+				}
+			}
+			return false
+		}()
 
-		terminals = append(terminals, endSet{must: must, may: may})
+		if isNormal {
+			addTerminal(s, true, mustErrMap[s.ID], mayErrMap[s.ID])
+		}
+		if isErrEnd {
+			// failing step never produced output; error is always present on this path
+			addTerminal(s, false, true, true)
+		}
 	}
 
 	if len(terminals) == 0 {
@@ -192,6 +206,23 @@ func outputContextSets(def *model.ProcessDefinition) (required, optional []strin
 			optional = append(optional, id)
 		}
 	}
+
+	allErrMin := true
+	for _, t := range terminals {
+		if !t.errMin {
+			allErrMin = false
+			break
+		}
+	}
+	anyErrMax := false
+	for _, t := range terminals {
+		if t.errMax {
+			anyErrMax = true
+			break
+		}
+	}
+	errRequired = allErrMin
+	errOptional = anyErrMax && !allErrMin
 	return
 }
 
@@ -263,10 +294,10 @@ func flattenNamedSchemas(named map[string]*schema.SchemaNode) (map[string]*schem
 }
 
 func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, defs map[string]*schema.SchemaNode) error {
-	required, optional := computeContextSets(steps)
+	required, optional, mustErr, mayErr := computeContextSets(steps)
 	for _, s := range steps {
 		if s.Call != nil {
-			ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput)
+			ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
 			if len(defs) > 0 {
 				ctx = withDefs(ctx, defs)
 			}
@@ -297,7 +328,7 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 				}
 				opt = filtered
 			}
-			switchCtx := contextSchema(req, opt, tasks, processInput)
+			switchCtx := contextSchema(req, opt, tasks, processInput, mustErr[s.ID], mayErr[s.ID])
 			if s.Call != nil {
 				switchCtx = addSelfSchema(switchCtx, s)
 			}
@@ -321,10 +352,23 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 	return nil
 }
 
-func computeContextSets(steps []*model.Step) (required, optional map[string][]string) {
+// predEdge is a predecessor edge in the step graph.
+// isErr is true for on_error routes: the failing step has no output on this path.
+type predEdge struct {
+	idx   int  // predecessor step index; -1 = process start
+	isErr bool // true = on_error route
+}
+
+// computeContextSets computes, for each step, which prior step outputs are
+// always available (required) and which are only sometimes available (optional).
+// It also returns mustErr and mayErr maps indicating whether the $error context
+// key is always / sometimes present at each step.
+func computeContextSets(steps []*model.Step) (required, optional map[string][]string, mustErr, mayErr map[string]bool) {
 	n := len(steps)
 	required = make(map[string][]string, n)
 	optional = make(map[string][]string, n)
+	mustErr = make(map[string]bool, n)
+	mayErr = make(map[string]bool, n)
 	if n == 0 {
 		return
 	}
@@ -334,18 +378,25 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		idx[s.ID] = i
 	}
 
-	preds := make([][]int, n)
-	preds[0] = append(preds[0], -1)
+	preds := make([][]predEdge, n)
+	preds[0] = append(preds[0], predEdge{idx: -1})
 	for i, s := range steps {
 		for _, c := range s.Switch {
 			if c.Goto != model.GotoEnd {
 				if j, ok := idx[c.Goto]; ok {
-					preds[j] = append(preds[j], i)
+					preds[j] = append(preds[j], predEdge{idx: i})
 				}
 			}
 		}
 		if len(s.Switch) == 0 && i+1 < n {
-			preds[i+1] = append(preds[i+1], i)
+			preds[i+1] = append(preds[i+1], predEdge{idx: i})
+		}
+		for _, ec := range s.OnError {
+			if ec.Goto != "" && ec.Goto != model.GotoEnd {
+				if j, ok := idx[ec.Goto]; ok {
+					preds[j] = append(preds[j], predEdge{idx: i, isErr: true})
+				}
+			}
 		}
 	}
 
@@ -365,6 +416,8 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		return true
 	}
 
+	// mustOut[i][j] = step j's output is ALWAYS available when entering step i.
+	// Error edges clear the failing step's own output bit.
 	mustOut := make([][]bool, n)
 	for i := range mustOut {
 		mustOut[i] = allTrue()
@@ -374,12 +427,17 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		for i := range steps {
 			in := allTrue()
 			for _, p := range preds[i] {
-				if p == -1 {
+				if p.idx == -1 {
 					in = allFalse()
 					break
 				}
+				src := mustOut[p.idx]
+				if p.isErr && hasOutput[p.idx] {
+					src = append([]bool{}, mustOut[p.idx]...)
+					src[p.idx] = false // failing step produced no output
+				}
 				for j := range in {
-					in[j] = in[j] && mustOut[p][j]
+					in[j] = in[j] && src[j]
 				}
 			}
 			if len(preds[i]) == 0 {
@@ -399,6 +457,7 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		}
 	}
 
+	// mayOut[i][j] = step j's output is POSSIBLY available when entering step i.
 	mayOut := make([][]bool, n)
 	for i := range mayOut {
 		mayOut[i] = allFalse()
@@ -408,10 +467,16 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		for i := range steps {
 			in := allFalse()
 			for _, p := range preds[i] {
-				if p != -1 {
-					for j := range in {
-						in[j] = in[j] || mayOut[p][j]
-					}
+				if p.idx == -1 {
+					continue
+				}
+				src := mayOut[p.idx]
+				if p.isErr && hasOutput[p.idx] {
+					src = append([]bool{}, mayOut[p.idx]...)
+					src[p.idx] = false
+				}
+				for j := range in {
+					in[j] = in[j] || src[j]
 				}
 			}
 			out := append([]bool{}, in...)
@@ -428,15 +493,72 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		}
 	}
 
+	// mustErrArr[i] = $error is ALWAYS present when entering step i (all paths are error paths).
+	mustErrArr := make([]bool, n)
+	for {
+		changed := false
+		for i := range steps {
+			if len(preds[i]) == 0 {
+				continue
+			}
+			val := true
+			for _, p := range preds[i] {
+				if p.idx == -1 {
+					val = false
+					break
+				}
+				if p.isErr {
+					// error edge always contributes error
+				} else {
+					val = val && mustErrArr[p.idx]
+				}
+			}
+			if mustErrArr[i] != val {
+				mustErrArr[i] = val
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
+	// mayErrArr[i] = $error is POSSIBLY present when entering step i.
+	mayErrArr := make([]bool, n)
+	for {
+		changed := false
+		for i := range steps {
+			val := false
+			for _, p := range preds[i] {
+				if p.idx != -1 && (p.isErr || mayErrArr[p.idx]) {
+					val = true
+					break
+				}
+			}
+			if mayErrArr[i] != val {
+				mayErrArr[i] = val
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
 	for i, s := range steps {
 		mustIn := allTrue()
 		for _, p := range preds[i] {
-			if p == -1 {
+			if p.idx == -1 {
 				mustIn = allFalse()
 				break
 			}
+			src := mustOut[p.idx]
+			if p.isErr && hasOutput[p.idx] {
+				src = append([]bool{}, mustOut[p.idx]...)
+				src[p.idx] = false
+			}
 			for j := range mustIn {
-				mustIn[j] = mustIn[j] && mustOut[p][j]
+				mustIn[j] = mustIn[j] && src[j]
 			}
 		}
 		if len(preds[i]) == 0 {
@@ -445,10 +567,16 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 
 		mayIn := allFalse()
 		for _, p := range preds[i] {
-			if p != -1 {
-				for j := range mayIn {
-					mayIn[j] = mayIn[j] || mayOut[p][j]
-				}
+			if p.idx == -1 {
+				continue
+			}
+			src := mayOut[p.idx]
+			if p.isErr && hasOutput[p.idx] {
+				src = append([]bool{}, mayOut[p.idx]...)
+				src[p.idx] = false
+			}
+			for j := range mayIn {
+				mayIn[j] = mayIn[j] || src[j]
 			}
 		}
 
@@ -460,6 +588,9 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 				optional[s.ID] = append(optional[s.ID], ss.ID)
 			}
 		}
+
+		mustErr[s.ID] = mustErrArr[i]
+		mayErr[s.ID] = mayErrArr[i]
 	}
 	return
 }
@@ -514,7 +645,7 @@ func inferInput(s *model.Step, ctx *schema.SchemaNode, defs map[string]*schema.S
 	})
 }
 
-func contextSchema(preceding []string, optional []string, tasks map[string]TaskSchemas, processInput *schema.SchemaNode) *schema.SchemaNode {
+func contextSchema(preceding []string, optional []string, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, errRequired, errOptional bool) *schema.SchemaNode {
 	props := make(map[string]*schema.SchemaNode)
 	required := []string{"outputs"}
 	if processInput != nil {
@@ -543,6 +674,23 @@ func contextSchema(preceding []string, optional []string, tasks map[string]TaskS
 		outputs.Required = outputRequired
 	}
 	props["outputs"] = outputs
+	if errRequired || errOptional {
+		errSchema := &schema.SchemaNode{
+			Type: schema.SchemaType{"object"},
+			Properties: map[string]*schema.SchemaNode{
+				"step":    {Type: schema.SchemaType{"string"}},
+				"message": {Type: schema.SchemaType{"string"}},
+				"code":    {Type: schema.SchemaType{"string"}},
+			},
+			Required: []string{"step", "message", "code"},
+		}
+		if errOptional {
+			props["error"] = schema.WithNull(errSchema)
+		} else {
+			props["error"] = errSchema
+			required = append(required, "error")
+		}
+	}
 	return &schema.SchemaNode{
 		Type:       schema.SchemaType{"object"},
 		Properties: props,

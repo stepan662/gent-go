@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	"gent/internal/model"
@@ -19,11 +22,12 @@ type Request struct {
 	Data       map[string]interface{} `json:"data"`
 }
 
-// Response is the message the engine expects back from a service.
+// Response carries the result of a Send call.
+// ErrorCode is non-empty on failure ("http.404", "script.1", "output.parse", etc.).
+// Body holds the raw decoded JSON body on success.
 type Response struct {
-	Status string `json:"status"` // "ok" or "error"
-	Output any    `json:"output,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Body      any
+	ErrorCode string
 }
 
 // Send dispatches a request to the appropriate endpoint based on the step's call config.
@@ -36,15 +40,15 @@ func Send(ctx context.Context, call *model.Call, headers map[string]string, req 
 
 	switch call.Type {
 	case model.CallTypeREST:
-		return sendHTTP(ctx, call.Endpoint, headers, body)
+		return sendHTTP(ctx, call.Endpoint, call.AcceptedStatus, headers, body)
 	case model.CallTypeScript:
 		return sendScript(ctx, call.Exec, body)
-default:
+	default:
 		return nil, fmt.Errorf("unknown call type: %q", call.Type)
 	}
 }
 
-func sendHTTP(ctx context.Context, endpoint string, headers map[string]string, body []byte) (*Response, error) {
+func sendHTTP(ctx context.Context, endpoint string, acceptedStatus []string, headers map[string]string, body []byte) (*Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build http request: %w", err)
@@ -56,15 +60,41 @@ func sendHTTP(ctx context.Context, endpoint string, headers map[string]string, b
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http: %w", err)
+		return nil, err // caller uses ClassifyGoError
 	}
 	defer resp.Body.Close()
 
-	var r Response
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, fmt.Errorf("decode http response: %w", err)
+	if !matchAcceptedStatus(resp.StatusCode, acceptedStatus) {
+		return &Response{ErrorCode: fmt.Sprintf("http.%d", resp.StatusCode)}, nil
 	}
-	return &r, nil
+
+	var b any
+	if err := json.NewDecoder(resp.Body).Decode(&b); err != nil {
+		return &Response{ErrorCode: "output.parse"}, nil
+	}
+	return &Response{Body: b}, nil
+}
+
+// matchAcceptedStatus reports whether code is covered by patterns.
+// Patterns may be "2xx"/"3xx"/"4xx"/"5xx" (hundred-range) or exact 3-digit strings like "404".
+// Empty patterns defaults to accepting any 2xx.
+func matchAcceptedStatus(code int, patterns []string) bool {
+	if len(patterns) == 0 {
+		return code >= 200 && code <= 299
+	}
+	for _, p := range patterns {
+		if len(p) == 3 && p[1] == 'x' && p[2] == 'x' {
+			hundreds := int(p[0]-'0') * 100
+			if code >= hundreds && code <= hundreds+99 {
+				return true
+			}
+			continue
+		}
+		if n, err := strconv.Atoi(p); err == nil && n == code {
+			return true
+		}
+	}
+	return false
 }
 
 // sendScript runs exec via sh -c, writes newline-terminated JSON to stdin,
@@ -75,14 +105,36 @@ func sendScript(ctx context.Context, command string, body []byte) (*Response, er
 
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("script: %w", err)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return &Response{ErrorCode: fmt.Sprintf("script.%d", exitErr.ExitCode())}, nil
+		}
+		return nil, err // context deadline, launch failure — caller uses ClassifyScriptError
 	}
 
-	var r Response
-	if err := json.NewDecoder(bytes.NewReader(out)).Decode(&r); err != nil {
-		return nil, fmt.Errorf("decode script response: %w", err)
+	var b any
+	if err := json.NewDecoder(bytes.NewReader(out)).Decode(&b); err != nil {
+		return &Response{ErrorCode: "output.parse"}, nil
 	}
-	return &r, nil
+	return &Response{Body: b}, nil
+}
+
+// ClassifyGoError maps a transport-level Go error to a network error code.
+// Used for REST call failures that never received an HTTP response.
+func ClassifyGoError(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "network.timeout"
+	}
+	return "network.error"
+}
+
+// ClassifyScriptError maps a script-level Go error to a script error code.
+// Used for script failures that are not exec.ExitError (launch failure, context deadline).
+func ClassifyScriptError(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "script.timeout"
+	}
+	return "script.error"
 }
 
 // RetryDelay returns the backoff duration for a given retry attempt (exponential, capped at 5 min).
@@ -92,4 +144,41 @@ func RetryDelay(attempt int) time.Duration {
 		d = 5 * time.Minute
 	}
 	return d
+}
+
+// SQLLikeMatch reports whether s matches the SQL LIKE pattern p.
+// '%' matches any sequence of characters; '_' matches exactly one character.
+func SQLLikeMatch(p, s string) bool {
+	for len(p) > 0 {
+		switch p[0] {
+		case '%':
+			p = p[1:]
+			if len(p) == 0 {
+				return true
+			}
+			for i := 0; i <= len(s); i++ {
+				if SQLLikeMatch(p, s[i:]) {
+					return true
+				}
+			}
+			return false
+		case '_':
+			if len(s) == 0 {
+				return false
+			}
+			p, s = p[1:], s[1:]
+		default:
+			if len(s) == 0 || p[0] != s[0] {
+				return false
+			}
+			p, s = p[1:], s[1:]
+		}
+	}
+	return len(s) == 0
+}
+
+// ValidLikePattern reports whether p is a valid SQL LIKE pattern (only printable ASCII, no raw %).
+// We allow any non-empty string — validation is just a non-empty check for now.
+func ValidLikePattern(p string) bool {
+	return len(strings.TrimSpace(p)) > 0
 }

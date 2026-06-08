@@ -7,7 +7,7 @@ import {
 
 test("lifecycle — task step completes when service returns ok", async () => {
   const mock = await startMockService(0, {
-    response: { status: "ok", output: { done: true } },
+    response: { done: true },
   });
 
   const name = `lifecycle_ok_${crypto.randomUUID()}`;
@@ -16,11 +16,13 @@ test("lifecycle — task step completes when service returns ok", async () => {
       name,
       steps: [
         {
-          type: "task" as const,
           id: "call",
-          call: { type: "rest" as const, endpoint: `http://localhost:${mock.port}/action`, output_schema: { type: "object" } },
+          call: {
+            type: "rest" as const,
+            endpoint: `http://localhost:${mock.port}/action`,
+            output_schema: { type: "object", properties: { done: { type: "boolean" } } },
+          },
           timeout_ms: 2000,
-          retries: 0,
         },
       ],
     },
@@ -41,8 +43,8 @@ test("lifecycle — task step completes when service returns ok", async () => {
   mock.stop();
 });
 
-test("lifecycle — task step fails and retries then marks failed", async () => {
-  const mock = await startMockService(0, { response: { status: "error", error: "boom" } });
+test("lifecycle — task step fails and marks failed", async () => {
+  const mock = await startMockService(0, { statusCode: 500 });
 
   const name = `lifecycle_fail_${crypto.randomUUID()}`;
   await client.PUT("/definitions", {
@@ -50,11 +52,9 @@ test("lifecycle — task step fails and retries then marks failed", async () => 
       name,
       steps: [
         {
-          type: "task" as const,
           id: "call",
           call: { type: "rest" as const, endpoint: `http://localhost:${mock.port}/action` },
           timeout_ms: 500,
-          retries: 1,
         },
       ],
     },
@@ -70,10 +70,10 @@ test("lifecycle — task step fails and retries then marks failed", async () => 
 
 test("lifecycle — conditional routes to correct branch", async () => {
   const thenMock = await startMockService(0, {
-    response: { status: "ok", output: { branch: "then" } },
+    response: { branch: "then" },
   });
   const elseMock = await startMockService(0, {
-    response: { status: "ok", output: { branch: "else" } },
+    response: { branch: "else" },
   });
 
   const name = `lifecycle_cond_${crypto.randomUUID()}`;
@@ -95,16 +95,22 @@ test("lifecycle — conditional routes to correct branch", async () => {
         },
         {
           id: "then_step",
-          call: { type: "rest" as const, endpoint: `http://localhost:${thenMock.port}/action`, output_schema: { type: "object" } },
+          call: {
+            type: "rest" as const,
+            endpoint: `http://localhost:${thenMock.port}/action`,
+            output_schema: { type: "object", properties: { branch: { type: "string" } } },
+          },
           timeout_ms: 1000,
-          retries: 0,
           switch: [{ when: "default", goto: "$end" }],
         },
         {
           id: "else_step",
-          call: { type: "rest" as const, endpoint: `http://localhost:${elseMock.port}/action`, output_schema: { type: "object" } },
+          call: {
+            type: "rest" as const,
+            endpoint: `http://localhost:${elseMock.port}/action`,
+            output_schema: { type: "object", properties: { branch: { type: "string" } } },
+          },
           timeout_ms: 1000,
-          retries: 0,
           switch: [{ when: "default", goto: "$end" }],
         },
       ],
@@ -146,7 +152,7 @@ test("lifecycle — conditional routes to correct branch", async () => {
 
 test("lifecycle — task fails when output violates output_schema", async () => {
   const mock = await startMockService(0, {
-    response: { status: "ok", output: { wrong_field: true } },
+    response: { wrong_field: true },
   });
 
   const name = `lifecycle_output_schema_${crypto.randomUUID()}`;
@@ -166,7 +172,6 @@ test("lifecycle — task fails when output violates output_schema", async () => 
             },
           },
           timeout_ms: 2000,
-          retries: 0,
         },
       ],
     },
@@ -182,7 +187,7 @@ test("lifecycle — task fails when output violates output_schema", async () => 
   const { data } = await client.GET("/instances/{id}", {
     params: { path: { id } },
   });
-  expect(data!.error!).toContain("output validation");
+  expect(data!.error!).toContain("output");
 
   mock.stop();
 });

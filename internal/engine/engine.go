@@ -220,14 +220,18 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 
 	resp, err := transport.Send(taskCtx, step.Call, resolvedHeaders, req)
 	if err != nil {
-		return nil, true, e.retryOrFail(inst, step, err.Error())
+		code := transport.ClassifyGoError(err)
+		if step.Call.Type == model.CallTypeScript {
+			code = transport.ClassifyScriptError(err)
+		}
+		return nil, true, e.handleCallError(inst, step, err.Error(), code)
 	}
-	if resp.Status != "ok" {
-		return nil, true, e.retryOrFail(inst, step, resp.Error)
+	if resp.ErrorCode != "" {
+		return nil, true, e.handleCallError(inst, step, resp.ErrorCode, resp.ErrorCode)
 	}
 
-	if err := step.Call.ValidateOutput(resp.Output); err != nil {
-		return nil, true, e.failInstance(inst, fmt.Sprintf("step %q output validation: %v", step.ID, err))
+	if err := step.Call.ValidateOutput(resp.Body); err != nil {
+		return nil, true, e.handleCallError(inst, step, err.Error(), "output.invalid")
 	}
 
 	// Only persist output to context when output_schema is declared.
@@ -236,7 +240,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		if inst.ContextData["outputs"] == nil {
 			inst.ContextData["outputs"] = map[string]any{}
 		}
-		inst.ContextData["outputs"].(map[string]any)[step.ID] = resp.Output
+		inst.ContextData["outputs"].(map[string]any)[step.ID] = resp.Body
 
 		var order []string
 		switch v := inst.ContextData["output_order"].(type) {
@@ -253,7 +257,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	}
 	inst.RetryCount = 0
 
-	return resp.Output, false, nil
+	return resp.Body, false, nil
 }
 
 // evalSwitch walks the step's switch cases in order and returns the Goto target
@@ -292,21 +296,70 @@ func (e *Engine) queueFromStep(inst *model.ProcessInstance, stepID string) ([]*m
 	return nil, fmt.Errorf("goto step %q not found in %q v%d", stepID, inst.ProcessName, inst.ProcessVersion)
 }
 
-// retryOrFail either schedules a retry or marks the instance as permanently failed.
-func (e *Engine) retryOrFail(inst *model.ProcessInstance, step *model.Step, errMsg string) error {
-	if inst.RetryCount < step.Retries {
+// matchOnError returns the first ErrorCase whose Code patterns match errCode,
+// or whose Code list is empty (catch-all). Returns nil when no rule matches.
+func matchOnError(step *model.Step, errCode string) *model.ErrorCase {
+	for i := range step.OnError {
+		c := &step.OnError[i]
+		if len(c.Code) == 0 {
+			return c
+		}
+		for _, pat := range c.Code {
+			if transport.SQLLikeMatch(pat, errCode) {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+// handleCallError evaluates on_error rules, retries if allowed, injects $error
+// context, and routes to the matching goto or fails the instance.
+func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, errMsg, errCode string) error {
+	matched := matchOnError(step, errCode)
+
+	if matched != nil && inst.RetryCount < matched.Retries {
 		inst.RetryCount++
 		next := time.Now().Add(transport.RetryDelay(inst.RetryCount))
 		inst.NextRetryAt = &next
 		e.log.Warn("step failed, scheduling retry",
 			"id", inst.ID, "step", step.ID,
-			"attempt", inst.RetryCount, "max", step.Retries,
+			"attempt", inst.RetryCount, "max", matched.Retries,
 			"next_retry", next.Format(time.RFC3339),
-			"err", errMsg,
+			"code", errCode, "err", errMsg,
 		)
 		return e.db.UpdateInstance(inst)
 	}
-	return e.failInstance(inst, fmt.Sprintf("step %q failed after %d retries: %s", step.ID, step.Retries, errMsg))
+
+	inst.ContextData["$error"] = map[string]any{
+		"step":    step.ID,
+		"message": errMsg,
+		"code":    errCode,
+	}
+
+	if matched != nil && matched.Goto != "" {
+		if matched.Goto == model.GotoEnd {
+			inst.Status = model.StatusCompleted
+			inst.NextRetryAt = nil
+			e.log.Info("instance completed via error route", "id", inst.ID, "step", step.ID, "code", errCode)
+			if err := e.db.UpdateInstance(inst); err != nil {
+				return err
+			}
+			return e.notifyParent(inst)
+		}
+		newQueue, err := e.queueFromStep(inst, matched.Goto)
+		if err != nil {
+			return e.failInstance(inst, err.Error())
+		}
+		inst.StepQueue = newQueue
+		inst.RetryCount = 0
+		inst.NextRetryAt = nil
+		e.log.Info("routing to error handler",
+			"id", inst.ID, "step", step.ID, "goto", matched.Goto, "code", errCode)
+		return e.db.UpdateInstance(inst)
+	}
+
+	return e.failInstance(inst, fmt.Sprintf("step %q: %s: %s", step.ID, errCode, errMsg))
 }
 
 func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (map[string]any, error) {

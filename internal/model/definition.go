@@ -34,24 +34,28 @@ type ChildProcessEntry struct {
 }
 
 // Call describes how to invoke a step's action. It is a discriminated union on Type.
-//   - "rest":          Endpoint (required), Headers (optional), OutputSchema (optional)
+//   - "rest":          Endpoint (required), Headers (optional), AcceptedStatus (optional), OutputSchema (optional)
 //   - "script":        Exec (required), OutputSchema (optional)
 //   - "child_process": Processes (required), ChildOutputSchema (optional per-child schema)
 //
-// OutputSchema (rest/script): when set, the call response is validated and stored in
-// context for downstream steps. Without it, the output is only available as "self"
-// within the same step's switch and is not persisted.
+// OutputSchema (rest/script): when set, the response body is validated against the schema
+// and stored in context for downstream steps. Without it, the body is available only as
+// "self" within the same step's switch and is not persisted.
+//
+// AcceptedStatus (rest only): HTTP status patterns treated as non-errors. Supports "2xx"
+// style patterns and exact codes like "404". Defaults to any 2xx when omitted.
 //
 // ChildOutputSchema (child_process): when set, each child's computed output is
 // validated before the parent resumes.
 type Call struct {
-	Type      CallType          `json:"type"`
-	Endpoint  string            `json:"endpoint,omitempty"`           // rest
-	Headers   map[string]string `json:"headers,omitempty"`            // rest, values are expressions
-	Exec      string            `json:"exec,omitempty"`               // script
-	OutputSchema      *schema.SchemaNode  `json:"output_schema,omitempty"`       // rest/script: validate & persist output
-	Processes         []ChildProcessEntry `json:"processes,omitempty"`           // child_process
-	ChildOutputSchema *schema.SchemaNode  `json:"child_output_schema,omitempty"` // child_process: validate each child's output
+	Type             CallType            `json:"type"`
+	Endpoint         string              `json:"endpoint,omitempty"`           // rest
+	Headers          map[string]string   `json:"headers,omitempty"`            // rest, values are expressions
+	AcceptedStatus   []string            `json:"accepted_status,omitempty"`    // rest: HTTP status patterns accepted as non-errors
+	Exec             string              `json:"exec,omitempty"`               // script
+	OutputSchema     *schema.SchemaNode  `json:"output_schema,omitempty"`      // rest/script: validate & persist output
+	Processes        []ChildProcessEntry `json:"processes,omitempty"`          // child_process
+	ChildOutputSchema *schema.SchemaNode `json:"child_output_schema,omitempty"` // child_process: validate each child's output
 }
 
 // JSONSchemaBytes returns the JSON Schema for Call as a discriminated union
@@ -63,10 +67,11 @@ func (Call) JSONSchemaBytes() ([]byte, error) {
 				"type": "object",
 				"description": "HTTP call — sends a request to an external endpoint.",
 				"properties": {
-					"type":          {"type": "string", "const": "rest"},
-					"endpoint":      {"type": "string", "description": "URL of the HTTP endpoint to call."},
-					"headers":       {"type": "object", "additionalProperties": {"type": "string"}, "description": "HTTP headers to include. Values are expressions evaluated against the current context."},
-					"output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist the response body. Without it the response is available only as 'self' in this step's switch."}
+					"type":            {"type": "string", "const": "rest"},
+					"endpoint":        {"type": "string", "description": "URL of the HTTP endpoint to call."},
+					"headers":         {"type": "object", "additionalProperties": {"type": "string"}, "description": "HTTP headers to include. Values are expressions evaluated against the current context."},
+					"accepted_status": {"type": "array", "items": {"type": "string"}, "description": "HTTP status patterns accepted as non-errors, e.g. \"2xx\" or \"404\". Defaults to any 2xx."},
+					"output_schema":   {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist the response body. Without it the response is available only as 'self' in this step's switch."}
 				},
 				"required": ["type", "endpoint"],
 				"additionalProperties": false
@@ -176,6 +181,31 @@ func (SwitchMap) JSONSchemaBytes() ([]byte, error) {
 	return []byte(`{"type":"array","description":"Ordered routing rules. Cases are evaluated in order; first match wins. The last case must use \"default\" as its 'when' value. Use \"$end\" as 'goto' to terminate the instance.","items":{"type":"object","properties":{"when":{"type":"string","description":"Expression evaluated against the context (and 'self' for this step's output). Use \"default\" to match unconditionally."},"goto":{"type":"string","description":"ID of the step to jump to, prefixed with '#' (e.g. \"#my-step\"), or \"$end\" to complete the instance."}},"required":["when","goto"],"additionalProperties":false}}`), nil
 }
 
+// ErrorCase is a single error-routing rule evaluated when a step's call fails.
+// Rules are evaluated in order; the first match applies.
+// An empty Code list is a catch-all matching any error.
+type ErrorCase struct {
+	Code    []string `json:"code,omitempty"    description:"SQL LIKE patterns matched against the error code. '%' = any chars, '_' = one char. E.g. \"http.4__\", \"network.%\". Empty = catch-all."`
+	Retries int      `json:"retries,omitempty" description:"Number of retries before following Goto or failing. 0 = no retries."`
+	Goto    string   `json:"goto,omitempty"    description:"Step to route to when retries are exhausted. '#step-id' or '$end'. Omit to fail the instance."`
+}
+
+func (e *ErrorCase) UnmarshalJSON(data []byte) error {
+	type wire ErrorCase
+	var w wire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	if w.Goto != "" && w.Goto != GotoEnd {
+		if !strings.HasPrefix(w.Goto, "#") {
+			return fmt.Errorf("on_error: goto %q must be %q or a step reference like \"#step-id\"", w.Goto, GotoEnd)
+		}
+		w.Goto = w.Goto[1:]
+	}
+	*e = ErrorCase(w)
+	return nil
+}
+
 // Step is a single unit of work in a process definition.
 // Each step may have a call, a switch, or both — but at least one is required.
 //
@@ -195,7 +225,7 @@ type Step struct {
 	ID        string            `json:"id"           validate:"required" description:"Unique step identifier within this process. Used as a goto target in switch cases."`
 	Call      *Call             `json:"call,omitempty"                  description:"Describes the action to perform. Omit for switch-only (routing) steps."`
 	TimeoutMs int               `json:"timeout_ms,omitempty"            description:"Maximum execution time in milliseconds. 0 means no timeout."`
-	Retries   int               `json:"retries,omitempty"               description:"Number of times to retry the call on failure before marking the step failed."`
+	OnError   []ErrorCase       `json:"on_error,omitempty"              description:"Ordered error-routing rules evaluated when the call fails. First match wins."`
 	Params    map[string]string `json:"params,omitempty"                description:"Expression map evaluated against the current context to build the call's input. Keys become input field names."`
 	Switch    SwitchMap         `json:"switch,omitempty"                description:"Ordered routing rules evaluated after the call. Last case must be 'default'. Required if the step has no call or needs non-linear flow."`
 }
@@ -306,6 +336,28 @@ func validateStep(s *Step, stepIDs map[string]struct{}) error {
 			}
 		}
 	}
+	for i, ec := range s.OnError {
+		for _, pat := range ec.Code {
+			if !validLikePattern(pat) {
+				return fmt.Errorf("step %q on_error[%d]: code pattern must not be empty", s.ID, i)
+			}
+		}
+		if ec.Goto != "" && ec.Goto != GotoEnd {
+			if _, ok := stepIDs[ec.Goto]; !ok {
+				return fmt.Errorf("step %q on_error[%d]: goto %q is not a known step", s.ID, i, ec.Goto)
+			}
+		}
+	}
+	if s.Call != nil && s.Call.Type == CallTypeChildProcess && len(s.OnError) > 0 {
+		return fmt.Errorf("step %q: on_error is not supported on child_process steps", s.ID)
+	}
+	if s.Call != nil && s.Call.Type == CallTypeREST {
+		for _, pat := range s.Call.AcceptedStatus {
+			if !validAcceptedStatusPattern(pat) {
+				return fmt.Errorf("step %q: accepted_status %q must be \"2xx\"/\"3xx\"/\"4xx\"/\"5xx\" or a 3-digit code", s.ID, pat)
+			}
+		}
+	}
 	if s.Call != nil {
 		if err := checkSchemaDoc(fmt.Sprintf("step %q call.output_schema", s.ID), s.Call.OutputSchema); err != nil {
 			return err
@@ -315,6 +367,25 @@ func validateStep(s *Step, stepIDs map[string]struct{}) error {
 		}
 	}
 	return nil
+}
+
+func validLikePattern(p string) bool {
+	return strings.TrimSpace(p) != ""
+}
+
+func validAcceptedStatusPattern(p string) bool {
+	if len(p) == 3 && p[1] == 'x' && p[2] == 'x' && p[0] >= '1' && p[0] <= '5' {
+		return true
+	}
+	if len(p) == 3 {
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func checkSchemaDoc(field string, s *schema.SchemaNode) error {
