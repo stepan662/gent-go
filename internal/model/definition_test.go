@@ -308,40 +308,40 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: `goto "nonexistent" is not a known step`,
 		},
 
-		// ── idempotent: false static validation ──────────────────────────────
+		// ── only_once: true static validation ───────────────────────────────
 
 		{
-			name: "idempotent:false — retries on start.% is valid",
+			name: "only_once:true — retries on pre.% is valid",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
-						{Code: []string{"start.%"}, Retries: 3},
+						{Code: []string{"pre.%"}, Retries: 3},
 					},
 				},
 			}},
 			wantErr: "",
 		},
 		{
-			name: "idempotent:false — retries on exact start.error codes is valid",
+			name: "only_once:true — retries on exact pre.* codes is valid",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
-						{Code: []string{"start.error", "start.timeout"}, Retries: 3},
+						{Code: []string{"pre.error", "pre.timeout"}, Retries: 3},
 					},
 				},
 			}},
 			wantErr: "",
 		},
 		{
-			name: "idempotent:false — retries:0 with http.% goto is valid",
+			name: "only_once:true — retries:0 with http.% goto is valid",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
 						{Code: []string{"http.%"}, Goto: "handler"},
 					},
@@ -351,37 +351,37 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "idempotent:false — executed:false overrides http.422 retry",
+			name: "only_once:true — not_reached:true overrides http.422 retry",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
-						{Code: []string{"http.422"}, Executed: boolPtr(false), Retries: 2},
+						{Code: []string{"http.422"}, NotReached: boolPtr(true), Retries: 2},
 					},
 				},
 			}},
 			wantErr: "",
 		},
 		{
-			name: "idempotent:false — executed:false on catch-all retry is valid",
+			name: "only_once:true — not_reached:true on catch-all retry is valid",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
-						{Executed: boolPtr(false), Retries: 2},
+						{NotReached: boolPtr(true), Retries: 2},
 					},
 				},
 			}},
 			wantErr: "",
 		},
 		{
-			name: "idempotent:false — retries on http.% is rejected",
+			name: "only_once:true — retries on http.% is rejected",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
 						{Code: []string{"http.%"}, Retries: 3},
 					},
@@ -390,11 +390,11 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: `pattern "http.%" can match errors where the call may have executed`,
 		},
 		{
-			name: "idempotent:false — retries on exact http.500 is rejected",
+			name: "only_once:true — retries on exact http.500 is rejected",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
 						{Code: []string{"http.500"}, Retries: 1},
 					},
@@ -403,11 +403,11 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: `pattern "http.500" can match errors where the call may have executed`,
 		},
 		{
-			name: "idempotent:false — retries on script.% is rejected",
+			name: "only_once:true — retries on script.% is rejected",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "run", Call: &Call{Type: CallTypeScript, Exec: "echo ok"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
 						{Code: []string{"script.%"}, Retries: 1},
 					},
@@ -416,24 +416,24 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: `pattern "script.%" can match errors where the call may have executed`,
 		},
 		{
-			name: "idempotent:false — catch-all with retries is rejected",
+			name: "only_once:true — catch-all with retries is rejected",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
 						{Retries: 2},
 					},
 				},
 			}},
-			wantErr: "catch-all rule cannot have retries on a non-idempotent step",
+			wantErr: "catch-all rule cannot have retries on an only_once step",
 		},
 		{
-			name: "idempotent:false — wildcard crossing namespaces is rejected",
+			name: "only_once:true — wildcard crossing namespaces is rejected",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
 						{Code: []string{"s%"}, Retries: 3},
 					},
@@ -442,24 +442,24 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: `pattern "s%" can match errors where the call may have executed`,
 		},
 		{
-			name: "idempotent:false — mixed safe and unsafe patterns in one rule is rejected",
+			name: "only_once:true — mixed pre and non-pre patterns in one rule is rejected",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(false),
+					OnlyOnce: boolPtr(true),
 					OnError: []ErrorCase{
-						{Code: []string{"start.%", "http.%"}, Retries: 1},
+						{Code: []string{"pre.%", "http.%"}, Retries: 1},
 					},
 				},
 			}},
 			wantErr: `pattern "http.%" can match errors where the call may have executed`,
 		},
 		{
-			name: "idempotent:true (explicit) — retries on http.% is valid",
+			name: "only_once:false (explicit) — retries on http.% is valid",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
-					Idempotent: boolPtr(true),
+					OnlyOnce: boolPtr(false),
 					OnError: []ErrorCase{
 						{Code: []string{"http.%"}, Retries: 3},
 					},
@@ -468,7 +468,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "idempotent nil (default) — retries on http.% is valid",
+			name: "only_once nil (default) — retries on http.% is valid",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
@@ -657,41 +657,41 @@ func TestSwitchMap_MarshalUnmarshal(t *testing.T) {
 	}
 }
 
-func TestPatternOnlyMatchesStart(t *testing.T) {
+func TestPatternOnlyMatchesPre(t *testing.T) {
 	tests := []struct {
 		pattern string
 		want    bool
 	}{
-		// exact start.* codes
-		{"start.error", true},
-		{"start.timeout", true},
-		{"start.exec", true},
-		{"start.", true},
-		// wildcards rooted at start.
-		{"start.%", true},
-		{"start._%", true},
-		{"start._rror", true},
-		// does not start with "start." — no wildcard
+		// exact pre.* codes
+		{"pre.error", true},
+		{"pre.timeout", true},
+		{"pre.exec", true},
+		{"pre.", true},
+		// wildcards rooted at pre.
+		{"pre.%", true},
+		{"pre._%", true},
+		{"pre._rror", true},
+		// does not start with "pre." — no wildcard
 		{"http.500", false},
 		{"script.1", false},
 		{"output.parse", false},
 		{"child.failed", false},
-		// wildcards not rooted at start.
+		// wildcards not rooted at pre.
 		{"%", false},
 		{"http.%", false},
 		{"script.%", false},
-		// "start" without dot: prefix is "start", not "start."
-		{"start%", false},
-		// "s%" could match start.* but also script.*, http.* is impossible but s% allows non-start
-		{"s%", false},
+		// "pre" without dot: prefix is "pre", not "pre."
+		{"pre%", false},
+		// "p%" could match pre.* but also other codes
+		{"p%", false},
 		// empty string
 		{"", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.pattern, func(t *testing.T) {
-			got := patternOnlyMatchesStart(tt.pattern)
+			got := patternOnlyMatchesPre(tt.pattern)
 			if got != tt.want {
-				t.Errorf("patternOnlyMatchesStart(%q) = %v, want %v", tt.pattern, got, tt.want)
+				t.Errorf("patternOnlyMatchesPre(%q) = %v, want %v", tt.pattern, got, tt.want)
 			}
 		})
 	}

@@ -306,13 +306,13 @@ func (e *Engine) queueFromStep(inst *model.ProcessInstance, stepID string) ([]*m
 // For non-idempotent steps, a retry is only allowed when we know the remote call
 // never started: start.* error codes, or an on_error rule with executed:false.
 func isRetryAllowed(step *model.Step, errCode string, matched *model.ErrorCase) bool {
-	if step.Idempotent == nil || *step.Idempotent {
+	if step.OnlyOnce == nil || !*step.OnlyOnce {
 		return true
 	}
-	if matched != nil && matched.Executed != nil && !*matched.Executed {
+	if matched != nil && matched.NotReached != nil && *matched.NotReached {
 		return true
 	}
-	return strings.HasPrefix(errCode, "start.")
+	return strings.HasPrefix(errCode, "pre.")
 }
 
 // matchOnError returns the first ErrorCase whose Code patterns match errCode,

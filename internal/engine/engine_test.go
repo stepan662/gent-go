@@ -75,49 +75,49 @@ func TestIsRetryAllowed(t *testing.T) {
 	bp := func(b bool) *bool { return &b }
 
 	tests := []struct {
-		name       string
-		idempotent *bool
-		errCode    string
-		matched    *model.ErrorCase
-		want       bool
+		name     string
+		onlyOnce *bool
+		errCode  string
+		matched  *model.ErrorCase
+		want     bool
 	}{
-		// idempotent nil / true — no restriction
-		{"nil idempotent allows http.500", nil, "http.500", nil, true},
-		{"nil idempotent allows any code", nil, "output.invalid", nil, true},
-		{"true idempotent allows http.500", bp(true), "http.500", nil, true},
-		{"true idempotent allows script.1", bp(true), "script.1", nil, true},
+		// only_once nil / false — no restriction
+		{"nil only_once allows http.500", nil, "http.500", nil, true},
+		{"nil only_once allows any code", nil, "output.invalid", nil, true},
+		{"false only_once allows http.500", bp(false), "http.500", nil, true},
+		{"false only_once allows script.1", bp(false), "script.1", nil, true},
 
-		// idempotent false — start.* is always allowed
-		{"false: start.error allowed", bp(false), "start.error", nil, true},
-		{"false: start.timeout allowed", bp(false), "start.timeout", nil, true},
-		{"false: start.exec allowed", bp(false), "start.exec", nil, true},
-		{"false: start.anything allowed", bp(false), "start.whatever", nil, true},
+		// only_once true — pre.* is always allowed
+		{"true: pre.error allowed", bp(true), "pre.error", nil, true},
+		{"true: pre.timeout allowed", bp(true), "pre.timeout", nil, true},
+		{"true: pre.exec allowed", bp(true), "pre.exec", nil, true},
+		{"true: pre.anything allowed", bp(true), "pre.whatever", nil, true},
 
-		// idempotent false — non-start.* blocked without override
-		{"false: http.500 blocked", bp(false), "http.500", nil, false},
-		{"false: http.timeout blocked", bp(false), "http.timeout", nil, false},
-		{"false: script.1 blocked", bp(false), "script.1", nil, false},
-		{"false: script.timeout blocked", bp(false), "script.timeout", nil, false},
-		{"false: output.invalid blocked", bp(false), "output.invalid", nil, false},
-		{"false: child.failed blocked", bp(false), "child.failed", nil, false},
+		// only_once true — non-pre.* blocked without override
+		{"true: http.500 blocked", bp(true), "http.500", nil, false},
+		{"true: http.timeout blocked", bp(true), "http.timeout", nil, false},
+		{"true: script.1 blocked", bp(true), "script.1", nil, false},
+		{"true: script.timeout blocked", bp(true), "script.timeout", nil, false},
+		{"true: output.invalid blocked", bp(true), "output.invalid", nil, false},
+		{"true: child.failed blocked", bp(true), "child.failed", nil, false},
 
-		// idempotent false — executed:false overrides any error code
-		{"false + executed:false allows http.422", bp(false), "http.422", &model.ErrorCase{Executed: bp(false)}, true},
-		{"false + executed:false allows http.500", bp(false), "http.500", &model.ErrorCase{Executed: bp(false)}, true},
-		{"false + executed:false allows output.invalid", bp(false), "output.invalid", &model.ErrorCase{Executed: bp(false)}, true},
+		// only_once true — not_reached:true overrides any error code
+		{"true + not_reached:true allows http.422", bp(true), "http.422", &model.ErrorCase{NotReached: bp(true)}, true},
+		{"true + not_reached:true allows http.500", bp(true), "http.500", &model.ErrorCase{NotReached: bp(true)}, true},
+		{"true + not_reached:true allows output.invalid", bp(true), "output.invalid", &model.ErrorCase{NotReached: bp(true)}, true},
 
-		// idempotent false — executed:true does not add restriction beyond default
-		{"false + executed:true still allows start.error", bp(false), "start.error", &model.ErrorCase{Executed: bp(true)}, true},
-		{"false + executed:true still blocks http.500", bp(false), "http.500", &model.ErrorCase{Executed: bp(true)}, false},
+		// only_once true — not_reached:false does not override
+		{"true + not_reached:false still allows pre.error", bp(true), "pre.error", &model.ErrorCase{NotReached: bp(false)}, true},
+		{"true + not_reached:false still blocks http.500", bp(true), "http.500", &model.ErrorCase{NotReached: bp(false)}, false},
 
-		// idempotent false — nil matched (no on_error rule matched)
-		{"false + nil matched + start.error allowed", bp(false), "start.error", nil, true},
-		{"false + nil matched + http.500 blocked", bp(false), "http.500", nil, false},
+		// only_once true — nil matched (no on_error rule matched)
+		{"true + nil matched + pre.error allowed", bp(true), "pre.error", nil, true},
+		{"true + nil matched + http.500 blocked", bp(true), "http.500", nil, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			step := &model.Step{ID: "s", Idempotent: tt.idempotent,
+			step := &model.Step{ID: "s", OnlyOnce: tt.onlyOnce,
 				Call: &model.Call{Type: model.CallTypeREST, Endpoint: "http://x"}}
 			got := isRetryAllowed(step, tt.errCode, tt.matched)
 			if got != tt.want {
