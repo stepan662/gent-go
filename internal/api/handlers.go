@@ -219,7 +219,7 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 		ProcessName:    def.Name,
 		ProcessVersion: version,
 		StepQueue:      def.Steps,
-		ContextData:    map[string]any{"input": input, "outputs": map[string]any{}},
+		ContextData:    map[string]any{"input": input, "outputs": map[string]any{}, "error": nil},
 		Status:         model.StatusRunning,
 		CreatedAt:      time.Now(),
 	}

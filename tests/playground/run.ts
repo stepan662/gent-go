@@ -7,7 +7,6 @@
 
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import type { ProcessInput } from "./generated/types.ts";
 import { createClientTyped, waitForInstance } from "../helpers/client.ts";
 import { buildGentctlBinary } from "../helpers/cli.ts";
 
@@ -43,14 +42,8 @@ for (let i = 0; i < rounds; i++) {
 async function startInstance() {
   // ─── 2. start an instance ──────────────────────────────────────────────────
 
-  const input: ProcessInput = {
-    ttl: 8,
-    // @ts-ignore
-    test: 10,
-  };
-
   const { data: startData, error: startErr } = await client.POST("/instances", {
-    body: { process: PROCESS_NAME, input },
+    body: { process: PROCESS_NAME },
   });
   if (startErr) throw new Error(`start failed: ${JSON.stringify(startErr)}`);
 
@@ -63,7 +56,8 @@ async function startInstance() {
   const { data } = await client.GET("/instances/{id}", {
     params: { path: { id } },
   });
-  if (data?.error) {
+  console.log(JSON.stringify(data, null, 2));
+  if (data?.status == "failed") {
     console.log(status, data?.error);
   } else {
     console.log(status, (data?.context as any).output?.processes);

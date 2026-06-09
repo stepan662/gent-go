@@ -9,6 +9,16 @@ import { startServer, type Handlers } from "./generated/server.ts";
 
 const PORT = 3001;
 
-const handlers: Handlers = {};
+const handlers: Handlers = {
+  start: async (_ctx) => {
+    await sleep(50);
+    throw new Error("error");
+    return { ok: true };
+  },
+  finale: async ({ error }) => {
+    console.log(error);
+    return { ok: true };
+  },
+};
 
 startServer(handlers, PORT);

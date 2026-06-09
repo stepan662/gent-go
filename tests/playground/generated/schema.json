@@ -1,94 +1,73 @@
 {
   "process": "order-pipeline",
   "version": 0,
-  "process_input": {
-    "$ref": "#/$defs/input"
-  },
   "process_output": {
     "$ref": "#/$defs/output"
   },
   "tasks": {
-    "finish": {
-      "call_type": "child_process",
+    "finale": {
+      "call_type": "rest",
       "input": {
-        "type": "object"
+        "$ref": "#/$defs/finale_input"
       },
       "output": {
-        "$ref": "#/$defs/finish_output"
+        "$ref": "#/$defs/finale_output"
       }
     },
-    "recursion": {
-      "call_type": "child_process",
+    "start": {
+      "call_type": "rest",
       "input": {
         "type": "object"
       },
       "output": {
-        "$ref": "#/$defs/recursion_output"
+        "$ref": "#/$defs/start_output"
       }
     }
   },
   "$defs": {
-    "finish_output": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id"
-        ]
-      }
-    },
-    "input": {
+    "finale_input": {
       "type": "object",
       "properties": {
-        "ttl": {
-          "type": "integer"
+        "error": {
+          "type": "string"
         }
       },
       "required": [
-        "ttl"
+        "error"
+      ]
+    },
+    "finale_output": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
       ]
     },
     "output": {
       "type": "object",
       "properties": {
-        "processes": {
-          "type": "number"
+        "is_ok": {
+          "type": "boolean"
         }
       },
       "required": [
-        "processes"
+        "is_ok"
       ]
     },
-    "recursion_output": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "output": {
-            "type": "object",
-            "properties": {
-              "processes": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "processes"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "output"
-        ]
-      }
+    "start_output": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
     }
   }
 }

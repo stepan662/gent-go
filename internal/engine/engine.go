@@ -227,7 +227,11 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		return nil, true, e.handleCallError(inst, step, err.Error(), code)
 	}
 	if resp.ErrorCode != "" {
-		return nil, true, e.handleCallError(inst, step, resp.ErrorCode, resp.ErrorCode)
+		msg := resp.ErrorMessage
+		if msg == "" {
+			msg = resp.ErrorCode
+		}
+		return nil, true, e.handleCallError(inst, step, msg, resp.ErrorCode)
 	}
 
 	if err := step.Call.ValidateOutput(resp.Body); err != nil {
@@ -331,7 +335,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 		return e.db.UpdateInstance(inst)
 	}
 
-	inst.ContextData["$error"] = map[string]any{
+	inst.ContextData["error"] = map[string]any{
 		"step":    step.ID,
 		"message": errMsg,
 		"code":    errCode,
@@ -449,7 +453,7 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 			ProcessName:    def.Name,
 			ProcessVersion: version,
 			StepQueue:      def.Steps,
-			ContextData:    map[string]any{"input": input, "outputs": map[string]any{}, "output_order": []string{}, "_spawn_step_id": step.ID},
+			ContextData:    map[string]any{"input": input, "outputs": map[string]any{}, "output_order": []string{}, "_spawn_step_id": step.ID, "error": nil},
 			Status:         model.StatusRunning,
 			ParentID:       inst.ID,
 			CallStack:      childCallStack,

@@ -190,6 +190,15 @@ type ErrorCase struct {
 	Goto    string   `json:"goto,omitempty"    description:"Step to route to when retries are exhausted. '#step-id' or '$end'. Omit to fail the instance."`
 }
 
+func (e ErrorCase) MarshalJSON() ([]byte, error) {
+	type wire ErrorCase
+	w := wire(e)
+	if w.Goto != "" && w.Goto != GotoEnd {
+		w.Goto = "#" + w.Goto
+	}
+	return json.Marshal(w)
+}
+
 func (e *ErrorCase) UnmarshalJSON(data []byte) error {
 	type wire ErrorCase
 	var w wire

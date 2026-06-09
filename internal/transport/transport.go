@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -24,10 +25,12 @@ type Request struct {
 
 // Response carries the result of a Send call.
 // ErrorCode is non-empty on failure ("http.404", "script.1", "output.parse", etc.).
+// ErrorMessage is a human-readable description of the failure (may include trimmed response body).
 // Body holds the raw decoded JSON body on success.
 type Response struct {
-	Body      any
-	ErrorCode string
+	Body         any
+	ErrorCode    string
+	ErrorMessage string
 }
 
 // Send dispatches a request to the appropriate endpoint based on the step's call config.
@@ -65,7 +68,12 @@ func sendHTTP(ctx context.Context, endpoint string, acceptedStatus []string, hea
 	defer resp.Body.Close()
 
 	if !matchAcceptedStatus(resp.StatusCode, acceptedStatus) {
-		return &Response{ErrorCode: fmt.Sprintf("http.%d", resp.StatusCode)}, nil
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = fmt.Sprintf("request failed with status %d without response body", resp.StatusCode)
+		}
+		return &Response{ErrorCode: fmt.Sprintf("http.%d", resp.StatusCode), ErrorMessage: msg}, nil
 	}
 
 	var b any

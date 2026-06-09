@@ -3,7 +3,7 @@
 
 import { createServer } from 'node:http'
 import Ajv from 'ajv'
-import type {  } from './types.ts'
+import type { FinaleInput, FinaleOutput, StartInput, StartOutput } from './types.ts'
 
 // Transport envelope — mirrors internal/transport/transport.go
 interface TaskRequest {
@@ -14,49 +14,33 @@ interface TaskRequest {
 
 // Implement this in server.ts and pass it to startServer().
 export interface Handlers {
+  finale: (ctx: FinaleInput) => Promise<FinaleOutput>
+  start: (ctx: StartInput) => Promise<StartOutput>
 }
 
 // Output schemas baked in for runtime validation via AJV.
 const stepSchemas: Record<string, object> = {
-  "finish": {
-    "type": "array",
-    "items": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id"
-      ]
-    }
+  "finale": {
+    "type": "object",
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ]
   },
-  "recursion": {
-    "type": "array",
-    "items": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "output": {
-          "type": "object",
-          "properties": {
-            "processes": {
-              "type": "number"
-            }
-          },
-          "required": [
-            "processes"
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "output"
-      ]
-    }
+  "start": {
+    "type": "object",
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ]
   }
 }
 
@@ -85,19 +69,18 @@ export function startServer(handlers: Handlers, port: number): void {
       const output = await fn(taskReq.data)
       const validate = validators[stepId]
       if (validate && !validate(output)) {
-        const error = `output schema violation: ${ajv.errorsText(validate.errors)}`
-        console.log(`← ${stepId} [error]`)
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ status: 'error', error }))
+        console.log(`← ${stepId} [schema error]`)
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: `output schema violation: ${ajv.errorsText(validate.errors)}` }))
         return
       }
       console.log(`← ${stepId} [ok]`)
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ status: 'ok', output }))
+      res.end(JSON.stringify(output))
     } catch (err) {
       console.log(`← ${stepId} [error]`)
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ status: 'error', error: String(err) }))
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: String(err) }))
     }
   })
   server.listen(port, () => {

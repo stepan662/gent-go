@@ -85,7 +85,11 @@ for (const [id, task] of Object.entries(tasks)) {
   const pascal = toPascalCase(id);
 
   if (task.input) {
-    typeSections.push(await compile(task.input, `${pascal}Input`, opts));
+    const inputRef = task.input as { $ref?: string };
+    const inputSchema = inputRef.$ref
+      ? (defs[refDefName(inputRef as { $ref: string })] ?? task.input)
+      : task.input;
+    typeSections.push(await compile(inputSchema, `${pascal}Input`, opts));
   }
 
   if (task.output) {
@@ -181,19 +185,18 @@ function buildServerFile(): string {
     "      const output = await fn(taskReq.data)",
     "      const validate = validators[stepId]",
     "      if (validate && !validate(output)) {",
-    "        const error = `output schema violation: ${ajv.errorsText(validate.errors)}`",
-    "        console.log(`← ${stepId} [error]`)",
-    "        res.writeHead(200, { 'Content-Type': 'application/json' })",
-    "        res.end(JSON.stringify({ status: 'error', error }))",
+    "        console.log(`← ${stepId} [schema error]`)",
+    "        res.writeHead(500, { 'Content-Type': 'application/json' })",
+    "        res.end(JSON.stringify({ error: `output schema violation: ${ajv.errorsText(validate.errors)}` }))",
     "        return",
     "      }",
     "      console.log(`← ${stepId} [ok]`)",
     "      res.writeHead(200, { 'Content-Type': 'application/json' })",
-    "      res.end(JSON.stringify({ status: 'ok', output }))",
+    "      res.end(JSON.stringify(output))",
     "    } catch (err) {",
     "      console.log(`← ${stepId} [error]`)",
-    "      res.writeHead(200, { 'Content-Type': 'application/json' })",
-    "      res.end(JSON.stringify({ status: 'error', error: String(err) }))",
+    "      res.writeHead(500, { 'Content-Type': 'application/json' })",
+    "      res.end(JSON.stringify({ error: String(err) }))",
     "    }",
     "  })",
     "  server.listen(port, () => {",

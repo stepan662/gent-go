@@ -4,7 +4,7 @@ steps:
   - id: start
     call:
       type: rest
-      endpoint: http://localhost:3001/start
+      endpoint: http://localhost:3000/start
       output_schema:
         type: object
         properties:
@@ -12,13 +12,25 @@ steps:
             type: boolean
         required: [ok]
     on_error:
-      - code: ["http.%"]
+      - code: ["network.%"]
         goto: "#finale"
 
   - id: finale
     params:
-      error: "{{error != nil ? error.code : 'hi'}}"
+      error: "{{error != null ? error.code : 'hi'}}"
     call:
       type: rest
       endpoint: http://localhost:3001/finale
+      output_schema:
+        type: object
+        properties:
+          ok:
+            type: boolean
+        required: [ok]
+    on_error:
+      - retries: 2
+output:
+  is_ok: "{{outputs.finale.ok}}"
+  
+
     
