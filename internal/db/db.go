@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/xeipuuv/gojsonschema"
 
@@ -41,7 +41,7 @@ func OpenSQLite(path string) (*DB, error) {
 // OpenPostgres opens a PostgreSQL connection and runs migrations.
 // DSN format: postgres://user:password@host:port/database?sslmode=disable
 func OpenPostgres(dsn string) (*DB, error) {
-	sqldb, err := sql.Open("pgx", dsn)
+	sqldb, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}

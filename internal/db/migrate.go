@@ -6,7 +6,7 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database"
-	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
+	pgmigrate "github.com/golang-migrate/migrate/v4/database/postgres"
 	sqlite3migrate "github.com/golang-migrate/migrate/v4/database/sqlite3"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
@@ -22,7 +22,7 @@ func runMigrations(sqldb *sql.DB, dialect string) error {
 	case "sqlite":
 		driver, err = sqlite3migrate.WithInstance(sqldb, &sqlite3migrate.Config{})
 	case "postgres":
-		driver, err = pgxmigrate.WithInstance(sqldb, &pgxmigrate.Config{})
+		driver, err = pgmigrate.WithInstance(sqldb, &pgmigrate.Config{})
 	}
 	if err != nil {
 		return err
