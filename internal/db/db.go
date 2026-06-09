@@ -616,27 +616,47 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 	}
 
 	// Check for any failure.
-	var failedID, failedProcess, failedErr string
+	var failedID, failedErr string
 	for _, s := range siblingRows {
 		if s.Status == string(model.StatusFailed) {
-			failedID, failedProcess, failedErr = s.ID, s.ProcessName, s.Error
+			failedID, failedErr = s.ID, s.Error
 			break
 		}
 	}
 
 	if failedID != "" {
-		// Cascade failure to all waiting ancestors in one UPDATE.
-		reason := fmt.Sprintf("child process %q (%s) failed: %s", failedID, failedProcess, failedErr)
-		ancestors := child.CallStack
-		if len(ancestors) == 0 {
+		if child.ParentID == "" {
 			return nil
 		}
-		_, err := db.bun.NewUpdate().
+		// Wake only the direct parent so the engine can evaluate its on_error rules.
+		// If the parent has no handler, failInstance → notifyParent → TryWakeParent
+		// propagates the failure one level up, giving each ancestor a chance to handle it.
+		var parentRow instanceRow
+		if err := db.bun.NewSelect().
+			Model(&parentRow).
+			Where("id = ?", child.ParentID).
+			Scan(ctx); err != nil {
+			return fmt.Errorf("fetch parent: %w", err)
+		}
+		var parentCtx map[string]any
+		if err := json.Unmarshal([]byte(parentRow.ContextData), &parentCtx); err != nil {
+			return fmt.Errorf("unmarshal parent context: %w", err)
+		}
+		parentCtx["_child_error"] = map[string]any{
+			"step":    spawnStepID,
+			"message": failedErr,
+			"code":    "child.failed",
+		}
+		patchedCtx, err := json.Marshal(parentCtx)
+		if err != nil {
+			return fmt.Errorf("marshal parent context: %w", err)
+		}
+		_, err = db.bun.NewUpdate().
 			TableExpr("process_instances").
-			Set("status = ?", string(model.StatusFailed)).
-			Set("error = ?", reason).
+			Set("status = ?", string(model.StatusRunning)).
+			Set("context_data = ?", string(patchedCtx)).
 			Set("updated_at = ?", time.Now().UTC()).
-			Where("id IN (?)", bun.In(ancestors)).
+			Where("id = ?", child.ParentID).
 			Where("status = ?", string(model.StatusWaiting)).
 			Exec(ctx)
 		return err
@@ -698,23 +718,27 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 			}
 			output := ctxData["output"]
 			if err := validateChildOutput(childOutputSchema, output); err != nil {
-				// Treat schema violation as a child failure — cascade to all waiting ancestors.
+				// Treat schema violation as a child failure — wake the direct parent so it can
+				// evaluate on_error; if no handler the normal propagation chain takes over.
 				reason := fmt.Sprintf("child process %q (%s) output validation: %v", id, row.ProcessName, err)
-				ancestors := child.CallStack
-				if len(ancestors) > 0 {
-					_, uerr := db.bun.NewUpdate().
-						TableExpr("process_instances").
-						Set("status = ?", string(model.StatusFailed)).
-						Set("error = ?", reason).
-						Set("updated_at = ?", time.Now().UTC()).
-						Where("id IN (?)", bun.In(ancestors)).
-						Where("status = ?", string(model.StatusWaiting)).
-						Exec(ctx)
-					if uerr != nil {
-						return uerr
-					}
+				parentCtx["_child_error"] = map[string]any{
+					"step":    spawnStepID,
+					"message": reason,
+					"code":    "output.invalid",
 				}
-				return nil
+				patchedCtx, merr := json.Marshal(parentCtx)
+				if merr != nil {
+					return fmt.Errorf("marshal parent context: %w", merr)
+				}
+				_, uerr := db.bun.NewUpdate().
+					TableExpr("process_instances").
+					Set("status = ?", string(model.StatusRunning)).
+					Set("context_data = ?", string(patchedCtx)).
+					Set("updated_at = ?", time.Now().UTC()).
+					Where("id = ?", child.ParentID).
+					Where("status = ?", string(model.StatusWaiting)).
+					Exec(ctx)
+				return uerr
 			}
 			result.Output = output
 		}

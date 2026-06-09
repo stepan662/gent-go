@@ -3,7 +3,7 @@
 
 import { createServer } from 'node:http'
 import Ajv from 'ajv'
-import type { FinaleInput, FinaleOutput, StartInput, StartOutput } from './types.ts'
+import type { FailureInput, SuccessInput, SuccessOutput } from './types.ts'
 
 // Transport envelope — mirrors internal/transport/transport.go
 interface TaskRequest {
@@ -14,24 +14,27 @@ interface TaskRequest {
 
 // Implement this in server.ts and pass it to startServer().
 export interface Handlers {
-  finale: (ctx: FinaleInput) => Promise<FinaleOutput>
-  start: (ctx: StartInput) => Promise<StartOutput>
+  failure: (ctx: FailureInput) => Promise<Record<string, unknown>>
+  success: (ctx: SuccessInput) => Promise<SuccessOutput>
 }
 
 // Output schemas baked in for runtime validation via AJV.
 const stepSchemas: Record<string, object> = {
-  "finale": {
-    "type": "object",
-    "properties": {
-      "ok": {
-        "type": "boolean"
-      }
-    },
-    "required": [
-      "ok"
-    ]
-  },
   "start": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  "success": {
     "type": "object",
     "properties": {
       "ok": {

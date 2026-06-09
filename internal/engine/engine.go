@@ -396,6 +396,19 @@ func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error 
 // then suspends the parent by setting its status to waiting. The parent resumes
 // (via db.TryWakeParent) once all children complete.
 func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
+	// Woken after a child failure — route through the normal error handler so on_error
+	// rules on this step are evaluated. If no rule matches, failInstance propagates the
+	// failure upward via notifyParent → TryWakeParent, one level at a time.
+	if childErr, ok := inst.ContextData["_child_error"].(map[string]any); ok {
+		errMsg, _ := childErr["message"].(string)
+		errCode, _ := childErr["code"].(string)
+		if errCode == "" {
+			errCode = "child.failed"
+		}
+		delete(inst.ContextData, "_child_error")
+		return nil, true, e.handleCallError(inst, step, errMsg, errCode)
+	}
+
 	// If the step output was already enriched by TryWakeParent (items are maps
 	// with {id, output}, not plain string IDs), the children are done — return
 	// the existing results so the engine's normal dequeue path advances the queue.

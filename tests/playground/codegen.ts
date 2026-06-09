@@ -29,7 +29,15 @@ function toPascalCase(s: string): string {
 // Run gentctl validate — talks to the gent server and returns inferred schemas.
 const result = spawnSync(
   "go",
-  ["run", "./cmd/gentctl", "validate", "--server", "http://localhost:8888", "-f", processYaml],
+  [
+    "run",
+    "./cmd/gentctl",
+    "validate",
+    "--server",
+    "http://localhost:8888",
+    "-f",
+    processYaml,
+  ],
   { cwd: repoRoot, encoding: "utf8" },
 );
 

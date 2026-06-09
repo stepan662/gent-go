@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { client, waitForInstance } from "../helpers/client.ts";
+import { client, startMockService, waitForInstance } from "../helpers/client.ts";
 
 test("child_process — step without child_output_schema after a step with one does not fail", async () => {
   const id = crypto.randomUUID();
@@ -107,6 +107,230 @@ test("child_process — output validation failure error includes process name", 
     params: { path: { id: data!.id } },
   });
   expect(inst?.error).toContain(childName);
+});
+
+test("child_process — on_error routes to recovery when child fails", async () => {
+  const id = crypto.randomUUID();
+  const failMock = await startMockService(0, { statusCode: 500 });
+  const recoveryMock = await startMockService(0, { response: { recovered: true } });
+
+  const childName = `child_fails_${id}`;
+  const parentName = `parent_handles_${id}`;
+
+  await client.PUT("/definitions", {
+    body: {
+      name: childName,
+      steps: [
+        {
+          id: "action",
+          call: { type: "rest" as const, endpoint: `http://localhost:${failMock.port}/action` },
+          timeout_ms: 2000,
+        },
+      ],
+    },
+  });
+
+  await client.PUT("/definitions", {
+    body: {
+      name: parentName,
+      steps: [
+        {
+          id: "spawn",
+          call: { type: "child_process" as const, processes: [{ name: childName }] },
+          on_error: [{ code: ["child.%"], goto: "#recovery" }],
+        },
+        {
+          id: "recovery",
+          call: {
+            type: "rest" as const,
+            endpoint: `http://localhost:${recoveryMock.port}/action`,
+            output_schema: {
+              type: "object",
+              properties: { recovered: { type: "boolean" } },
+              required: ["recovered"],
+            },
+          },
+          timeout_ms: 2000,
+        },
+      ],
+    },
+  });
+
+  const { data } = await client.POST("/instances", { body: { process: parentName } });
+  expect(await waitForInstance(data!.id, 10_000)).toBe("completed");
+
+  const { data: inst } = await client.GET("/instances/{id}", { params: { path: { id: data!.id } } });
+  expect((inst?.context?.outputs as any)?.recovery?.recovered).toBe(true);
+
+  failMock.stop();
+  recoveryMock.stop();
+});
+
+test("child_process — no on_error on child_process step cascades to parent failure", async () => {
+  const id = crypto.randomUUID();
+  const failMock = await startMockService(0, { statusCode: 500 });
+
+  const childName = `child_fails_${id}`;
+  const parentName = `parent_no_handler_${id}`;
+
+  await client.PUT("/definitions", {
+    body: {
+      name: childName,
+      steps: [
+        {
+          id: "action",
+          call: { type: "rest" as const, endpoint: `http://localhost:${failMock.port}/action` },
+          timeout_ms: 2000,
+        },
+      ],
+    },
+  });
+
+  await client.PUT("/definitions", {
+    body: {
+      name: parentName,
+      steps: [
+        {
+          id: "spawn",
+          call: { type: "child_process" as const, processes: [{ name: childName }] },
+        },
+      ],
+    },
+  });
+
+  const { data } = await client.POST("/instances", { body: { process: parentName } });
+  expect(await waitForInstance(data!.id, 10_000)).toBe("failed");
+
+  failMock.stop();
+});
+
+test("child_process — on_error bubbles to grandparent when parent has no handler", async () => {
+  const id = crypto.randomUUID();
+  const failMock = await startMockService(0, { statusCode: 500 });
+  const recoveryMock = await startMockService(0, { response: { recovered: true } });
+
+  const childName = `leaf_fails_${id}`;
+  const middleName = `middle_no_handler_${id}`;
+  const grandName = `grand_handles_${id}`;
+
+  await client.PUT("/definitions", {
+    body: {
+      name: childName,
+      steps: [
+        {
+          id: "action",
+          call: { type: "rest" as const, endpoint: `http://localhost:${failMock.port}/action` },
+          timeout_ms: 2000,
+        },
+      ],
+    },
+  });
+
+  await client.PUT("/definitions", {
+    body: {
+      name: middleName,
+      steps: [
+        {
+          id: "spawn",
+          call: { type: "child_process" as const, processes: [{ name: childName }] },
+        },
+      ],
+    },
+  });
+
+  await client.PUT("/definitions", {
+    body: {
+      name: grandName,
+      steps: [
+        {
+          id: "spawn_middle",
+          call: { type: "child_process" as const, processes: [{ name: middleName }] },
+          on_error: [{ code: ["child.%"], goto: "#recovery" }],
+        },
+        {
+          id: "recovery",
+          call: {
+            type: "rest" as const,
+            endpoint: `http://localhost:${recoveryMock.port}/action`,
+            output_schema: {
+              type: "object",
+              properties: { recovered: { type: "boolean" } },
+              required: ["recovered"],
+            },
+          },
+          timeout_ms: 2000,
+        },
+      ],
+    },
+  });
+
+  const { data } = await client.POST("/instances", { body: { process: grandName } });
+  expect(await waitForInstance(data!.id, 15_000)).toBe("completed");
+
+  const { data: inst } = await client.GET("/instances/{id}", { params: { path: { id: data!.id } } });
+  expect((inst?.context?.outputs as any)?.recovery?.recovered).toBe(true);
+
+  failMock.stop();
+  recoveryMock.stop();
+});
+
+test("child_process — error context has correct code and step when child fails", async () => {
+  const id = crypto.randomUUID();
+  const failMock = await startMockService(0, { statusCode: 500 });
+  const recoveryMock = await startMockService(0, { response: { ok: true } });
+
+  const childName = `child_err_ctx_${id}`;
+  const parentName = `parent_err_ctx_${id}`;
+
+  await client.PUT("/definitions", {
+    body: {
+      name: childName,
+      steps: [
+        {
+          id: "action",
+          call: { type: "rest" as const, endpoint: `http://localhost:${failMock.port}/action` },
+          timeout_ms: 2000,
+        },
+      ],
+    },
+  });
+
+  await client.PUT("/definitions", {
+    body: {
+      name: parentName,
+      steps: [
+        {
+          id: "spawn",
+          call: { type: "child_process" as const, processes: [{ name: childName }] },
+          on_error: [{ code: ["child.%"], goto: "#recovery" }],
+        },
+        {
+          id: "recovery",
+          call: {
+            type: "rest" as const,
+            endpoint: `http://localhost:${recoveryMock.port}/action`,
+            output_schema: {
+              type: "object",
+              properties: { ok: { type: "boolean" } },
+              required: ["ok"],
+            },
+          },
+          timeout_ms: 2000,
+        },
+      ],
+    },
+  });
+
+  const { data } = await client.POST("/instances", { body: { process: parentName } });
+  expect(await waitForInstance(data!.id, 10_000)).toBe("completed");
+
+  const { data: inst } = await client.GET("/instances/{id}", { params: { path: { id: data!.id } } });
+  const err = inst?.context?.error as any;
+  expect(err?.code).toBe("child.failed");
+  expect(err?.step).toBe("spawn");
+
+  failMock.stop();
+  recoveryMock.stop();
 });
 
 test("child_process — recursive spawn completes with correct aggregated output", async () => {

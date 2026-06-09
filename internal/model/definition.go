@@ -185,7 +185,7 @@ func (SwitchMap) JSONSchemaBytes() ([]byte, error) {
 // Rules are evaluated in order; the first match applies.
 // An empty Code list is a catch-all matching any error.
 type ErrorCase struct {
-	Code    []string `json:"code,omitempty"    description:"SQL LIKE patterns matched against the error code. '%' = any chars, '_' = one char. E.g. \"http.4__\", \"network.%\". Empty = catch-all."`
+	Code    []string `json:"code,omitempty"    description:"SQL LIKE patterns matched against the error code. '%' = any chars, '_' = one char. Empty = catch-all. Known codes — REST: http.NNN (e.g. http.500), network.timeout, network.error, output.parse, output.invalid; Script: script.N (exit code, e.g. script.1), script.timeout, script.error, output.parse; Child process: child.failed, output.invalid."`
 	Retries int      `json:"retries,omitempty" description:"Number of retries before following Goto or failing. 0 = no retries."`
 	Goto    string   `json:"goto,omitempty"    description:"Step to route to when retries are exhausted. '#step-id' or '$end'. Omit to fail the instance."`
 }
@@ -356,9 +356,6 @@ func validateStep(s *Step, stepIDs map[string]struct{}) error {
 				return fmt.Errorf("step %q on_error[%d]: goto %q is not a known step", s.ID, i, ec.Goto)
 			}
 		}
-	}
-	if s.Call != nil && s.Call.Type == CallTypeChildProcess && len(s.OnError) > 0 {
-		return fmt.Errorf("step %q: on_error is not supported on child_process steps", s.ID)
 	}
 	if s.Call != nil && s.Call.Type == CallTypeREST {
 		for _, pat := range s.Call.AcceptedStatus {

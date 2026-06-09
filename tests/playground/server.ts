@@ -10,14 +10,13 @@ import { startServer, type Handlers } from "./generated/server.ts";
 const PORT = 3001;
 
 const handlers: Handlers = {
-  start: async (_ctx) => {
+  success: async (_ctx) => {
     await sleep(50);
-    throw new Error("error");
     return { ok: true };
   },
-  finale: async ({ error }) => {
+  failure: async ({ error }) => {
     console.log(error);
-    return { ok: true };
+    return {};
   },
 };
 

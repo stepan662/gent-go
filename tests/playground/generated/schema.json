@@ -1,31 +1,33 @@
 {
   "process": "order-pipeline",
-  "version": 0,
-  "process_output": {
-    "$ref": "#/$defs/output"
-  },
   "tasks": {
-    "finale": {
+    "failure": {
       "call_type": "rest",
       "input": {
-        "$ref": "#/$defs/finale_input"
-      },
-      "output": {
-        "$ref": "#/$defs/finale_output"
+        "$ref": "#/$defs/failure_input"
       }
     },
     "start": {
-      "call_type": "rest",
+      "call_type": "child_process",
       "input": {
         "type": "object"
       },
       "output": {
         "$ref": "#/$defs/start_output"
       }
+    },
+    "success": {
+      "call_type": "rest",
+      "input": {
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/success_output"
+      }
     }
   },
   "$defs": {
-    "finale_input": {
+    "failure_input": {
       "type": "object",
       "properties": {
         "error": {
@@ -36,29 +38,21 @@
         "error"
       ]
     },
-    "finale_output": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "ok"
-      ]
-    },
-    "output": {
-      "type": "object",
-      "properties": {
-        "is_ok": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "is_ok"
-      ]
-    },
     "start_output": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    "success_output": {
       "type": "object",
       "properties": {
         "ok": {

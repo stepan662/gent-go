@@ -3,34 +3,33 @@ name: order-pipeline
 steps:
   - id: start
     call:
-      type: rest
-      endpoint: http://localhost:3000/start
-      output_schema:
-        type: object
-        properties:
-          ok:
-            type: boolean
-        required: [ok]
+      type: child_process
+      processes:
+        - name: child
     on_error:
-      - code: ["network.%"]
-        goto: "#finale"
+      - code: ["child.failed"]
+        goto: "#failure"      
 
-  - id: finale
-    params:
-      error: "{{error != null ? error.code : 'hi'}}"
+  - id: success
     call:
       type: rest
-      endpoint: http://localhost:3001/finale
+      endpoint: http://localhost:3001/success
       output_schema:
         type: object
         properties:
           ok:
             type: boolean
         required: [ok]
-    on_error:
-      - retries: 2
-output:
-  is_ok: "{{outputs.finale.ok}}"
+    switch:
+      - when: default
+        goto: $end
+
+  - id: failure
+    call:
+      type: rest
+      endpoint: http://localhost:3001/failure
+    params:
+      error: "{{error.code}}: {{error.message}} ({{error.step}})"
   
 
     
