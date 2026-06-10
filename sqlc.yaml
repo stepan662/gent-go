@@ -9,6 +9,8 @@ sql:
         package: "dbgen"
         out: "internal/db/gen"
 
+  # PostgreSQL output is generated solely to validate cross-engine SQL compatibility
+  # (go build ./... compiles it). The directory is gitignored and never imported at runtime.
   - name: postgresql
     engine: "postgresql"
     schema: "internal/db/migrations"
@@ -16,4 +18,4 @@ sql:
     gen:
       go:
         package: "dbgenpg"
-        out: "internal/db/gen_pg"
+        out: "internal/db/gen_pg_validate"

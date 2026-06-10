@@ -14,6 +14,9 @@
 # Go build cache
 /vendor/
 
+# sqlc postgres output — generated for cross-engine SQL validation only, never imported at runtime
+/internal/db/gen_pg_validate/
+
 # macOS
 .DS_Store
 

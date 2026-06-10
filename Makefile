@@ -19,7 +19,7 @@ run:
 		-log $(log) \
 		$(ARGS)
 
-build:
+build: sqlc
 	$(BUILD_FLAGS) go build -tags "sqlite_omit_load_extension" -ldflags="-s -w" -o gent ./cmd/gent
 	$(BUILD_FLAGS) go build -ldflags="-s -w" -o gentctl ./cmd/gentctl
 

@@ -62,55 +62,6 @@ func open(sqldb *sql.DB, dialect string) (*DB, error) {
 	return &DB{sqldb: sqldb, q: dbgen.New(dbtx), dialect: dialect}, nil
 }
 
-// pgRewriter wraps a DBTX and translates SQLite-style placeholders (?N / ?)
-// to PostgreSQL-style ($N) before executing queries.
-// sqlc generates ?1, ?2, … for SQLite (positional) and $1, $2, … for Postgres.
-// At runtime we compile one binary using the SQLite-generated package, so
-// we must rewrite before sending queries to a Postgres connection.
-type pgRewriter struct{ dbgen.DBTX }
-
-func (r pgRewriter) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
-	return r.DBTX.ExecContext(ctx, rewritePlaceholders(q), args...)
-}
-func (r pgRewriter) PrepareContext(ctx context.Context, q string) (*sql.Stmt, error) {
-	return r.DBTX.PrepareContext(ctx, rewritePlaceholders(q))
-}
-func (r pgRewriter) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
-	return r.DBTX.QueryContext(ctx, rewritePlaceholders(q), args...)
-}
-func (r pgRewriter) QueryRowContext(ctx context.Context, q string, args ...any) *sql.Row {
-	return r.DBTX.QueryRowContext(ctx, rewritePlaceholders(q), args...)
-}
-
-// rewritePlaceholders converts SQLite placeholder syntax to PostgreSQL:
-//   - ?N  (named positional, e.g. ?1) → $N   (same index, parameter reused)
-//   - ?   (plain positional)          → $N   (auto-incremented counter)
-func rewritePlaceholders(query string) string {
-	var b strings.Builder
-	b.Grow(len(query))
-	n := 0
-	for i := 0; i < len(query); {
-		if query[i] != '?' {
-			b.WriteByte(query[i])
-			i++
-			continue
-		}
-		j := i + 1
-		for j < len(query) && query[j] >= '0' && query[j] <= '9' {
-			j++
-		}
-		b.WriteByte('$')
-		if j > i+1 {
-			b.WriteString(query[i+1 : j]) // ?N → $N
-		} else {
-			n++
-			fmt.Fprintf(&b, "%d", n) // ? → $counter
-		}
-		i = j
-	}
-	return b.String()
-}
-
 func (db *DB) Close() error { return db.sqldb.Close() }
 
 // ph returns the positional placeholder for parameter n (1-indexed).
@@ -186,16 +137,11 @@ func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []D
 		return err
 	}
 	ctx := context.Background()
-	tx, err := db.sqldb.BeginTx(ctx, nil)
+	tx, qtx, err := db.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var txDbtx dbgen.DBTX = tx
-	if db.dialect == "postgres" {
-		txDbtx = pgRewriter{txDbtx}
-	}
-	qtx := dbgen.New(txDbtx)
 
 	if err := qtx.InsertDefinition(ctx, dbgen.InsertDefinitionParams{
 		Name:        def.Name,
