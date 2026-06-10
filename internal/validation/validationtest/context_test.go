@@ -140,12 +140,14 @@ func TestGenerate_OnError_MixedPath_FailingStepOutputNullable(t *testing.T) {
 					"properties": {"ok": {"type": "boolean"}},
 					"required": ["ok"]
 				}},
-				"on_error": [{"next": "$finale"}]
+				"on_error": [{"goto": "$finale"}],
+				"switch": "next"
 			},
 			{
 				"id": "finale",
 				"call": {"type": "rest", "endpoint": "http://x"},
-				"params": {"val": "{{outputs.start.ok}}", "errCode": "{{error.code}}"}
+				"params": {"val": "{{outputs.start.ok}}", "errCode": "{{error.code}}"},
+				"switch": "end"
 			}
 		]
 	}`)
@@ -171,12 +173,13 @@ func TestGenerate_OnError_ExclusivePath_ErrorRequiredOutputAbsent(t *testing.T) 
 					"required": ["result"]
 				}},
 				"switch": [{"goto": "end"}],
-				"on_error": [{"next": "$handler"}]
+				"on_error": [{"goto": "$handler"}]
 			},
 			{
 				"id": "handler",
 				"call": {"type": "rest", "endpoint": "http://x"},
-				"params": {"code": "{{error.code}}"}
+				"params": {"code": "{{error.code}}"},
+				"switch": "end"
 			}
 		]
 	}`)

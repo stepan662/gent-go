@@ -74,7 +74,7 @@ func outputContextSets(def *model.ProcessDefinition) (required, optional []strin
 			}()
 		isErrEnd := func() bool {
 			for _, ec := range s.OnError {
-				if ec.Next == model.GotoEnd {
+				if ec.Goto == model.GotoEnd {
 					return true
 				}
 			}
@@ -164,9 +164,13 @@ func buildPreds(steps []*model.Step) [][]predEdge {
 				addedNext = true
 			}
 		}
+		// Backward-compat: steps with no switch fall through to the next step.
+		if len(s.Switch) == 0 && i+1 < n {
+			preds[i+1] = append(preds[i+1], predEdge{idx: i})
+		}
 		for _, ec := range s.OnError {
-			if ec.Next != "" && ec.Next != model.GotoEnd {
-				if j, ok := idx[ec.Next]; ok {
+			if ec.Goto != "" && ec.Goto != model.GotoEnd {
+				if j, ok := idx[ec.Goto]; ok {
 					preds[j] = append(preds[j], predEdge{idx: i, isErr: true})
 				}
 			}

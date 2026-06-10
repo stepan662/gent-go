@@ -235,8 +235,8 @@ func (SwitchMap) JSONSchemaBytes() ([]byte, error) {
 // An empty Code list is a catch-all matching any error.
 type ErrorCase struct {
 	Code        []string `json:"code,omitempty"        description:"SQL LIKE patterns matched against the error code. '%' = any chars, '_' = one char. Empty = catch-all. Known codes — REST: http.NNN (e.g. http.500), http.timeout, pre.error, pre.timeout, output.parse, output.invalid; Script: script.N (exit code, e.g. script.1), script.timeout, pre.exec, output.parse; Child process: child.failed, output.invalid. pre.* codes mean the call never reached the remote."`
-	Retries     int      `json:"retries,omitempty"     description:"Number of retries before following Next or failing. 0 = no retries. On only_once:true steps only pre.* codes (or rules with not_reached:true) may have retries > 0."`
-	Next        string   `json:"next,omitempty"        description:"Step to route to when retries are exhausted. '$step-id' or 'end'. Omit to fail the instance."`
+	Retries     int      `json:"retries,omitempty"     description:"Number of retries before following goto or failing. 0 = no retries. On only_once:true steps only pre.* codes (or rules with not_reached:true) may have retries > 0."`
+	Goto        string   `json:"goto,omitempty"        description:"Step to route to when retries are exhausted. '$step-id' or 'end'. Omit to fail the instance."`
 	NotReached  *bool    `json:"not_reached,omitempty" description:"Assert that this error code means the remote call was never reached. When true, retries are allowed even on only_once:true steps. Omit to use the engine's default classification (pre.* = not reached, everything else = potentially reached)."`
 }
 
@@ -244,15 +244,15 @@ func (e ErrorCase) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Code       []string `json:"code,omitempty"`
 		Retries    int      `json:"retries,omitempty"`
-		Next       string   `json:"next,omitempty"`
+		Goto       string   `json:"goto,omitempty"`
 		NotReached *bool    `json:"not_reached,omitempty"`
 	}
 	w := wire{Code: e.Code, Retries: e.Retries, NotReached: e.NotReached}
-	if e.Next != "" {
-		if e.Next == GotoEnd {
-			w.Next = "end"
+	if e.Goto != "" {
+		if e.Goto == GotoEnd {
+			w.Goto = "end"
 		} else {
-			w.Next = "$" + e.Next
+			w.Goto = "$" + e.Goto
 		}
 	}
 	return json.Marshal(w)
@@ -262,7 +262,7 @@ func (e *ErrorCase) UnmarshalJSON(data []byte) error {
 	type wire struct {
 		Code       []string `json:"code,omitempty"`
 		Retries    int      `json:"retries,omitempty"`
-		Next       string   `json:"next,omitempty"`
+		Goto       string   `json:"goto,omitempty"`
 		NotReached *bool    `json:"not_reached,omitempty"`
 	}
 	var w wire
@@ -272,14 +272,14 @@ func (e *ErrorCase) UnmarshalJSON(data []byte) error {
 	e.Code = w.Code
 	e.Retries = w.Retries
 	e.NotReached = w.NotReached
-	if w.Next == "" {
-		e.Next = ""
-	} else if w.Next == "end" {
-		e.Next = GotoEnd
-	} else if strings.HasPrefix(w.Next, "$") {
-		e.Next = w.Next[1:]
+	if w.Goto == "" {
+		e.Goto = ""
+	} else if w.Goto == "end" {
+		e.Goto = GotoEnd
+	} else if strings.HasPrefix(w.Goto, "$") {
+		e.Goto = w.Goto[1:]
 	} else {
-		return fmt.Errorf("on_error: next %q must be \"end\" or a step reference like \"$step-id\"", w.Next)
+		return fmt.Errorf("on_error: goto %q must be \"end\" or a step reference like \"$step-id\"", w.Goto)
 	}
 	return nil
 }
@@ -448,9 +448,9 @@ func validateStep(s *Step, stepIDs map[string]struct{}, stepIdx, lastIdx int) er
 		if len(ec.Code) == 0 && !isLast {
 			return fmt.Errorf("step %q on_error[%d]: catch-all must be the last rule (unreachable rules after it)", s.ID, i)
 		}
-		if ec.Next != "" && ec.Next != GotoEnd {
-			if _, ok := stepIDs[ec.Next]; !ok {
-				return fmt.Errorf("step %q on_error[%d]: next %q is not a known step", s.ID, i, ec.Next)
+		if ec.Goto != "" && ec.Goto != GotoEnd {
+			if _, ok := stepIDs[ec.Goto]; !ok {
+				return fmt.Errorf("step %q on_error[%d]: goto %q is not a known step", s.ID, i, ec.Goto)
 			}
 		}
 		if onlyOnce && ec.Retries > 0 {

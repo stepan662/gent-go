@@ -51,9 +51,10 @@ func TestGenerate_TaskOutput(t *testing.T) {
 				"call": {"type": "rest", "endpoint": "http://x", "output_schema": {
 					"type": "object",
 					"properties": { "charged": { "type": "boolean" } }
-				}}
+				}},
+				"switch": "next"
 			},
-			{ "id": "notify", "call": {"type": "rest", "endpoint": "http://x"} }
+			{ "id": "notify", "call": {"type": "rest", "endpoint": "http://x"}, "switch": "end" }
 		]
 	}`)
 	assertJSON(t, out.Tasks["charge"].Output, `{"$ref": "#/$defs/charge_output"}`)
@@ -73,15 +74,17 @@ func TestGenerate_FlatStepsWithOutputs(t *testing.T) {
 			{
 				"id": "charge",
 				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }},
-				"switch": [{"case": "self.charged == true", "goto": "$ship"}]
+				"switch": [{"case": "self.charged == true", "goto": "$ship"}, {"goto": "$refund"}]
 			},
 			{
 				"id": "ship",
-				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "tracking": { "type": "string" } } }}
+				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "tracking": { "type": "string" } } }},
+				"switch": "end"
 			},
 			{
 				"id": "refund",
-				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "refunded": { "type": "boolean" } } }}
+				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "refunded": { "type": "boolean" } } }},
+				"switch": "end"
 			}
 		]
 	}`)
@@ -160,7 +163,7 @@ func TestGenerate_Child_WithOutputSchema_ExposesTypedOutput(t *testing.T) {
 					"required": ["count"]
 				}
 			},
-			"switch": [{"goto": "end"}]
+			"switch": "end"
 		}]
 	}`)
 	// spawn should appear in tasks with a typed output
@@ -180,7 +183,7 @@ func TestGenerate_Child_WithoutOutputSchema_NoOutput(t *testing.T) {
 		"steps": [{
 			"id": "spawn",
 			"call": { "type": "child", "name": "worker" },
-			"switch": [{"goto": "end"}]
+			"switch": "end"
 		}]
 	}`)
 	if _, ok := out.Tasks["spawn"]; ok {
@@ -207,7 +210,7 @@ func TestGenerate_Child_OutputAvailableInDownstreamStep(t *testing.T) {
 						"required": ["count"]
 					}
 				},
-				"switch": [{"goto": "next"}]
+				"switch": "next"
 			},
 			{
 				"id": "report",
@@ -235,7 +238,7 @@ func TestGenerate_ChildParallel_WithOutputSchemas_ExposesKeyedOutput(t *testing.
 					"right": { "name": "worker", "output_schema": { "type": "object", "properties": { "num": { "type": "integer" } }, "required": ["num"] } }
 				}
 			},
-			"switch": [{"goto": "end"}]
+			"switch": "end"
 		}]
 	}`)
 	// spawn should appear in tasks
@@ -272,7 +275,7 @@ func TestGenerate_ChildParallel_KeyedOutputAvailableInDownstreamStep(t *testing.
 						"right": { "name": "worker", "output_schema": { "type": "object", "properties": { "num": { "type": "integer" } }, "required": ["num"] } }
 					}
 				},
-				"switch": [{"goto": "next"}]
+				"switch": "next"
 			},
 			{
 				"id": "aggregate",
@@ -305,7 +308,7 @@ func TestGenerate_ChildParallel_MixedOutputSchemas_UntypedKeyIsObject(t *testing
 					"untyped": { "name": "other" }
 				}
 			},
-			"switch": [{"goto": "end"}]
+			"switch": "end"
 		}]
 	}`)
 	spawnOutput := out.Defs["spawn_output"]

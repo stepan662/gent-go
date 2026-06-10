@@ -461,7 +461,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
 					OnlyOnce: boolPtr(true),
-					OnError:  []ErrorCase{{Code: []string{"http.%"}, Next: "handler"}},
+					OnError:  []ErrorCase{{Code: []string{"http.%"}, Goto: "handler"}},
 				},
 				restStepEnd("handler", "http://x"),
 			}},

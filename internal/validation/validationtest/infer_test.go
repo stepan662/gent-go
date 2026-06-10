@@ -34,11 +34,13 @@ func TestGenerate_Input_PrecedingTaskOutput(t *testing.T) {
 		"steps": [
 			{
 				"id": "charge",
-				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }}
+				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }},
+				"switch": "next"
 			},
 			{
 				"id": "notify",
-				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "sent": { "type": "boolean" } } }}
+				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "sent": { "type": "boolean" } } }},
+				"switch": "end"
 			}
 		]
 	}`)
@@ -50,10 +52,11 @@ func TestGenerate_Input_TaskWithNoOutputSkippedInContext(t *testing.T) {
 	out := runGenerate(t, `{
 		"name": "p",
 		"steps": [
-			{ "id": "log", "call": {"type": "rest", "endpoint": "http://x"} },
+			{ "id": "log", "call": {"type": "rest", "endpoint": "http://x"}, "switch": "next" },
 			{
 				"id": "notify",
-				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "sent": { "type": "boolean" } } }}
+				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "sent": { "type": "boolean" } } }},
+				"switch": "end"
 			}
 		]
 	}`)
@@ -66,11 +69,12 @@ func TestGenerate_Input_SwitchOnlyStepSkippedInContext(t *testing.T) {
 		"steps": [
 			{
 				"id": "charge",
-				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }}
+				"call": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }},
+				"switch": "next"
 			},
 			{
 				"id": "route",
-				"switch": [{"case": "outputs.charge.charged == true", "goto": "$ship"}]
+				"switch": [{"case": "outputs.charge.charged == true", "goto": "$ship"}, {"goto": "end"}]
 			},
 			{
 				"id": "ship",
@@ -150,12 +154,14 @@ func TestGenerate_Input_Params_OneOfOutputPropertyAccess(t *testing.T) {
 						{"type":"object","properties":{"valid":{"type":"boolean"}}},
 						{"type":"string"}
 					]
-				}}
+				}},
+				"switch": "next"
 			},
 			{
 				"id": "check_fraud",
 				"call": {"type": "rest", "endpoint": "http://x"},
-				"params": { "result": "{{outputs.save_order.valid}}" }
+				"params": { "result": "{{outputs.save_order.valid}}" },
+				"switch": "end"
 			}
 		]
 	}`)
@@ -176,12 +182,14 @@ func TestGenerate_MixedTemplate_NullableExpressionRejected(t *testing.T) {
 			{
 				"id": "start",
 				"call": {"type": "rest", "endpoint": "http://x"},
-				"on_error": [{"next": "$finale"}]
+				"on_error": [{"goto": "$finale"}],
+				"switch": "next"
 			},
 			{
 				"id": "finale",
 				"call": {"type": "rest", "endpoint": "http://x"},
-				"params": {"msg": "{{error.code}}_{{error.message}}"}
+				"params": {"msg": "{{error.code}}_{{error.message}}"},
+				"switch": "end"
 			}
 		]
 	}`)
@@ -201,13 +209,14 @@ func TestGenerate_MixedTemplate_NonNullableExpressionAccepted(t *testing.T) {
 			{
 				"id": "worker",
 				"call": {"type": "rest", "endpoint": "http://x"},
-				"switch": [{"goto": "end"}],
-				"on_error": [{"next": "$handler"}]
+				"switch": "end",
+				"on_error": [{"goto": "$handler"}]
 			},
 			{
 				"id": "handler",
 				"call": {"type": "rest", "endpoint": "http://x"},
-				"params": {"msg": "{{error.code}}_{{error.message}}"}
+				"params": {"msg": "{{error.code}}_{{error.message}}"},
+				"switch": "end"
 			}
 		]
 	}`)

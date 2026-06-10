@@ -90,7 +90,7 @@ test("only_once:true — accepts retries on pre.%", async () => {
           call: { type: "rest" as const, endpoint: "http://localhost:19990/x" },
           on_error: [
             { code: ["pre.%"], retries: 3 },
-            { next: "end" },
+            { goto: "end" },
           ],
           switch: [{ goto: "end" }],
         },
@@ -129,7 +129,7 @@ test("only_once:true — accepts not_reached:true override for http.422", async 
           call: { type: "rest" as const, endpoint: "http://localhost:19990/x" },
           on_error: [
             { code: ["http.422"], not_reached: true, retries: 2 },
-            { code: ["http.%"], next: "end" },
+            { code: ["http.%"], goto: "end" },
           ],
           switch: [{ goto: "end" }],
         },
@@ -166,7 +166,7 @@ test("only_once:true — next-only rule on http.% is accepted (no retries)", asy
           id: "charge",
           only_once: true,
           call: { type: "rest" as const, endpoint: "http://localhost:19990/x" },
-          on_error: [{ code: ["http.%"], next: "$handler" }],
+          on_error: [{ code: ["http.%"], goto: "$handler" }],
           switch: [{ goto: "next" }],
         },
         {
@@ -201,7 +201,7 @@ test("only_once:true — http.500 routes to handler and is called exactly once",
           on_error: [
             // pre.% rule present — would retry on connection errors but not on http.*
             { code: ["pre.%"], retries: 3 },
-            { code: ["http.%"], next: "$handler" },
+            { code: ["http.%"], goto: "$handler" },
           ],
           timeout_ms: 2000,
           switch: [{ goto: "next" }],
@@ -255,7 +255,7 @@ test("only_once:true — connection refused triggers pre.% retries", async () =>
           },
           on_error: [
             // 1 retry on pre.% then complete via end
-            { code: ["pre.%"], retries: 1, next: "end" },
+            { code: ["pre.%"], retries: 1, goto: "end" },
           ],
           timeout_ms: 2000,
           switch: [{ goto: "end" }],
@@ -329,7 +329,7 @@ test("default step (no only_once) — http.500 retries normally", async () => {
             type: "rest" as const,
             endpoint: `http://localhost:${failMock.port}/action`,
           },
-          on_error: [{ code: ["http.%"], retries: 1, next: "end" }],
+          on_error: [{ code: ["http.%"], retries: 1, goto: "end" }],
           timeout_ms: 2000,
           switch: [{ goto: "end" }],
         },

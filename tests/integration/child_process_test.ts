@@ -133,7 +133,7 @@ test("child — on_error routes to recovery when child fails", async () => {
         {
           id: "spawn",
           call: { type: "child" as const, name: childName },
-          on_error: [{ code: ["child.%"], next: "$recovery" }],
+          on_error: [{ code: ["child.%"], goto: "$recovery" }],
           switch: [{ goto: "next" }],
         },
         {
@@ -247,7 +247,7 @@ test("child — on_error bubbles to grandparent when parent has no handler", asy
         {
           id: "spawn_middle",
           call: { type: "child" as const, name: middleName },
-          on_error: [{ code: ["child.%"], next: "$recovery" }],
+          on_error: [{ code: ["child.%"], goto: "$recovery" }],
           switch: [{ goto: "next" }],
         },
         {
@@ -307,7 +307,7 @@ test("child — error context has correct code and step when child fails", async
         {
           id: "spawn",
           call: { type: "child" as const, name: childName },
-          on_error: [{ code: ["child.%"], next: "$recovery" }],
+          on_error: [{ code: ["child.%"], goto: "$recovery" }],
           switch: [{ goto: "next" }],
         },
         {

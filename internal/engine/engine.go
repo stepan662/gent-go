@@ -357,8 +357,8 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 		"code":    errCode,
 	}
 
-	if matched != nil && matched.Next != "" {
-		if matched.Next == model.GotoEnd {
+	if matched != nil && matched.Goto != "" {
+		if matched.Goto == model.GotoEnd {
 			inst.Status = model.StatusCompleted
 			inst.NextRetryAt = nil
 			e.log.Info("instance completed via error route", "id", inst.ID, "step", step.ID, "code", errCode)
@@ -367,7 +367,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 			}
 			return e.notifyParent(inst)
 		}
-		newQueue, err := e.queueFromStep(inst, matched.Next)
+		newQueue, err := e.queueFromStep(inst, matched.Goto)
 		if err != nil {
 			return e.failInstance(inst, err.Error())
 		}
@@ -375,7 +375,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 		inst.RetryCount = 0
 		inst.NextRetryAt = nil
 		e.log.Info("routing to error handler",
-			"id", inst.ID, "step", step.ID, "next", matched.Next, "code", errCode)
+			"id", inst.ID, "step", step.ID, "goto", matched.Goto, "code", errCode)
 		return e.db.UpdateInstance(inst)
 	}
 
