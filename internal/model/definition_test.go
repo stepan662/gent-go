@@ -256,6 +256,19 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: "call.type must be one of: rest, script",
 		},
 		{
+			name: "switch missing catch-all is rejected",
+			def: ProcessDefinition{Name: "p", Steps: []*Step{
+				{
+					ID: "charge", Call: &Call{Type: CallTypeREST, Endpoint: "http://x"},
+					Switch: SwitchMap{
+						{Case: "self.ok == true", Next: "ship"},
+					},
+				},
+				restStep("ship", "http://x"),
+			}},
+			wantErr: `last case must be a catch-all`,
+		},
+		{
 			name: "switch catch-all not last is rejected",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{

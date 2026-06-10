@@ -370,6 +370,9 @@ func validateStep(s *Step, stepIDs map[string]struct{}) error {
 				}
 			}
 		}
+		if s.Switch[len(s.Switch)-1].Case != "" {
+			return fmt.Errorf("step %q switch: last case must be a catch-all (omit 'case' to match unconditionally)", s.ID)
+		}
 	}
 	onlyOnce := s.OnlyOnce != nil && *s.OnlyOnce
 	for i, ec := range s.OnError {

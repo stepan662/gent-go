@@ -11,11 +11,15 @@ steps:
     switch:
       - case: "input.ttl > 0"
         next: $recursion
+      - next: end
 
   - id: recursion
     call:
       type: child_process
       processes:
+        - name: order-pipeline
+          input:
+            ttl: "{{ input.ttl - 1 }}"
         - name: order-pipeline
           input:
             ttl: "{{ input.ttl - 1 }}"
