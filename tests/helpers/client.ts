@@ -22,7 +22,7 @@ export async function waitForInstance(
     });
     if (error) throw new Error(`get_instance failed: ${JSON.stringify(error)}`);
     const status = data?.status;
-    if (status === "completed" || status === "failed") return status!;
+    if (status === "completed" || status === "failed" || status === "cancelled") return status!;
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`instance ${id} did not complete within ${timeoutMs}ms`);
@@ -48,22 +48,30 @@ export async function startMockService(port: number, options: MockServiceOptions
   const firstRequestReceived = new Promise<void>((r) => {
     resolveFirst = r;
   });
+  // pendingSend is set when firstRequestDelayMs === Infinity so the caller
+  // can unblock the held HTTP response by calling release().
+  let pendingSend: (() => void) | undefined;
 
   const server = createServer((req, res) => {
     count++;
     req.socket.on("error", () => {}); // suppress ECONNRESET
     res.on("error", () => {});
 
-    if (count === 1) resolveFirst();
-
     const send = () => {
       res.writeHead(statusCode, { "Content-Type": "application/json" });
       res.end(body);
     };
 
-    if (count === 1 && firstRequestDelayMs > 0) {
-      if (isFinite(firstRequestDelayMs)) setTimeout(send, firstRequestDelayMs);
-      // Infinity: hold the connection open until the caller closes it.
+    if (count === 1) {
+      resolveFirst();
+      if (!isFinite(firstRequestDelayMs)) {
+        // Hold until release() is called.
+        pendingSend = send;
+      } else if (firstRequestDelayMs > 0) {
+        setTimeout(send, firstRequestDelayMs);
+      } else {
+        send();
+      }
     } else {
       send();
     }
@@ -76,6 +84,8 @@ export async function startMockService(port: number, options: MockServiceOptions
     port: boundPort,
     firstRequestReceived,
     requestCount: () => count,
+    // Unblocks the held first request when firstRequestDelayMs === Infinity.
+    release: () => { pendingSend?.(); pendingSend = undefined; },
     stop: () => new Promise<void>((r) => server.close(() => r())),
   };
 }

@@ -89,6 +89,17 @@ SET step_queue       = sqlc.arg(step_queue),
     lease_expires_at = NULL
 WHERE id = sqlc.arg(id);
 
+-- name: UpdateInstanceProgress :exec
+UPDATE process_instances
+SET step_queue       = sqlc.arg(step_queue),
+    context_data     = sqlc.arg(context_data),
+    retry_count      = sqlc.arg(retry_count),
+    next_retry_at    = sqlc.arg(next_retry_at),
+    updated_at       = sqlc.arg(updated_at),
+    worker_id        = NULL,
+    lease_expires_at = NULL
+WHERE id = sqlc.arg(id);
+
 -- name: GetInstance :one
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,

@@ -716,6 +716,39 @@ func (q *Queries) UpdateInstance(ctx context.Context, arg UpdateInstanceParams) 
 	return err
 }
 
+const updateInstanceProgress = `-- name: UpdateInstanceProgress :exec
+UPDATE process_instances
+SET step_queue       = ?1,
+    context_data     = ?2,
+    retry_count      = ?3,
+    next_retry_at    = ?4,
+    updated_at       = ?5,
+    worker_id        = NULL,
+    lease_expires_at = NULL
+WHERE id = ?6
+`
+
+type UpdateInstanceProgressParams struct {
+	StepQueue   string
+	ContextData string
+	RetryCount  int64
+	NextRetryAt sql.NullInt64
+	UpdatedAt   int64
+	ID          string
+}
+
+func (q *Queries) UpdateInstanceProgress(ctx context.Context, arg UpdateInstanceProgressParams) error {
+	_, err := q.db.ExecContext(ctx, updateInstanceProgress,
+		arg.StepQueue,
+		arg.ContextData,
+		arg.RetryCount,
+		arg.NextRetryAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
+}
+
 const upsertChannel = `-- name: UpsertChannel :exec
 INSERT INTO process_channels (name, channel, version, updated_at)
 VALUES (?1, ?2, ?3, ?4)

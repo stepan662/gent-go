@@ -469,6 +469,28 @@ func (db *DB) UpdateInstance(inst *model.ProcessInstance) error {
 	})
 }
 
+// UpdateInstanceProgress writes the mutable step state (queue, context, retry counters)
+// without touching status or error. Used after a step completes mid-process so that a
+// concurrent CancelProcess or FailAncestors result is preserved in the DB for the next tick.
+func (db *DB) UpdateInstanceProgress(inst *model.ProcessInstance) error {
+	queue, err := json.Marshal(inst.StepQueue)
+	if err != nil {
+		return err
+	}
+	ctx, err := json.Marshal(inst.ContextData)
+	if err != nil {
+		return err
+	}
+	return db.q.UpdateInstanceProgress(context.Background(), dbgen.UpdateInstanceProgressParams{
+		ID:          inst.ID,
+		StepQueue:   string(queue),
+		ContextData: string(ctx),
+		RetryCount:  int64(inst.RetryCount),
+		NextRetryAt: fromTimePtr(inst.NextRetryAt),
+		UpdatedAt:   nowUnix(),
+	})
+}
+
 func (db *DB) RenewWorkerLeases(workerID string, leaseDur time.Duration) error {
 	return db.q.RenewWorkerLeases(context.Background(), dbgen.RenewWorkerLeasesParams{
 		WorkerID:       sql.NullString{String: workerID, Valid: true},

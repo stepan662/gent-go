@@ -189,7 +189,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 	inst.RetryCount = 0
 	inst.NextRetryAt = nil
 	e.log.Info("step completed", "id", inst.ID, "step", step.ID)
-	return e.db.UpdateInstance(inst)
+	return e.db.UpdateInstanceProgress(inst)
 }
 
 // executeAction sends a request to the step's endpoint and stores the output in
