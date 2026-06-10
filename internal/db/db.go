@@ -491,10 +491,10 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 			UPDATE process_instances
 			SET worker_id = $1, lease_expires_at = $2
 			WHERE id IN (
-				SELECT id FROM process_instances
-				WHERE status = 'running'
-				  AND (next_retry_at IS NULL OR next_retry_at <= $3)
-				  AND (worker_id IS NULL OR lease_expires_at <= $4)
+				SELECT pi.id FROM process_instances pi
+				WHERE pi.status = 'running'
+				  AND (pi.next_retry_at IS NULL OR pi.next_retry_at <= $3)
+				  AND (pi.worker_id IS NULL OR pi.lease_expires_at <= $4)
 				LIMIT $5
 				FOR UPDATE SKIP LOCKED
 			)
@@ -506,10 +506,10 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 			UPDATE process_instances
 			SET worker_id = ?, lease_expires_at = ?
 			WHERE id IN (
-				SELECT id FROM process_instances
-				WHERE status = 'running'
-				  AND (next_retry_at IS NULL OR next_retry_at <= ?)
-				  AND (worker_id IS NULL OR lease_expires_at <= ?)
+				SELECT pi.id FROM process_instances pi
+				WHERE pi.status = 'running'
+				  AND (pi.next_retry_at IS NULL OR pi.next_retry_at <= ?)
+				  AND (pi.worker_id IS NULL OR pi.lease_expires_at <= ?)
 				LIMIT ?
 			)
 			RETURNING id, process_name, process_version, step_queue, context_data, parent_id,

@@ -1,6 +1,7 @@
-import { expect, test, beforeAll } from "vitest";
+import { expect, test, beforeAll, afterAll } from "vitest";
 import { join } from "path";
 import { tmpdir } from "os";
+import { spawnSync } from "child_process";
 import { buildGentBinary, startGent } from "../helpers/server.ts";
 import { startMockService, waitForInstance } from "../helpers/client.ts";
 
@@ -8,13 +9,41 @@ const GENT1_PORT = 20011;
 const GENT2_PORT = 20012;
 
 let gentBin: string;
+let crashPgDSN: string | undefined;
+let tempDbName: string | undefined;
+
+function replaceDbName(dsn: string, dbName: string): string {
+  const url = new URL(dsn);
+  url.pathname = `/${dbName}`;
+  return url.toString();
+}
 
 beforeAll(async () => {
   gentBin = await buildGentBinary();
+
+  const rawDsn = process.env.POSTGRES_DSN;
+  if (rawDsn) {
+    tempDbName = `gent_crash_${Date.now()}`;
+    const adminDsn = replaceDbName(rawDsn, "postgres");
+    const result = spawnSync("psql", [adminDsn, "-c", `CREATE DATABASE ${tempDbName}`], {
+      stdio: "pipe",
+    });
+    if (result.status !== 0) {
+      throw new Error(`Failed to create crash recovery database: ${result.stderr.toString()}`);
+    }
+    crashPgDSN = replaceDbName(rawDsn, tempDbName);
+  }
 }, 120_000);
 
+afterAll(() => {
+  if (tempDbName) {
+    const adminDsn = replaceDbName(process.env.POSTGRES_DSN!, "postgres");
+    spawnSync("psql", [adminDsn, "-c", `DROP DATABASE ${tempDbName} WITH (FORCE)`], { stdio: "pipe" });
+  }
+});
+
 test("crash recovery — new worker re-executes an unconfirmed step after the previous worker crashes", async () => {
-  const db = join(tmpdir(), `gent_crash_${Date.now()}.db`);
+  const db = crashPgDSN ? "" : join(tmpdir(), `gent_crash_${Date.now()}.db`);
 
   // firstRequestDelayMs: Infinity keeps the connection open so the step
   // stays in-flight when we crash the worker.
@@ -23,7 +52,7 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
     firstRequestDelayMs: Infinity,
   });
 
-  const gent1 = await startGent(gentBin, GENT1_PORT, db);
+  const gent1 = await startGent(gentBin, GENT1_PORT, db, crashPgDSN);
   try {
     const processName = `crash_recovery_${crypto.randomUUID()}`;
     await gent1.client.PUT("/definitions", {
@@ -64,7 +93,7 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
     // before the next worker polls.
     await new Promise((r) => setTimeout(r, 12_000));
 
-    const gent2 = await startGent(gentBin, GENT2_PORT, db);
+    const gent2 = await startGent(gentBin, GENT2_PORT, db, crashPgDSN);
     try {
       const finalStatus = await waitForInstance(
         instanceId,
