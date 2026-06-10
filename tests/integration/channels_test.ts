@@ -37,14 +37,14 @@ function restDef(name: string, endpoint = "http://localhost/x") {
 }
 
 function childDef(name: string, childName: string, childVersion = 0) {
-  const child: Record<string, unknown> = { name: childName };
-  if (childVersion !== 0) child.version = childVersion;
+  const call: Record<string, unknown> = { type: "child" as const, name: childName };
+  if (childVersion !== 0) call.version = childVersion;
   return {
     name,
     steps: [
       {
         id: "spawn",
-        call: { type: "child_process" as const, processes: [child] },
+        call,
         switch: [{ goto: "end" }],
       },
     ],

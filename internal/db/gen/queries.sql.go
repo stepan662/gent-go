@@ -178,10 +178,10 @@ func (q *Queries) GetDefinitionRaw(ctx context.Context, arg GetDefinitionRawPara
 }
 
 const getDependencies = `-- name: GetDependencies :many
-SELECT parent_name, parent_version, step_id, child_idx, child_name, child_version
+SELECT parent_name, parent_version, step_id, child_key, child_name, child_version
 FROM process_dependencies
 WHERE parent_name = ?1 AND parent_version = ?2
-ORDER BY step_id, child_idx
+ORDER BY step_id, child_key
 `
 
 type GetDependenciesParams struct {
@@ -202,7 +202,7 @@ func (q *Queries) GetDependencies(ctx context.Context, arg GetDependenciesParams
 			&i.ParentName,
 			&i.ParentVersion,
 			&i.StepID,
-			&i.ChildIdx,
+			&i.ChildKey,
 			&i.ChildName,
 			&i.ChildVersion,
 		); err != nil {
@@ -224,14 +224,14 @@ SELECT child_version FROM process_dependencies
 WHERE parent_name = ?1
   AND parent_version = ?2
   AND step_id = ?3
-  AND child_idx = ?4
+  AND child_key = ?4
 `
 
 type GetDependencyVersionParams struct {
 	ParentName    string
 	ParentVersion int64
 	StepID        string
-	ChildIdx      int64
+	ChildKey      string
 }
 
 func (q *Queries) GetDependencyVersion(ctx context.Context, arg GetDependencyVersionParams) (int64, error) {
@@ -239,7 +239,7 @@ func (q *Queries) GetDependencyVersion(ctx context.Context, arg GetDependencyVer
 		arg.ParentName,
 		arg.ParentVersion,
 		arg.StepID,
-		arg.ChildIdx,
+		arg.ChildKey,
 	)
 	var child_version int64
 	err := row.Scan(&child_version)
@@ -350,7 +350,7 @@ func (q *Queries) InsertDefinition(ctx context.Context, arg InsertDefinitionPara
 }
 
 const insertDependency = `-- name: InsertDependency :exec
-INSERT INTO process_dependencies (parent_name, parent_version, step_id, child_idx, child_name, child_version)
+INSERT INTO process_dependencies (parent_name, parent_version, step_id, child_key, child_name, child_version)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 `
 
@@ -358,7 +358,7 @@ type InsertDependencyParams struct {
 	ParentName    string
 	ParentVersion int64
 	StepID        string
-	ChildIdx      int64
+	ChildKey      string
 	ChildName     string
 	ChildVersion  int64
 }
@@ -368,7 +368,7 @@ func (q *Queries) InsertDependency(ctx context.Context, arg InsertDependencyPara
 		arg.ParentName,
 		arg.ParentVersion,
 		arg.StepID,
-		arg.ChildIdx,
+		arg.ChildKey,
 		arg.ChildName,
 		arg.ChildVersion,
 	)

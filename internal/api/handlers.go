@@ -542,43 +542,73 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 	return results, nil
 }
 
-// buildResolvedDeps returns dependency rows for all child_process entries in def,
+// buildResolvedDeps returns dependency rows for all child/child_parallel steps in def,
 // resolving version=0 refs via batchVersions or the channel.
 // Self-references are excluded — the engine always runs them at the caller's own version.
 // It does not mutate def — the raw definition is stored as-is.
 func (h *Handlers) buildResolvedDeps(def *model.ProcessDefinition, selfVersion int, channel string, batchVersions map[string]int) ([]db.DependencyRow, error) {
 	var deps []db.DependencyRow
 	for _, step := range def.Steps {
-		if step.Call == nil || step.Call.Type != model.CallTypeChildProcess {
+		if step.Call == nil {
 			continue
 		}
-		for i, entry := range step.Call.Processes {
+		switch step.Call.Type {
+		case model.CallTypeChild:
+			entry := model.ChildEntry{Name: step.Call.Name, Version: step.Call.Version}
 			if entry.Name == def.Name && (entry.Version == 0 || entry.Version == selfVersion) {
-				continue // self-refs excluded; engine handles them via inst.ProcessVersion
+				continue
 			}
-			version := entry.Version
-			if version == 0 {
-				if v, ok := batchVersions[entry.Name]; ok {
-					version = v
-				} else {
-					v, err := h.db.GetChannel(entry.Name, channel)
-					if err != nil {
-						return nil, fmt.Errorf("step %q child %q: not on channel %q (%w)", step.ID, entry.Name, channel, err)
-					}
-					version = v
-				}
+			version, err := h.resolveChildVersion(entry.Name, entry.Version, step.ID, "", channel, batchVersions)
+			if err != nil {
+				return nil, err
 			}
 			deps = append(deps, db.DependencyRow{
 				ParentName:    def.Name,
 				ParentVersion: selfVersion,
 				StepID:        step.ID,
-				ChildIdx:      i,
+				ChildKey:      "",
 				ChildName:     entry.Name,
 				ChildVersion:  version,
 			})
+		case model.CallTypeChildParallel:
+			for key, entry := range step.Call.Children {
+				if entry.Name == def.Name && (entry.Version == 0 || entry.Version == selfVersion) {
+					continue
+				}
+				version, err := h.resolveChildVersion(entry.Name, entry.Version, step.ID, key, channel, batchVersions)
+				if err != nil {
+					return nil, err
+				}
+				deps = append(deps, db.DependencyRow{
+					ParentName:    def.Name,
+					ParentVersion: selfVersion,
+					StepID:        step.ID,
+					ChildKey:      key,
+					ChildName:     entry.Name,
+					ChildVersion:  version,
+				})
+			}
 		}
 	}
 	return deps, nil
+}
+
+func (h *Handlers) resolveChildVersion(childName string, childVersion int, stepID, childKey, channel string, batchVersions map[string]int) (int, error) {
+	if childVersion != 0 {
+		return childVersion, nil
+	}
+	if v, ok := batchVersions[childName]; ok {
+		return v, nil
+	}
+	v, err := h.db.GetChannel(childName, channel)
+	if err != nil {
+		label := childName
+		if childKey != "" {
+			label = fmt.Sprintf("%s[%q]", childName, childKey)
+		}
+		return 0, fmt.Errorf("step %q child %s: not on channel %q (%w)", stepID, label, channel, err)
+	}
+	return v, nil
 }
 
 // cascadeUpdate finds all processes on channel whose deps point to old versions
@@ -825,15 +855,24 @@ func topoSort(defs []*model.ProcessDefinition) ([]*model.ProcessDefinition, erro
 		state[name] = visiting
 		d := byName[name]
 		for _, step := range d.Steps {
-			if step.Call == nil || step.Call.Type != model.CallTypeChildProcess {
+			if step.Call == nil {
 				continue
 			}
-			for _, entry := range step.Call.Processes {
-				if entry.Name == name {
+			var childNames []string
+			switch step.Call.Type {
+			case model.CallTypeChild:
+				childNames = []string{step.Call.Name}
+			case model.CallTypeChildParallel:
+				for _, entry := range step.Call.Children {
+					childNames = append(childNames, entry.Name)
+				}
+			}
+			for _, childName := range childNames {
+				if childName == name {
 					continue // self-reference is valid recursion, not a cycle
 				}
-				if _, inBatch := byName[entry.Name]; inBatch {
-					if err := visit(entry.Name); err != nil {
+				if _, inBatch := byName[childName]; inBatch {
+					if err := visit(childName); err != nil {
 						return err
 					}
 				}
@@ -854,7 +893,7 @@ func topoSort(defs []*model.ProcessDefinition) ([]*model.ProcessDefinition, erro
 
 type stepChildKey struct {
 	stepID   string
-	childIdx int
+	childKey string
 }
 
 // applyDepsToDefCopy returns a deep copy of def with resolved child versions baked in.
@@ -867,15 +906,24 @@ func applyDepsToDefCopy(def *model.ProcessDefinition, deps []db.DependencyRow) *
 	_ = json.Unmarshal(data, &copy)
 	lookup := make(map[stepChildKey]int, len(deps))
 	for _, d := range deps {
-		lookup[stepChildKey{d.StepID, d.ChildIdx}] = d.ChildVersion
+		lookup[stepChildKey{d.StepID, d.ChildKey}] = d.ChildVersion
 	}
 	for _, step := range copy.Steps {
-		if step.Call == nil || step.Call.Type != model.CallTypeChildProcess {
+		if step.Call == nil {
 			continue
 		}
-		for i := range step.Call.Processes {
-			if v, ok := lookup[stepChildKey{step.ID, i}]; ok {
-				step.Call.Processes[i].Version = v
+		switch step.Call.Type {
+		case model.CallTypeChild:
+			if v, ok := lookup[stepChildKey{step.ID, ""}]; ok {
+				step.Call.Version = v
+			}
+		case model.CallTypeChildParallel:
+			for key := range step.Call.Children {
+				if v, ok := lookup[stepChildKey{step.ID, key}]; ok {
+					entry := step.Call.Children[key]
+					entry.Version = v
+					step.Call.Children[key] = entry
+				}
 			}
 		}
 	}
@@ -892,10 +940,10 @@ func contentHash(rawJSON []byte, deps []db.DependencyRow) string {
 		if sorted[i].StepID != sorted[j].StepID {
 			return sorted[i].StepID < sorted[j].StepID
 		}
-		return sorted[i].ChildIdx < sorted[j].ChildIdx
+		return sorted[i].ChildKey < sorted[j].ChildKey
 	})
 	for _, d := range sorted {
-		fmt.Fprintf(h, "\x00%s\x00%d\x00%s\x00%d", d.StepID, d.ChildIdx, d.ChildName, d.ChildVersion)
+		fmt.Fprintf(h, "\x00%s\x00%s\x00%s\x00%d", d.StepID, d.ChildKey, d.ChildName, d.ChildVersion)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -920,12 +968,19 @@ func subtree(defs []db.VersionedDef, rootName string) ([]db.VersionedDef, error)
 		}
 		visited[name] = true
 		for _, step := range d.Steps {
-			if step.Call == nil || step.Call.Type != model.CallTypeChildProcess {
+			if step.Call == nil {
 				continue
 			}
-			for _, entry := range step.Call.Processes {
-				if err := collect(entry.Name); err != nil {
+			switch step.Call.Type {
+			case model.CallTypeChild:
+				if err := collect(step.Call.Name); err != nil {
 					return err
+				}
+			case model.CallTypeChildParallel:
+				for _, entry := range step.Call.Children {
+					if err := collect(entry.Name); err != nil {
+						return err
+					}
 				}
 			}
 		}

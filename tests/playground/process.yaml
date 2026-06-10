@@ -15,21 +15,40 @@ steps:
 
   - id: recursion
     call:
-      type: child_process
-      processes:
-        - name: order-pipeline
-          input:
-            ttl: "{{ input.ttl - 1 }}"
-        - name: order-pipeline
-          input:
-            ttl: "{{ input.ttl - 1 }}"
-      child_output_schema:
+      type: child
+      name: order-pipeline
+      input:
+        ttl: "{{ input.ttl - 1 }}"
+      output_schema:
         type: object
         properties:
           num:
             type: integer
+        required: [num]
+  # - id: recursion
+  #   call:
+  #     type: child_parallel
+  #     children:
+  #       first:
+  #         name: order-pipeline
+  #         input:
+  #           ttl: "{{ input.ttl - 1 }}"
+  #         output_schema:
+  #           type: object
+  #           properties:
+  #             num:
+  #               type: integer
+  #       second:
+  #         name: order-pipeline
+  #         input:
+  #           ttl: "{{ input.ttl - 1 }}"
+  #         output_schema:
+  #           type: object
+  #           properties:
+  #             num:
+  #               type: integer
     switch:
       - goto: end
 
 output:
-  num: "{{ (outputs.recursion[0].output.num ?? 0) + (outputs.recursion[1].output.num ?? 0) + 1 }}"
+  num: "{{ (outputs.recursion.num ?? 0) + 1 }}"

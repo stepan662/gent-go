@@ -144,6 +144,33 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 		}
 	})
 
+	t.Run("child_parallel children output_schemas are normalized", func(t *testing.T) {
+		step := &Step{
+			ID: "spawn",
+			Call: &Call{
+				Type: CallTypeChildParallel,
+				Children: map[string]ChildEntry{
+					"a": {Name: "worker", OutputSchema: &schema.SchemaNode{
+						Type: schema.SchemaType{"object"},
+						Defs: map[string]*schema.SchemaNode{
+							"Result": {Type: schema.SchemaType{"object"}},
+						},
+						Properties: map[string]*schema.SchemaNode{"r": {Ref: "#/$defs/Result"}},
+					}},
+				},
+			},
+			Switch: SwitchMap{{Goto: GotoEnd}},
+		}
+		d := ProcessDefinition{Name: "p", Steps: []*Step{step}}
+		if err := d.Normalize(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		entry := step.Call.Children["a"]
+		if entry.OutputSchema == nil || entry.OutputSchema.Defs == nil || entry.OutputSchema.Defs["Result"] == nil {
+			t.Fatal("$defs/Result missing in children[a].output_schema after normalize")
+		}
+	})
+
 	t.Run("unused $defs are removed from InputSchema", func(t *testing.T) {
 		d := ProcessDefinition{
 			Name: "p", Steps: []*Step{validStep("s1")},
@@ -256,11 +283,55 @@ func TestProcessDefinition_Validate(t *testing.T) {
 			wantErr: "call.exec is required",
 		},
 		{
+			name: "valid child call",
+			def: ProcessDefinition{Name: "p", Steps: []*Step{
+				{ID: "spawn", Call: &Call{Type: CallTypeChild, Name: "worker"}, Switch: SwitchMap{{Goto: GotoEnd}}},
+			}},
+			wantErr: "",
+		},
+		{
+			name: "child call missing name",
+			def: ProcessDefinition{Name: "p", Steps: []*Step{
+				{ID: "spawn", Call: &Call{Type: CallTypeChild}, Switch: SwitchMap{{Goto: GotoEnd}}},
+			}},
+			wantErr: "call.name is required",
+		},
+		{
+			name: "valid child_parallel call",
+			def: ProcessDefinition{Name: "p", Steps: []*Step{
+				{ID: "spawn", Call: &Call{
+					Type: CallTypeChildParallel,
+					Children: map[string]ChildEntry{
+						"left":  {Name: "worker"},
+						"right": {Name: "worker"},
+					},
+				}, Switch: SwitchMap{{Goto: GotoEnd}}},
+			}},
+			wantErr: "",
+		},
+		{
+			name: "child_parallel call missing children",
+			def: ProcessDefinition{Name: "p", Steps: []*Step{
+				{ID: "spawn", Call: &Call{Type: CallTypeChildParallel}, Switch: SwitchMap{{Goto: GotoEnd}}},
+			}},
+			wantErr: "call.children is required",
+		},
+		{
+			name: "child_parallel entry missing name",
+			def: ProcessDefinition{Name: "p", Steps: []*Step{
+				{ID: "spawn", Call: &Call{
+					Type:     CallTypeChildParallel,
+					Children: map[string]ChildEntry{"left": {Name: ""}},
+				}, Switch: SwitchMap{{Goto: GotoEnd}}},
+			}},
+			wantErr: `call.children["left"].name is required`,
+		},
+		{
 			name: "unknown call type",
 			def: ProcessDefinition{Name: "p", Steps: []*Step{
 				{ID: "s1", Call: &Call{Type: "ftp", Endpoint: "ftp://x"}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
-			wantErr: "call.type must be one of: rest, script",
+			wantErr: "call.type must be one of: rest, script, child, child_parallel",
 		},
 		{
 			name: "switch missing catch-all is rejected",

@@ -17,8 +17,8 @@ func stepHasOutput(s *model.Step) bool {
 	if s.Call == nil {
 		return false
 	}
-	if s.Call.Type == model.CallTypeChildProcess {
-		return true
+	if s.Call.Type == model.CallTypeChildParallel {
+		return len(s.Call.Children) > 0
 	}
 	return s.Call.OutputSchema != nil
 }

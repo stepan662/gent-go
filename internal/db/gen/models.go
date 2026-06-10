@@ -27,7 +27,7 @@ type ProcessDependency struct {
 	ParentName    string
 	ParentVersion int64
 	StepID        string
-	ChildIdx      int64
+	ChildKey      string
 	ChildName     string
 	ChildVersion  int64
 }

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { client, startMockService, waitForInstance } from "../helpers/client.ts";
 
-test("child_process — step without child_output_schema after a step with one does not fail", async () => {
+test("child — step without output_schema after a step with one does not fail", async () => {
   const id = crypto.randomUUID();
   const leafWithOutput = `leaf_with_output_${id}`;
   const leafNoOutput = `leaf_no_output_${id}`;
@@ -25,14 +25,13 @@ test("child_process — step without child_output_schema after a step with one d
   await client.PUT("/definitions", {
     body: {
       name: parentName,
-
       steps: [
         {
           id: "step_a",
           call: {
-            type: "child_process" as const,
-            processes: [{ name: leafWithOutput }],
-            child_output_schema: {
+            type: "child" as const,
+            name: leafWithOutput,
+            output_schema: {
               type: "object",
               properties: { value: { type: "number" } },
               required: ["value"],
@@ -42,10 +41,7 @@ test("child_process — step without child_output_schema after a step with one d
         },
         {
           id: "step_b",
-          call: {
-            type: "child_process" as const,
-            processes: [{ name: leafNoOutput }],
-          },
+          call: { type: "child" as const, name: leafNoOutput },
           switch: [{ goto: "end" }],
         },
       ],
@@ -61,14 +57,11 @@ test("child_process — step without child_output_schema after a step with one d
   expect(status).toBe("completed");
 });
 
-// Regression: when a child process fails output validation, the error message must include
-// the child's process name so the caller can identify which process caused the failure.
-test("child_process — output validation failure error includes process name", async () => {
+test("child — output validation failure error includes process name", async () => {
   const id = crypto.randomUUID();
   const childName = `child_no_output_${id}`;
   const parentName = `parent_strict_${id}`;
 
-  // Child produces no output.
   await client.PUT("/definitions", {
     body: {
       name: childName,
@@ -76,7 +69,6 @@ test("child_process — output validation failure error includes process name", 
     },
   });
 
-  // Parent declares a schema the child can never satisfy.
   await client.PUT("/definitions", {
     body: {
       name: parentName,
@@ -84,9 +76,9 @@ test("child_process — output validation failure error includes process name", 
         {
           id: "spawn",
           call: {
-            type: "child_process" as const,
-            processes: [{ name: childName }],
-            child_output_schema: {
+            type: "child" as const,
+            name: childName,
+            output_schema: {
               type: "object",
               properties: { required_field: { type: "string" } },
               required: ["required_field"],
@@ -112,7 +104,7 @@ test("child_process — output validation failure error includes process name", 
   expect(inst?.error).toContain(childName);
 });
 
-test("child_process — on_error routes to recovery when child fails", async () => {
+test("child — on_error routes to recovery when child fails", async () => {
   const id = crypto.randomUUID();
   const failMock = await startMockService(0, { statusCode: 500 });
   const recoveryMock = await startMockService(0, { response: { recovered: true } });
@@ -140,7 +132,7 @@ test("child_process — on_error routes to recovery when child fails", async () 
       steps: [
         {
           id: "spawn",
-          call: { type: "child_process" as const, processes: [{ name: childName }] },
+          call: { type: "child" as const, name: childName },
           on_error: [{ code: ["child.%"], next: "$recovery" }],
           switch: [{ goto: "next" }],
         },
@@ -172,7 +164,7 @@ test("child_process — on_error routes to recovery when child fails", async () 
   recoveryMock.stop();
 });
 
-test("child_process — no on_error on child_process step cascades to parent failure", async () => {
+test("child — no on_error cascades to parent failure", async () => {
   const id = crypto.randomUUID();
   const failMock = await startMockService(0, { statusCode: 500 });
 
@@ -199,7 +191,7 @@ test("child_process — no on_error on child_process step cascades to parent fai
       steps: [
         {
           id: "spawn",
-          call: { type: "child_process" as const, processes: [{ name: childName }] },
+          call: { type: "child" as const, name: childName },
           switch: [{ goto: "end" }],
         },
       ],
@@ -212,7 +204,7 @@ test("child_process — no on_error on child_process step cascades to parent fai
   failMock.stop();
 });
 
-test("child_process — on_error bubbles to grandparent when parent has no handler", async () => {
+test("child — on_error bubbles to grandparent when parent has no handler", async () => {
   const id = crypto.randomUUID();
   const failMock = await startMockService(0, { statusCode: 500 });
   const recoveryMock = await startMockService(0, { response: { recovered: true } });
@@ -241,7 +233,7 @@ test("child_process — on_error bubbles to grandparent when parent has no handl
       steps: [
         {
           id: "spawn",
-          call: { type: "child_process" as const, processes: [{ name: childName }] },
+          call: { type: "child" as const, name: childName },
           switch: [{ goto: "end" }],
         },
       ],
@@ -254,7 +246,7 @@ test("child_process — on_error bubbles to grandparent when parent has no handl
       steps: [
         {
           id: "spawn_middle",
-          call: { type: "child_process" as const, processes: [{ name: middleName }] },
+          call: { type: "child" as const, name: middleName },
           on_error: [{ code: ["child.%"], next: "$recovery" }],
           switch: [{ goto: "next" }],
         },
@@ -286,7 +278,7 @@ test("child_process — on_error bubbles to grandparent when parent has no handl
   recoveryMock.stop();
 });
 
-test("child_process — error context has correct code and step when child fails", async () => {
+test("child — error context has correct code and step when child fails", async () => {
   const id = crypto.randomUUID();
   const failMock = await startMockService(0, { statusCode: 500 });
   const recoveryMock = await startMockService(0, { response: { ok: true } });
@@ -314,7 +306,7 @@ test("child_process — error context has correct code and step when child fails
       steps: [
         {
           id: "spawn",
-          call: { type: "child_process" as const, processes: [{ name: childName }] },
+          call: { type: "child" as const, name: childName },
           on_error: [{ code: ["child.%"], next: "$recovery" }],
           switch: [{ goto: "next" }],
         },
@@ -348,8 +340,8 @@ test("child_process — error context has correct code and step when child fails
   recoveryMock.stop();
 });
 
-test("child_process — recursive spawn completes with correct aggregated output", async () => {
-  const processName = `child_process_${crypto.randomUUID()}`;
+test("child_parallel — recursive spawn completes with correct aggregated output", async () => {
+  const processName = `child_parallel_${crypto.randomUUID()}`;
 
   await client.PUT("/definitions", {
     body: {
@@ -370,15 +362,26 @@ test("child_process — recursive spawn completes with correct aggregated output
         {
           id: "recursion",
           call: {
-            type: "child_process" as const,
-            processes: [
-              { name: processName, input: { ttl: "{{input.ttl - 1}}" } },
-              { name: processName, input: { ttl: "{{input.ttl - 1}}" } },
-            ],
-            child_output_schema: {
-              type: "object",
-              properties: { processes: { type: "number" } },
-              required: ["processes"],
+            type: "child_parallel" as const,
+            children: {
+              first: {
+                name: processName,
+                input: { ttl: "{{input.ttl - 1}}" },
+                output_schema: {
+                  type: "object",
+                  properties: { processes: { type: "number" } },
+                  required: ["processes"],
+                },
+              },
+              second: {
+                name: processName,
+                input: { ttl: "{{input.ttl - 1}}" },
+                output_schema: {
+                  type: "object",
+                  properties: { processes: { type: "number" } },
+                  required: ["processes"],
+                },
+              },
             },
           },
           switch: [{ goto: "end" }],
@@ -386,7 +389,7 @@ test("child_process — recursive spawn completes with correct aggregated output
       ],
       output: {
         processes:
-          "{{(outputs.recursion[0].output.processes ?? 0) + (outputs.recursion[1].output.processes ?? 0) + 1}}",
+          "{{(outputs.recursion.first.processes ?? 0) + (outputs.recursion.second.processes ?? 0) + 1}}",
       },
     },
   });

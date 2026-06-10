@@ -8,7 +8,7 @@
   },
   "tasks": {
     "recursion": {
-      "call_type": "child_process",
+      "call_type": "child",
       "input": {
         "type": "object"
       },
@@ -41,27 +41,15 @@
       ]
     },
     "recursion_output": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "output": {
-            "type": "object",
-            "properties": {
-              "num": {
-                "type": "integer"
-              }
-            }
-          }
-        },
-        "required": [
-          "id",
-          "output"
-        ]
-      }
+      "type": "object",
+      "properties": {
+        "num": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "num"
+      ]
     }
   }
 }

@@ -7,9 +7,6 @@ export interface ProcessInput {
 
 export interface RecursionInput {}
 
-export type RecursionOutput = {
-  id: string;
-  output: {
-    num?: number;
-  };
-}[];
+export interface RecursionOutput {
+  num: number;
+}

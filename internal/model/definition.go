@@ -25,41 +25,41 @@ const GotoNext = "next"
 type CallType string
 
 const (
-	CallTypeREST         CallType = "rest"
-	CallTypeScript       CallType = "script"
-	CallTypeChildProcess CallType = "child_process"
+	CallTypeREST          CallType = "rest"
+	CallTypeScript        CallType = "script"
+	CallTypeChild         CallType = "child"
+	CallTypeChildParallel CallType = "child_parallel"
 )
 
-// ChildProcessEntry describes a single process to run within a "child_process" call.
-type ChildProcessEntry struct {
-	Name    string            `json:"name"            description:"Name of the child process to invoke."`
-	Version int               `json:"version,omitempty" description:"Version to run; 0 means latest published version."`
-	Input   map[string]string `json:"input,omitempty" description:"Expression map evaluated against the current context to build the child's input payload."`
+// ChildEntry describes a single named child process in a "child_parallel" call.
+type ChildEntry struct {
+	Name         string             `json:"name"                    description:"Name of the child process to invoke."`
+	Version      int                `json:"version,omitempty"       description:"Version to run; 0 means latest published version."`
+	Input        map[string]string  `json:"input,omitempty"         description:"Expression map evaluated against the current context to build the child's input payload."`
+	OutputSchema *schema.SchemaNode `json:"output_schema,omitempty" description:"JSON Schema to validate and expose this child's output."`
 }
 
 // Call describes how to invoke a step's action. It is a discriminated union on Type.
-//   - "rest":          Endpoint (required), Headers (optional), AcceptedStatus (optional), OutputSchema (optional)
-//   - "script":        Exec (required), OutputSchema (optional)
-//   - "child_process": Processes (required), ChildOutputSchema (optional per-child schema)
+//   - "rest":           Endpoint (required), Headers (optional), AcceptedStatus (optional), OutputSchema (optional)
+//   - "script":         Exec (required), OutputSchema (optional)
+//   - "child":          Name (required), Input (optional), OutputSchema (optional) — single child process
+//   - "child_parallel": Children (required, keyed map) — concurrent named child processes
 //
-// OutputSchema (rest/script): when set, the response body is validated against the schema
-// and stored in context for downstream steps. Without it, the body is available only as
-// "self" within the same step's switch and is not persisted.
+// OutputSchema (rest/script/child): when set, the response body is validated and stored in
+// context as outputs.stepID. Without it the body is available only as "self" in this step's switch.
 //
-// AcceptedStatus (rest only): HTTP status patterns treated as non-errors. Supports "2xx"
-// style patterns and exact codes like "404". Defaults to any 2xx when omitted.
-//
-// ChildOutputSchema (child_process): when set, each child's computed output is
-// validated before the parent resumes.
+// AcceptedStatus (rest only): HTTP status patterns treated as non-errors. Defaults to any 2xx.
 type Call struct {
-	Type             CallType            `json:"type"`
-	Endpoint         string              `json:"endpoint,omitempty"`           // rest
-	Headers          map[string]string   `json:"headers,omitempty"`            // rest, values are expressions
-	AcceptedStatus   []string            `json:"accepted_status,omitempty"`    // rest: HTTP status patterns accepted as non-errors
-	Exec             string              `json:"exec,omitempty"`               // script
-	OutputSchema     *schema.SchemaNode  `json:"output_schema,omitempty"`      // rest/script: validate & persist output
-	Processes        []ChildProcessEntry `json:"processes,omitempty"`          // child_process
-	ChildOutputSchema *schema.SchemaNode `json:"child_output_schema,omitempty"` // child_process: validate each child's output
+	Type           CallType               `json:"type"`
+	Endpoint       string                 `json:"endpoint,omitempty"`        // rest
+	Headers        map[string]string      `json:"headers,omitempty"`         // rest, values are expressions
+	AcceptedStatus []string               `json:"accepted_status,omitempty"` // rest: HTTP status patterns accepted as non-errors
+	Exec           string                 `json:"exec,omitempty"`            // script
+	OutputSchema   *schema.SchemaNode     `json:"output_schema,omitempty"`   // rest/script/child: validate & persist output
+	Name           string                 `json:"name,omitempty"`            // child
+	Version        int                    `json:"version,omitempty"`         // child
+	Input          map[string]string      `json:"input,omitempty"`           // child
+	Children       map[string]ChildEntry  `json:"children,omitempty"`        // child_parallel
 }
 
 // JSONSchemaBytes returns the JSON Schema for Call as a discriminated union
@@ -93,27 +93,40 @@ func (Call) JSONSchemaBytes() ([]byte, error) {
 			},
 			{
 				"type": "object",
-				"description": "Child-process call — runs one or more named processes as sub-instances.",
+				"description": "Single child-process call — runs one named process as a sub-instance and waits for it to complete. The child's output is available as outputs.stepID.",
 				"properties": {
-					"type": {"type": "string", "const": "child_process"},
-					"processes": {
-						"type": "array",
-						"description": "List of child processes to run. All run concurrently; the step waits for all to complete.",
-						"items": {
+					"type":          {"type": "string", "const": "child"},
+					"name":          {"type": "string", "description": "Name of the child process to invoke."},
+					"version":       {"type": "integer", "description": "Version to run; 0 means latest published version."},
+					"input":         {"type": "object", "additionalProperties": {"type": "string"}, "description": "Expression map evaluated against the current context to build the child's input payload."},
+					"output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist the child's output. Without it the output is not stored in context."}
+				},
+				"required": ["type", "name"],
+				"additionalProperties": false
+			},
+			{
+				"type": "object",
+				"description": "Parallel child-process call — runs multiple named processes concurrently and waits for all to complete. Each child's output is available as outputs.stepID.childKey.",
+				"properties": {
+					"type": {"type": "string", "const": "child_parallel"},
+					"children": {
+						"type": "object",
+						"description": "Keyed map of child processes to run concurrently. Keys become the access names in outputs.stepID.",
+						"additionalProperties": {
 							"type": "object",
 							"properties": {
-								"name":    {"type": "string", "description": "Name of the child process to invoke."},
-								"version": {"type": "integer", "description": "Version to run; 0 means latest published version."},
-								"input":   {"type": "object", "additionalProperties": {"type": "string"}, "description": "Expression map evaluated against the current context to build the child's input payload."}
+								"name":          {"type": "string", "description": "Name of the child process to invoke."},
+								"version":       {"type": "integer", "description": "Version to run; 0 means latest published version."},
+								"input":         {"type": "object", "additionalProperties": {"type": "string"}, "description": "Expression map evaluated against the current context to build the child's input payload."},
+								"output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and expose this child's output."}
 							},
 							"required": ["name"],
 							"additionalProperties": false
 						},
-						"minItems": 1
-					},
-					"child_output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema applied to each child's computed output before the parent resumes."}
+						"minProperties": 1
+					}
 				},
-				"required": ["type", "processes"],
+				"required": ["type", "children"],
 				"additionalProperties": false
 			}
 		],
@@ -323,12 +336,17 @@ func (d *ProcessDefinition) Normalize() error {
 			}
 			s.Call.OutputSchema = normalized
 		}
-		if s.Call.ChildOutputSchema != nil {
-			normalized, err := schema.Normalize(s.Call.ChildOutputSchema)
-			if err != nil {
-				return fmt.Errorf("step %q call.child_output_schema: %w", s.ID, err)
+		if s.Call.Type == CallTypeChildParallel {
+			for key, entry := range s.Call.Children {
+				if entry.OutputSchema != nil {
+					normalized, err := schema.Normalize(entry.OutputSchema)
+					if err != nil {
+						return fmt.Errorf("step %q call.children[%q].output_schema: %w", s.ID, key, err)
+					}
+					entry.OutputSchema = normalized
+					s.Call.Children[key] = entry
+				}
 			}
-			s.Call.ChildOutputSchema = normalized
 		}
 	}
 	return nil
@@ -373,17 +391,21 @@ func validateStep(s *Step, stepIDs map[string]struct{}, stepIdx, lastIdx int) er
 			if s.Call.Exec == "" {
 				return fmt.Errorf("step %q: call.exec is required for type %q", s.ID, s.Call.Type)
 			}
-		case CallTypeChildProcess:
-			if len(s.Call.Processes) == 0 {
-				return fmt.Errorf("step %q: call.processes is required for type %q", s.ID, s.Call.Type)
+		case CallTypeChild:
+			if s.Call.Name == "" {
+				return fmt.Errorf("step %q: call.name is required for type %q", s.ID, s.Call.Type)
 			}
-			for i, p := range s.Call.Processes {
-				if p.Name == "" {
-					return fmt.Errorf("step %q: call.processes[%d].name is required", s.ID, i)
+		case CallTypeChildParallel:
+			if len(s.Call.Children) == 0 {
+				return fmt.Errorf("step %q: call.children is required for type %q", s.ID, s.Call.Type)
+			}
+			for key, entry := range s.Call.Children {
+				if entry.Name == "" {
+					return fmt.Errorf("step %q: call.children[%q].name is required", s.ID, key)
 				}
 			}
 		default:
-			return fmt.Errorf("step %q: call.type must be one of: rest, script, child_process", s.ID)
+			return fmt.Errorf("step %q: call.type must be one of: rest, script, child, child_parallel", s.ID)
 		}
 	}
 
@@ -458,8 +480,12 @@ func validateStep(s *Step, stepIDs map[string]struct{}, stepIdx, lastIdx int) er
 		if err := checkSchemaDoc(fmt.Sprintf("step %q call.output_schema", s.ID), s.Call.OutputSchema); err != nil {
 			return err
 		}
-		if err := checkSchemaDoc(fmt.Sprintf("step %q call.child_output_schema", s.ID), s.Call.ChildOutputSchema); err != nil {
-			return err
+		if s.Call.Type == CallTypeChildParallel {
+			for key, entry := range s.Call.Children {
+				if err := checkSchemaDoc(fmt.Sprintf("step %q call.children[%q].output_schema", s.ID, key), entry.OutputSchema); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -517,10 +543,6 @@ func (c *Call) ValidateOutput(output any) error {
 	return validateSchema(c.OutputSchema, output)
 }
 
-// ValidateChildOutput checks a single child's output against call.ChildOutputSchema. No-op if unset.
-func (c *Call) ValidateChildOutput(output any) error {
-	return validateSchema(c.ChildOutputSchema, output)
-}
 
 func validateSchema(s *schema.SchemaNode, data any) error {
 	if s == nil {

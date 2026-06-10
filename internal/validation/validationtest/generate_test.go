@@ -146,6 +146,180 @@ func TestGenerate_InnerDefsConflictRenamed(t *testing.T) {
 	}
 }
 
+func TestGenerate_Child_WithOutputSchema_ExposesTypedOutput(t *testing.T) {
+	out := runGenerate(t, `{
+		"name": "p",
+		"steps": [{
+			"id": "spawn",
+			"call": {
+				"type": "child",
+				"name": "worker",
+				"output_schema": {
+					"type": "object",
+					"properties": { "count": { "type": "integer" } },
+					"required": ["count"]
+				}
+			},
+			"switch": [{"goto": "end"}]
+		}]
+	}`)
+	// spawn should appear in tasks with a typed output
+	if out.Tasks["spawn"].Output == nil {
+		t.Fatal("spawn should have a typed output in tasks")
+	}
+	assertJSON(t, out.Defs["spawn_output"], `{
+		"type": "object",
+		"properties": { "count": { "type": "integer" } },
+		"required": ["count"]
+	}`)
+}
+
+func TestGenerate_Child_WithoutOutputSchema_NoOutput(t *testing.T) {
+	out := runGenerate(t, `{
+		"name": "p",
+		"steps": [{
+			"id": "spawn",
+			"call": { "type": "child", "name": "worker" },
+			"switch": [{"goto": "end"}]
+		}]
+	}`)
+	if _, ok := out.Tasks["spawn"]; ok {
+		t.Error("spawn without output_schema should not appear in tasks")
+	}
+	if out.Defs["spawn_output"] != nil {
+		t.Error("spawn_output def should be absent")
+	}
+}
+
+func TestGenerate_Child_OutputAvailableInDownstreamStep(t *testing.T) {
+	// outputs.spawn.count should be typed as integer in a subsequent step's params.
+	out := runGenerate(t, `{
+		"name": "p",
+		"steps": [
+			{
+				"id": "spawn",
+				"call": {
+					"type": "child",
+					"name": "worker",
+					"output_schema": {
+						"type": "object",
+						"properties": { "count": { "type": "integer" } },
+						"required": ["count"]
+					}
+				},
+				"switch": [{"goto": "next"}]
+			},
+			{
+				"id": "report",
+				"call": { "type": "rest", "endpoint": "http://x" },
+				"params": { "n": "{{outputs.spawn.count}}" }
+			}
+		]
+	}`)
+	reportInput := out.Defs["report_input"]
+	if reportInput == nil || reportInput.Properties == nil {
+		t.Fatal("report input should have properties")
+	}
+	assertJSON(t, reportInput.Properties["n"], `{"type": "integer"}`)
+}
+
+func TestGenerate_ChildParallel_WithOutputSchemas_ExposesKeyedOutput(t *testing.T) {
+	out := runGenerate(t, `{
+		"name": "p",
+		"steps": [{
+			"id": "spawn",
+			"call": {
+				"type": "child_parallel",
+				"children": {
+					"left":  { "name": "worker", "output_schema": { "type": "object", "properties": { "num": { "type": "integer" } }, "required": ["num"] } },
+					"right": { "name": "worker", "output_schema": { "type": "object", "properties": { "num": { "type": "integer" } }, "required": ["num"] } }
+				}
+			},
+			"switch": [{"goto": "end"}]
+		}]
+	}`)
+	// spawn should appear in tasks
+	if out.Tasks["spawn"].Output == nil {
+		t.Fatal("spawn should have a typed output in tasks")
+	}
+	// spawn_output should be an object with left/right keys
+	spawnOutput := out.Defs["spawn_output"]
+	if spawnOutput == nil {
+		t.Fatal("spawn_output def missing")
+	}
+	if spawnOutput.Properties == nil {
+		t.Fatal("spawn_output should have properties")
+	}
+	if spawnOutput.Properties["left"] == nil {
+		t.Error("spawn_output should have property 'left'")
+	}
+	if spawnOutput.Properties["right"] == nil {
+		t.Error("spawn_output should have property 'right'")
+	}
+}
+
+func TestGenerate_ChildParallel_KeyedOutputAvailableInDownstreamStep(t *testing.T) {
+	// outputs.spawn.left.num should be typed as integer in a subsequent step.
+	out := runGenerate(t, `{
+		"name": "p",
+		"steps": [
+			{
+				"id": "spawn",
+				"call": {
+					"type": "child_parallel",
+					"children": {
+						"left":  { "name": "worker", "output_schema": { "type": "object", "properties": { "num": { "type": "integer" } }, "required": ["num"] } },
+						"right": { "name": "worker", "output_schema": { "type": "object", "properties": { "num": { "type": "integer" } }, "required": ["num"] } }
+					}
+				},
+				"switch": [{"goto": "next"}]
+			},
+			{
+				"id": "aggregate",
+				"call": { "type": "rest", "endpoint": "http://x" },
+				"params": {
+					"a": "{{outputs.spawn.left.num}}",
+					"b": "{{outputs.spawn.right.num}}"
+				}
+			}
+		]
+	}`)
+	aggInput := out.Defs["aggregate_input"]
+	if aggInput == nil || aggInput.Properties == nil {
+		t.Fatal("aggregate input should have properties")
+	}
+	assertJSON(t, aggInput.Properties["a"], `{"type": "integer"}`)
+	assertJSON(t, aggInput.Properties["b"], `{"type": "integer"}`)
+}
+
+func TestGenerate_ChildParallel_MixedOutputSchemas_UntypedKeyIsObject(t *testing.T) {
+	// A child without output_schema should still produce a key but typed as plain object.
+	out := runGenerate(t, `{
+		"name": "p",
+		"steps": [{
+			"id": "spawn",
+			"call": {
+				"type": "child_parallel",
+				"children": {
+					"typed":   { "name": "worker", "output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] } },
+					"untyped": { "name": "other" }
+				}
+			},
+			"switch": [{"goto": "end"}]
+		}]
+	}`)
+	spawnOutput := out.Defs["spawn_output"]
+	if spawnOutput == nil || spawnOutput.Properties == nil {
+		t.Fatal("spawn_output def missing or has no properties")
+	}
+	if spawnOutput.Properties["typed"] == nil {
+		t.Error("spawn_output should have property 'typed'")
+	}
+	if spawnOutput.Properties["untyped"] == nil {
+		t.Error("spawn_output should have property 'untyped' even without output_schema")
+	}
+}
+
 func TestGenerate_UnusedDefsRemoved(t *testing.T) {
 	out := runGenerate(t, `{
 		"name": "p",

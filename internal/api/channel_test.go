@@ -41,13 +41,15 @@ func childProcessDef(name string, childName string, childVersion int) map[string
 	if childVersion != 0 {
 		child["version"] = childVersion
 	}
+	call := map[string]any{"type": "child", "name": childName}
+	if childVersion != 0 {
+		call["version"] = childVersion
+	}
 	return map[string]any{
 		"name": name,
 		"steps": []any{
-			map[string]any{"id": "spawn", "call": map[string]any{
-				"type":      "child_process",
-				"processes": []any{child},
-			}, "switch": []any{map[string]any{"goto": "end"}}},
+			map[string]any{"id": "spawn", "call": call,
+				"switch": []any{map[string]any{"goto": "end"}}},
 		},
 	}
 }
@@ -175,8 +177,8 @@ func TestApplyBatch_ContentDedup_SelfRef(t *testing.T) {
 		"name": "recursive",
 		"steps": []any{
 			map[string]any{"id": "recurse", "call": map[string]any{
-				"type":      "child_process",
-				"processes": []any{map[string]any{"name": "recursive"}},
+				"type": "child",
+				"name": "recursive",
 			}, "switch": []any{map[string]any{"goto": "end"}}},
 		},
 	}
@@ -210,22 +212,22 @@ func TestApplyBatch_VersionedSelfRefCreatesDep(t *testing.T) {
 		"name": "recursive",
 		"steps": []any{
 			map[string]any{"id": "recurse", "call": map[string]any{
-				"type":      "child_process",
-				"processes": []any{map[string]any{"name": "recursive"}},
+				"type": "child",
+				"name": "recursive",
 			}, "switch": []any{map[string]any{"goto": "end"}}},
 		},
 	}
 	batchApply(h, "latest", false, v1)
 
-	// v2: references recursive@v1 explicitly — this is a real versioned dep, not a self-ref.
+	// v2: references recursive@v1 explicitly via child_parallel — both self-ref variants.
 	v2 := map[string]any{
 		"name": "recursive",
 		"steps": []any{
 			map[string]any{"id": "recurse", "call": map[string]any{
-				"type": "child_process",
-				"processes": []any{
-					map[string]any{"name": "recursive", "version": 1},
-					map[string]any{"name": "recursive"},
+				"type": "child_parallel",
+				"children": map[string]any{
+					"pinned": map[string]any{"name": "recursive", "version": 1},
+					"latest": map[string]any{"name": "recursive"},
 				},
 			}, "switch": []any{map[string]any{"goto": "end"}}},
 		},

@@ -28,7 +28,7 @@ function restDef(name: string, endpoint = "http://localhost/x") {
 function childDef(name: string, childName: string) {
   return {
     name,
-    steps: [{ id: "spawn", call: { type: "child_process", processes: [{ name: childName }] }, switch: [{ goto: "end" }] }],
+    steps: [{ id: "spawn", call: { type: "child", name: childName }, switch: [{ goto: "end" }] }],
   };
 }
 

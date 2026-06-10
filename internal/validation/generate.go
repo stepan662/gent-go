@@ -114,8 +114,8 @@ func collectNamedOutputs(steps []*model.Step, named map[string]*schema.SchemaNod
 		if !stepHasOutput(s) {
 			continue
 		}
-		if s.Call.Type == model.CallTypeChildProcess {
-			named[s.ID+"_output"] = childProcessOutputSchema(s)
+		if s.Call.Type == model.CallTypeChildParallel {
+			named[s.ID+"_output"] = childParallelOutputSchema(s)
 		} else {
 			named[s.ID+"_output"] = s.Call.OutputSchema
 		}
@@ -130,22 +130,21 @@ func collectTaskRefs(steps []*model.Step, out map[string]TaskSchemas) {
 	}
 }
 
-func childProcessOutputSchema(s *model.Step) *schema.SchemaNode {
-	itemProps := map[string]*schema.SchemaNode{
-		"id": {Type: schema.SchemaType{"string"}},
-	}
-	itemRequired := []string{"id"}
-	if s.Call.ChildOutputSchema != nil {
-		itemProps["output"] = s.Call.ChildOutputSchema
-		itemRequired = append(itemRequired, "output")
+func childParallelOutputSchema(s *model.Step) *schema.SchemaNode {
+	props := make(map[string]*schema.SchemaNode, len(s.Call.Children))
+	var required []string
+	for key, entry := range s.Call.Children {
+		if entry.OutputSchema != nil {
+			props[key] = entry.OutputSchema
+			required = append(required, key)
+		} else {
+			props[key] = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
+		}
 	}
 	return &schema.SchemaNode{
-		Type: schema.SchemaType{"array"},
-		Items: &schema.SchemaNode{
-			Type:       schema.SchemaType{"object"},
-			Properties: itemProps,
-			Required:   itemRequired,
-		},
+		Type:       schema.SchemaType{"object"},
+		Properties: props,
+		Required:   required,
 	}
 }
 

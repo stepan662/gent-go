@@ -103,12 +103,11 @@ func nullStringPtr(n sql.NullString) *string {
 // ── Public types ──────────────────────────────────────────────────────────────
 
 // DependencyRow represents a row in process_dependencies.
-// Integer fields use int to match the types in handlers.go.
 type DependencyRow struct {
 	ParentName    string
 	ParentVersion int
 	StepID        string
-	ChildIdx      int
+	ChildKey      string
 	ChildName     string
 	ChildVersion  int
 }
@@ -163,7 +162,7 @@ func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []D
 			ParentName:    d.ParentName,
 			ParentVersion: int64(d.ParentVersion),
 			StepID:        d.StepID,
-			ChildIdx:      int64(d.ChildIdx),
+			ChildKey:      d.ChildKey,
 			ChildName:     d.ChildName,
 			ChildVersion:  int64(d.ChildVersion),
 		}); err != nil {
@@ -255,7 +254,7 @@ func (db *DB) GetDependencies(name string, version int) ([]DependencyRow, error)
 			ParentName:    r.ParentName,
 			ParentVersion: int(r.ParentVersion),
 			StepID:        r.StepID,
-			ChildIdx:      int(r.ChildIdx),
+			ChildKey:      r.ChildKey,
 			ChildName:     r.ChildName,
 			ChildVersion:  int(r.ChildVersion),
 		}
@@ -263,15 +262,15 @@ func (db *DB) GetDependencies(name string, version int) ([]DependencyRow, error)
 	return out, nil
 }
 
-func (db *DB) GetDependencyVersion(parentName string, parentVersion int, stepID string, childIdx int) (int, error) {
+func (db *DB) GetDependencyVersion(parentName string, parentVersion int, stepID string, childKey string) (int, error) {
 	v, err := db.q.GetDependencyVersion(context.Background(), dbgen.GetDependencyVersionParams{
 		ParentName:    parentName,
 		ParentVersion: int64(parentVersion),
 		StepID:        stepID,
-		ChildIdx:      int64(childIdx),
+		ChildKey:      childKey,
 	})
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("dependency not found for %q v%d step %q child %d", parentName, parentVersion, stepID, childIdx)
+		return 0, fmt.Errorf("dependency not found for %q v%d step %q child %q", parentName, parentVersion, stepID, childKey)
 	}
 	if err != nil {
 		return 0, err
@@ -602,11 +601,6 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 		return fmt.Errorf("read siblings: %w", err)
 	}
 
-	siblingByID := make(map[string]dbgen.ProcessInstance, len(siblingRows))
-	for _, s := range siblingRows {
-		siblingByID[s.ID] = s
-	}
-
 	var failedID, failedErr string
 	for _, s := range siblingRows {
 		if s.Status == string(model.StatusFailed) {
@@ -652,70 +646,27 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 		return fmt.Errorf("unmarshal parent context: %w", err)
 	}
 
-	var spawnOrder []string
-	if outputs, ok := parentCtx["outputs"].(map[string]any); ok {
-		switch v := outputs[spawnStepID].(type) {
-		case []string:
-			spawnOrder = v
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok {
-					spawnOrder = append(spawnOrder, s)
-				}
-			}
-		}
-	}
-
-	var childOutputSchema map[string]any
-	if s, ok := parentCtx["_spawn_child_output_schema"]; ok {
-		if raw, ok := s.(string); ok && raw != "" {
-			json.Unmarshal([]byte(raw), &childOutputSchema) //nolint:errcheck
-		}
-	}
-
-	type childResult struct {
-		ID     string `json:"id"`
-		Output any    `json:"output,omitempty"`
-	}
-	results := make([]childResult, 0, len(spawnOrder))
-	for _, id := range spawnOrder {
-		row, ok := siblingByID[id]
-		if !ok {
-			continue
-		}
-		result := childResult{ID: id}
-		if len(childOutputSchema) > 0 {
-			var ctxData map[string]any
-			if err := json.Unmarshal([]byte(row.ContextData), &ctxData); err != nil {
-				return fmt.Errorf("unmarshal child context: %w", err)
-			}
-			output := ctxData["output"]
-			if err := validateChildOutput(childOutputSchema, output); err != nil {
-				reason := fmt.Sprintf("child process %q (%s) output validation: %v", id, row.ProcessName, err)
-				parentCtx["_child_error"] = map[string]any{
-					"step":    spawnStepID,
-					"message": reason,
-					"code":    "output.invalid",
-				}
-				patchedCtx, merr := json.Marshal(parentCtx)
-				if merr != nil {
-					return fmt.Errorf("marshal parent context: %w", merr)
-				}
-				return db.q.WakeParent(ctx, dbgen.WakeParentParams{
-					ID:          child.ParentID,
-					ContextData: string(patchedCtx),
-					UpdatedAt:   nowUnix(),
-				})
-			}
-			result.Output = output
-		}
-		results = append(results, result)
-	}
+	callType, _ := child.ContextData["_spawn_call_type"].(string)
 
 	if parentCtx["outputs"] == nil {
 		parentCtx["outputs"] = map[string]any{}
 	}
-	parentCtx["outputs"].(map[string]any)[spawnStepID] = results
+
+	var wakeErr string
+	switch callType {
+	case string(model.CallTypeChild):
+		wakeErr = db.buildSingleChildOutput(parentCtx, spawnStepID, siblingRows)
+	default: // child_parallel (and any unknown type falls through safely)
+		wakeErr = db.buildParallelChildOutput(parentCtx, spawnStepID, siblingRows)
+	}
+
+	if wakeErr != "" {
+		parentCtx["_child_error"] = map[string]any{
+			"step":    spawnStepID,
+			"message": wakeErr,
+			"code":    "output.invalid",
+		}
+	}
 
 	patchedCtx, err := json.Marshal(parentCtx)
 	if err != nil {
@@ -726,6 +677,53 @@ func (db *DB) TryWakeParent(child *model.ProcessInstance) error {
 		ContextData: string(patchedCtx),
 		UpdatedAt:   nowUnix(),
 	})
+}
+
+// buildSingleChildOutput writes the single child's output directly to
+// parentCtx["outputs"][stepID]. Returns a non-empty error message on validation failure.
+func (db *DB) buildSingleChildOutput(parentCtx map[string]any, stepID string, siblings []dbgen.ProcessInstance) string {
+	if len(siblings) == 0 {
+		return ""
+	}
+	row := siblings[0]
+	var childCtx map[string]any
+	if err := json.Unmarshal([]byte(row.ContextData), &childCtx); err != nil {
+		return fmt.Sprintf("unmarshal child context: %v", err)
+	}
+	output := childCtx["output"]
+	if schemaRaw, _ := childCtx["_spawn_output_schema"].(string); schemaRaw != "" {
+		var schema map[string]any
+		json.Unmarshal([]byte(schemaRaw), &schema) //nolint:errcheck
+		if err := validateChildOutput(schema, output); err != nil {
+			return fmt.Sprintf("child process %q (%s) output validation: %v", row.ID, row.ProcessName, err)
+		}
+	}
+	parentCtx["outputs"].(map[string]any)[stepID] = output
+	return ""
+}
+
+// buildParallelChildOutput writes each sibling's output to parentCtx["outputs"][stepID][key].
+// Returns a non-empty error message on the first validation failure.
+func (db *DB) buildParallelChildOutput(parentCtx map[string]any, stepID string, siblings []dbgen.ProcessInstance) string {
+	result := make(map[string]any, len(siblings))
+	for _, row := range siblings {
+		var childCtx map[string]any
+		if err := json.Unmarshal([]byte(row.ContextData), &childCtx); err != nil {
+			return fmt.Sprintf("unmarshal child context: %v", err)
+		}
+		key, _ := childCtx["_spawn_child_key"].(string)
+		output := childCtx["output"]
+		if schemaRaw, _ := childCtx["_spawn_output_schema"].(string); schemaRaw != "" {
+			var schema map[string]any
+			json.Unmarshal([]byte(schemaRaw), &schema) //nolint:errcheck
+			if err := validateChildOutput(schema, output); err != nil {
+				return fmt.Sprintf("child process %q (%s) output validation: %v", row.ID, row.ProcessName, err)
+			}
+		}
+		result[key] = output
+	}
+	parentCtx["outputs"].(map[string]any)[stepID] = result
+	return ""
 }
 
 // ── row → model conversion ────────────────────────────────────────────────────

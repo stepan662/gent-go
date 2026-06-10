@@ -137,7 +137,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 	var selfOutput any
 
 	if step.Call != nil {
-		if step.Call.Type == model.CallTypeChildProcess {
+		if step.Call.Type == model.CallTypeChild || step.Call.Type == model.CallTypeChildParallel {
 			out, done, err := e.runChildProcesses(ctx, inst, step)
 			if done || err != nil {
 				return err
@@ -408,9 +408,9 @@ func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error 
 	return e.notifyParent(inst)
 }
 
-// runChildProcesses starts a child instance for each entry in a child_process call,
-// then suspends the parent by setting its status to waiting. The parent resumes
-// (via db.TryWakeParent) once all children complete.
+// runChildProcesses starts child instance(s) for a child or child_parallel call,
+// then suspends the parent. The parent resumes (via db.TryWakeParent) once all
+// children complete.
 func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
 	// Woken after a child failure — route through the normal error handler so on_error
 	// rules on this step are evaluated. If no rule matches, failInstance propagates the
@@ -425,87 +425,61 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 		return nil, true, e.handleCallError(inst, step, errMsg, errCode)
 	}
 
-	// If the step output was already enriched by TryWakeParent (items are maps
-	// with {id, output}, not plain string IDs), the children are done — return
-	// the existing results so the engine's normal dequeue path advances the queue.
+	// If TryWakeParent already wrote the final output, return it so the engine
+	// advances the queue normally.
 	if outputs, ok := inst.ContextData["outputs"].(map[string]any); ok {
 		if existing, ok := outputs[step.ID]; ok {
-			if items, ok := existing.([]any); ok {
-				if len(items) == 0 {
+			switch step.Call.Type {
+			case model.CallTypeChild:
+				// Placeholder is a string (child ID); final result is a map.
+				if _, isStr := existing.(string); !isStr {
 					return existing, false, nil
 				}
-				if _, isMap := items[0].(map[string]any); isMap {
-					return existing, false, nil
+			case model.CallTypeChildParallel:
+				// Placeholder is map[key]→string ID; final result is map[key]→object.
+				if m, ok := existing.(map[string]any); ok {
+					allStrings := true
+					for _, v := range m {
+						if _, ok := v.(string); !ok {
+							allStrings = false
+							break
+						}
+					}
+					if !allStrings {
+						return existing, false, nil
+					}
 				}
 			}
 		}
 	}
 
 	childCallStack := append(inst.CallStack, inst.ID)
-	ids := make([]string, 0, len(step.Call.Processes))
 
-	for i, entry := range step.Call.Processes {
-		version := entry.Version
-		if version == 0 {
-			if entry.Name == inst.ProcessName {
-				// Self-reference: always run at the caller's own version.
-				version = inst.ProcessVersion
-			} else {
-				var err error
-				version, err = e.db.GetDependencyVersion(inst.ProcessName, inst.ProcessVersion, step.ID, i)
-				if err != nil {
-					// Backwards-compat: old defs without deps rows fall back to latest.
-					version, err = e.db.LatestVersion(entry.Name)
-					if err != nil {
-						return nil, true, e.failInstance(inst, fmt.Sprintf("step %q child_process[%d]: %v", step.ID, i, err))
-					}
-				}
-			}
-		}
-		def, err := e.db.GetDefinition(entry.Name, version)
-		if err != nil {
-			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q child_process[%d]: %v", step.ID, i, err))
-		}
-		input := make(map[string]any, len(entry.Input))
-		for k, expr := range entry.Input {
-			val, err := evalAny(expr, inst.ContextData)
-			if err != nil {
-				return nil, true, e.failInstance(inst, fmt.Sprintf("step %q child_process[%d] input %q: %v", step.ID, i, k, err))
-			}
-			input[k] = val
-		}
-		if err := def.ValidateInput(input); err != nil {
-			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q child_process[%d] input validation: %v", step.ID, i, err))
-		}
-		child := &model.ProcessInstance{
-			ID:             uuid.NewString(),
-			ProcessName:    def.Name,
-			ProcessVersion: version,
-			StepQueue:      def.Steps,
-			ContextData:    map[string]any{"input": input, "outputs": map[string]any{}, "output_order": []string{}, "_spawn_step_id": step.ID, "error": nil},
-			Status:         model.StatusRunning,
-			ParentID:       inst.ID,
-			CallStack:      childCallStack,
-		}
-		if err := e.db.SaveInstance(child); err != nil {
-			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q child_process[%d] save: %v", step.ID, i, err))
-		}
-		e.log.Info("started child process", "parent", inst.ID, "child", child.ID, "process", child.ProcessName)
-		ids = append(ids, child.ID)
-	}
-
-	// Store metadata TryWakeParent needs: spawn order (placeholder) and child output schema.
 	if inst.ContextData["outputs"] == nil {
 		inst.ContextData["outputs"] = map[string]any{}
 	}
-	// Placeholder — TryWakeParent replaces this with the enriched array on wake.
-	inst.ContextData["outputs"].(map[string]any)[step.ID] = ids
-	if step.Call.ChildOutputSchema != nil {
-		if schemaBytes, err := json.Marshal(step.Call.ChildOutputSchema); err == nil {
-			inst.ContextData["_spawn_child_output_schema"] = string(schemaBytes)
+
+	var spawnCount int
+	switch step.Call.Type {
+	case model.CallTypeChild:
+		id, err := e.spawnSingleChild(ctx, inst, step, childCallStack)
+		if err != nil {
+			return nil, true, err
 		}
-	} else {
-		delete(inst.ContextData, "_spawn_child_output_schema")
+		inst.ContextData["outputs"].(map[string]any)[step.ID] = id
+		spawnCount = 1
+	case model.CallTypeChildParallel:
+		idMap, err := e.spawnParallelChildren(ctx, inst, step, childCallStack)
+		if err != nil {
+			return nil, true, err
+		}
+		// Store map[key]→id as placeholder; TryWakeParent replaces values with outputs.
+		placeholder := make(map[string]any, len(idMap))
+		for k, v := range idMap {
+			placeholder[k] = v
+		}
+		inst.ContextData["outputs"].(map[string]any)[step.ID] = placeholder
+		spawnCount = len(idMap)
 	}
 
 	var order []string
@@ -521,15 +495,146 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 	}
 	inst.ContextData["output_order"] = append(order, step.ID)
 
-	// Suspend parent until all children complete.
 	inst.Status = model.StatusWaiting
 	inst.RetryCount = 0
 	inst.NextRetryAt = nil
 	if err := e.db.UpdateInstance(inst); err != nil {
 		return nil, true, err
 	}
-	e.log.Info("parent waiting for children", "id", inst.ID, "step", step.ID, "children", len(ids))
-	return ids, true, nil
+	e.log.Info("parent waiting for children", "id", inst.ID, "step", step.ID, "children", spawnCount)
+	return nil, true, nil
+}
+
+func (e *Engine) spawnSingleChild(ctx context.Context, inst *model.ProcessInstance, step *model.Step, callStack []string) (string, error) {
+	name := step.Call.Name
+	version := step.Call.Version
+	if version == 0 {
+		if name == inst.ProcessName {
+			version = inst.ProcessVersion
+		} else {
+			var err error
+			version, err = e.db.GetDependencyVersion(inst.ProcessName, inst.ProcessVersion, step.ID, "")
+			if err != nil {
+				version, err = e.db.LatestVersion(name)
+				if err != nil {
+					return "", e.failInstance(inst, fmt.Sprintf("step %q child: %v", step.ID, err))
+				}
+			}
+		}
+	}
+	def, err := e.db.GetDefinition(name, version)
+	if err != nil {
+		return "", e.failInstance(inst, fmt.Sprintf("step %q child: %v", step.ID, err))
+	}
+	input, err := e.evalChildInput(inst, step.ID, "child", step.Call.Input)
+	if err != nil {
+		return "", e.failInstance(inst, err.Error())
+	}
+	if err := def.ValidateInput(input); err != nil {
+		return "", e.failInstance(inst, fmt.Sprintf("step %q child input validation: %v", step.ID, err))
+	}
+	childCtx := map[string]any{
+		"input":            input,
+		"outputs":          map[string]any{},
+		"output_order":     []string{},
+		"error":            nil,
+		"_spawn_step_id":   step.ID,
+		"_spawn_call_type": string(model.CallTypeChild),
+	}
+	if step.Call.OutputSchema != nil {
+		if b, err := json.Marshal(step.Call.OutputSchema); err == nil {
+			childCtx["_spawn_output_schema"] = string(b)
+		}
+	}
+	child := &model.ProcessInstance{
+		ID:             uuid.NewString(),
+		ProcessName:    def.Name,
+		ProcessVersion: version,
+		StepQueue:      def.Steps,
+		ContextData:    childCtx,
+		Status:         model.StatusRunning,
+		ParentID:       inst.ID,
+		CallStack:      callStack,
+	}
+	if err := e.db.SaveInstance(child); err != nil {
+		return "", e.failInstance(inst, fmt.Sprintf("step %q child save: %v", step.ID, err))
+	}
+	e.log.Info("started child process", "parent", inst.ID, "child", child.ID, "process", child.ProcessName)
+	return child.ID, nil
+}
+
+func (e *Engine) spawnParallelChildren(ctx context.Context, inst *model.ProcessInstance, step *model.Step, callStack []string) (map[string]string, error) {
+	idMap := make(map[string]string, len(step.Call.Children))
+	for key, entry := range step.Call.Children {
+		version := entry.Version
+		if version == 0 {
+			if entry.Name == inst.ProcessName {
+				version = inst.ProcessVersion
+			} else {
+				var err error
+				version, err = e.db.GetDependencyVersion(inst.ProcessName, inst.ProcessVersion, step.ID, key)
+				if err != nil {
+					version, err = e.db.LatestVersion(entry.Name)
+					if err != nil {
+						return nil, e.failInstance(inst, fmt.Sprintf("step %q child_parallel[%q]: %v", step.ID, key, err))
+					}
+				}
+			}
+		}
+		def, err := e.db.GetDefinition(entry.Name, version)
+		if err != nil {
+			return nil, e.failInstance(inst, fmt.Sprintf("step %q child_parallel[%q]: %v", step.ID, key, err))
+		}
+		input, err := e.evalChildInput(inst, step.ID, fmt.Sprintf("child_parallel[%q]", key), entry.Input)
+		if err != nil {
+			return nil, e.failInstance(inst, err.Error())
+		}
+		if err := def.ValidateInput(input); err != nil {
+			return nil, e.failInstance(inst, fmt.Sprintf("step %q child_parallel[%q] input validation: %v", step.ID, key, err))
+		}
+		childCtx := map[string]any{
+			"input":            input,
+			"outputs":          map[string]any{},
+			"output_order":     []string{},
+			"error":            nil,
+			"_spawn_step_id":   step.ID,
+			"_spawn_call_type": string(model.CallTypeChildParallel),
+			"_spawn_child_key": key,
+		}
+		if entry.OutputSchema != nil {
+			if b, err := json.Marshal(entry.OutputSchema); err == nil {
+				childCtx["_spawn_output_schema"] = string(b)
+			}
+		}
+		child := &model.ProcessInstance{
+			ID:             uuid.NewString(),
+			ProcessName:    def.Name,
+			ProcessVersion: version,
+			StepQueue:      def.Steps,
+			ContextData:    childCtx,
+			Status:         model.StatusRunning,
+			ParentID:       inst.ID,
+			CallStack:      callStack,
+		}
+		if err := e.db.SaveInstance(child); err != nil {
+			return nil, e.failInstance(inst, fmt.Sprintf("step %q child_parallel[%q] save: %v", step.ID, key, err))
+		}
+		e.log.Info("started child process", "parent", inst.ID, "child", child.ID, "process", child.ProcessName, "key", key)
+		idMap[key] = child.ID
+	}
+	return idMap, nil
+}
+
+func (e *Engine) evalChildInput(inst *model.ProcessInstance, stepID, label string, inputExprs map[string]string) (map[string]any, error) {
+	result := make(map[string]any, len(inputExprs))
+	for k, expr := range inputExprs {
+		val, err := evalAny(expr, inst.ContextData)
+		if err != nil {
+			return nil, fmt.Errorf("step %q %s input %q: %v", stepID, label, k, err)
+		}
+		result[k] = val
+	}
+	return result, nil
 }
 
 // computeOutput evaluates the process definition's Output expression map against

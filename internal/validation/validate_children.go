@@ -13,9 +13,9 @@ type DefinitionGetter interface {
 	LatestVersion(name string) (int, error)
 }
 
-// ValidateChildProcessRefs checks every child_process step in def:
+// ValidateChildProcessRefs checks every child/child_parallel step in def:
 //  1. The referenced process exists (version 0 resolves to latest).
-//  2. The schema inferred from p.Input is a subset of the child's InputSchema.
+//  2. The schema inferred from the input expressions is a subset of the child's InputSchema.
 //
 // currentVersion is the server-assigned version of def (used for self-reference detection).
 // def must already be normalised (Generate calls Normalize internally, so call this after Generate).
@@ -28,26 +28,33 @@ func ValidateChildProcessRefs(def *model.ProcessDefinition, currentVersion int, 
 	required, optional, mustErr, mayErr := computeContextSets(def.Steps)
 
 	for _, s := range def.Steps {
-		if s.Call == nil || s.Call.Type != model.CallTypeChildProcess {
+		if s.Call == nil {
 			continue
 		}
-
 		ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
 		if len(defs) > 0 {
 			ctx = withDefs(ctx, defs)
 		}
 
-		for i, p := range s.Call.Processes {
-			if err := validateChildEntry(s.ID, i, p, ctx, defs, def, currentVersion, getter); err != nil {
+		switch s.Call.Type {
+		case model.CallTypeChild:
+			entry := model.ChildEntry{Name: s.Call.Name, Version: s.Call.Version, Input: s.Call.Input}
+			if err := validateChildEntry(s.ID, "child", entry, ctx, defs, def, currentVersion, getter); err != nil {
 				return err
+			}
+		case model.CallTypeChildParallel:
+			for key, entry := range s.Call.Children {
+				if err := validateChildEntry(s.ID, fmt.Sprintf("children[%q]", key), entry, ctx, defs, def, currentVersion, getter); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	return nil
 }
 
-func validateChildEntry(stepID string, idx int, p model.ChildProcessEntry, ctx *schema.SchemaNode, defs map[string]*schema.SchemaNode, current *model.ProcessDefinition, currentVersion int, getter DefinitionGetter) error {
-	prefix := fmt.Sprintf("step %q: processes[%d]", stepID, idx)
+func validateChildEntry(stepID string, label string, p model.ChildEntry, ctx *schema.SchemaNode, defs map[string]*schema.SchemaNode, current *model.ProcessDefinition, currentVersion int, getter DefinitionGetter) error {
+	prefix := fmt.Sprintf("step %q: %s", stepID, label)
 
 	var child *model.ProcessDefinition
 	var childVersion int
