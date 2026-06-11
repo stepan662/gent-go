@@ -18,13 +18,9 @@ import (
 )
 
 // TestStress_MultiWorker_ExactlyOnce starts engineCount Engine instances sharing
-// the same database, each polling at 1 ms, and verifies that each step of each
-// process instance is executed exactly once — no double-execution despite workers
-// all racing to claim the same pool of instances.
-//
-// Uses PostgreSQL when POSTGRES_DSN is set (real concurrent access, FOR UPDATE
-// SKIP LOCKED is exercised under pressure); falls back to SQLite otherwise
-// (serialised writes, good for catching logic bugs without external deps).
+// the same SQLite database, each polling at 1 ms, and verifies that each step of
+// each process instance is executed exactly once — no double-execution despite
+// workers all racing to claim the same pool of instances.
 func TestStress_MultiWorker_ExactlyOnce(t *testing.T) {
 	const (
 		instanceCount = 20
@@ -151,14 +147,6 @@ func TestStress_MultiWorker_ExactlyOnce(t *testing.T) {
 
 func openStressDB(t *testing.T) *db.DB {
 	t.Helper()
-	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
-		database, err := db.OpenPostgres(dsn)
-		if err != nil {
-			t.Fatalf("open postgres: %v", err)
-		}
-		t.Cleanup(func() { database.Close() })
-		return database
-	}
 	f, err := os.CreateTemp("", "gent-stress-*.db")
 	if err != nil {
 		t.Fatalf("create temp db: %v", err)

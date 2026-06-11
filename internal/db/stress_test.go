@@ -112,9 +112,9 @@ func TestStress_ClaimInstances_MultiWorker(t *testing.T) {
 	db := sharedPgDB
 
 	const (
-		runFor        = 2 * time.Second
-		leaseDur      = 100 * time.Millisecond // very short so workers re-contend constantly
-		instanceCount = 5                       // fewer instances than workers — guaranteed contention
+		runFor        = 3 * time.Second
+		leaseDur      = 1 * time.Second // must be >= 1s: DB stores lease_expires_at as int64 unix seconds
+		instanceCount = 5               // fewer instances than workers — guaranteed contention
 		workerCount   = 10
 	)
 
@@ -146,7 +146,9 @@ func TestStress_ClaimInstances_MultiWorker(t *testing.T) {
 					t.Errorf("worker %s: ClaimInstances: %v", workerID, err)
 					return
 				}
-				expiry := claimedAt.Add(leaseDur)
+				// Mirror the DB's integer-second truncation so the Go-side expiry
+				// matches exactly when the DB considers the lease expired.
+				expiry := time.Unix(claimedAt.Unix()+int64(leaseDur.Seconds()), 0)
 				mu.Lock()
 				for _, inst := range instances {
 					if prev, exists := active[inst.ID]; exists &&
@@ -164,6 +166,9 @@ func TestStress_ClaimInstances_MultiWorker(t *testing.T) {
 	}
 	wg.Wait()
 
+	if totalClaims == 0 {
+		t.Error("no instances were claimed — ClaimInstances may be broken")
+	}
 	t.Logf("workers: %d, instances: %d, lease: %v, duration: %v", workerCount, instanceCount, leaseDur, runFor)
 	t.Logf("total claim events: %d (~%.0f/s)", totalClaims, float64(totalClaims)/runFor.Seconds())
 }
