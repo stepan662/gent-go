@@ -3,8 +3,10 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -28,7 +30,8 @@ func pgDeadlock(err error) bool {
 //     then tries to lock parent — bottom-up.
 //
 // This is the only real deadlock in the codebase; the others tested by barrier tests
-// above cannot occur in practice because their WHERE conditions are mutually exclusive.
+// in deadlock_test.go cannot occur in practice because their WHERE conditions are
+// mutually exclusive.
 func TestStress_CancelProcess_vs_FailInstanceAndAncestors(t *testing.T) {
 	if sharedPgDB == nil {
 		t.Skip("PostgreSQL not available (set POSTGRES_DSN)")
@@ -71,8 +74,6 @@ func TestStress_CancelProcess_vs_FailInstanceAndAncestors(t *testing.T) {
 			}
 		}
 
-		// Verify neither row is stuck as 'running' — regardless of which operation
-		// won, both must have reached a terminal or cancelling state.
 		for _, id := range []string{"parent", "child"} {
 			inst, err := db.GetInstance(id)
 			if err != nil {
@@ -91,5 +92,227 @@ func TestStress_CancelProcess_vs_FailInstanceAndAncestors(t *testing.T) {
 	t.Logf("  deadlock: %d/%d (%.0f%%)", deadlockCount, total, 100*float64(deadlockCount)/float64(total))
 	if deadlockCount == 0 {
 		t.Log("  note: no deadlocks observed — scheduling may not have produced the exact interleave")
+	}
+}
+
+// TestStress_ClaimInstances_MultiWorker fires many concurrent workers continuously
+// polling ClaimInstances against a small, fixed instance pool. The lease is kept
+// very short (100 ms) so instances expire and become reclaimable many times per
+// second, keeping workers in constant contention.
+//
+// Invariant: FOR UPDATE SKIP LOCKED must guarantee that no instance is claimed by
+// two workers simultaneously. Workers track their in-flight claims in a shared
+// map; any new claim that finds the instance already owned by a different worker
+// whose Go-side lease has not expired is flagged as a double-claim.
+func TestStress_ClaimInstances_MultiWorker(t *testing.T) {
+	if sharedPgDB == nil {
+		t.Skip("PostgreSQL not available (set POSTGRES_DSN)")
+	}
+	ctx := context.Background()
+	db := sharedPgDB
+
+	const (
+		runFor        = 2 * time.Second
+		leaseDur      = 100 * time.Millisecond // very short so workers re-contend constantly
+		instanceCount = 5                       // fewer instances than workers — guaranteed contention
+		workerCount   = 10
+	)
+
+	db.sqldb.ExecContext(ctx, "DELETE FROM process_instances")
+	for j := 0; j < instanceCount; j++ {
+		insertInst(t, db, fmt.Sprintf("inst-%d", j), model.StatusRunning, "", nil, "")
+	}
+
+	type lease struct {
+		workerID  string
+		expiresAt time.Time
+	}
+
+	var mu sync.Mutex
+	active := map[string]lease{} // instID -> current holder
+	var totalClaims int
+
+	deadline := time.Now().Add(runFor)
+	var wg sync.WaitGroup
+	for w := 0; w < workerCount; w++ {
+		wg.Add(1)
+		workerID := fmt.Sprintf("worker-%d", w)
+		go func(workerID string) {
+			defer wg.Done()
+			for time.Now().Before(deadline) {
+				claimedAt := time.Now()
+				instances, err := db.ClaimInstances(workerID, leaseDur, instanceCount)
+				if err != nil {
+					t.Errorf("worker %s: ClaimInstances: %v", workerID, err)
+					return
+				}
+				expiry := claimedAt.Add(leaseDur)
+				mu.Lock()
+				for _, inst := range instances {
+					if prev, exists := active[inst.ID]; exists &&
+						prev.workerID != workerID &&
+						time.Now().Before(prev.expiresAt) {
+						t.Errorf("double-claim: instance %s held by %s (exp %v) also claimed by %s",
+							inst.ID, prev.workerID, prev.expiresAt.Format(time.RFC3339Nano), workerID)
+					}
+					active[inst.ID] = lease{workerID, expiry}
+					totalClaims++
+				}
+				mu.Unlock()
+			}
+		}(workerID)
+	}
+	wg.Wait()
+
+	t.Logf("workers: %d, instances: %d, lease: %v, duration: %v", workerCount, instanceCount, leaseDur, runFor)
+	t.Logf("total claim events: %d (~%.0f/s)", totalClaims, float64(totalClaims)/runFor.Seconds())
+}
+
+// TestStress_ConcurrentFinishChild fires N goroutines each completing one of N siblings
+// of the same waiting parent. Invariant: the parent transitions to 'collecting' exactly
+// once — the sibling that finishes last is the only one that should find active_count==0
+// and trigger the transition.
+//
+// This tests that the FOR UPDATE lock on the parent in FinishChild correctly serialises
+// concurrent completions and prevents the "zero-count check" from running simultaneously
+// in two goroutines.
+func TestStress_ConcurrentFinishChild(t *testing.T) {
+	if sharedPgDB == nil {
+		t.Skip("PostgreSQL not available (set POSTGRES_DSN)")
+	}
+	ctx := context.Background()
+	db := sharedPgDB
+
+	const (
+		iterations = 20
+		siblings   = 5
+	)
+
+	for i := 0; i < iterations; i++ {
+		db.sqldb.ExecContext(ctx, "DELETE FROM process_instances")
+		insertInstW(t, db, "parent", model.StatusRunning, model.WaitStateWaiting, "", nil, "")
+		for j := 0; j < siblings; j++ {
+			insertInst(t, db, fmt.Sprintf("child-%d", j), model.StatusRunning, "parent", []string{"parent"}, "")
+		}
+
+		var wg sync.WaitGroup
+		for j := 0; j < siblings; j++ {
+			wg.Add(1)
+			childID := fmt.Sprintf("child-%d", j)
+			go func(childID string) {
+				defer wg.Done()
+				child, err := db.GetInstance(childID)
+				if err != nil {
+					t.Errorf("iteration %d: GetInstance %s: %v", i, childID, err)
+					return
+				}
+				child.Status = model.StatusCompleted
+				if err := db.FinishChild(child); err != nil {
+					t.Errorf("iteration %d: FinishChild %s: %v", i, childID, err)
+				}
+			}(childID)
+		}
+		wg.Wait()
+
+		// All children must be completed.
+		for j := 0; j < siblings; j++ {
+			id := fmt.Sprintf("child-%d", j)
+			inst, err := db.GetInstance(id)
+			if err != nil {
+				t.Errorf("iteration %d: %s not found: %v", i, id, err)
+				continue
+			}
+			if inst.Status != model.StatusCompleted {
+				t.Errorf("iteration %d: %s status = %q, want completed", i, id, inst.Status)
+			}
+		}
+
+		// Parent must have transitioned to exactly 'collecting'.
+		parent, err := db.GetInstance("parent")
+		if err != nil {
+			t.Errorf("iteration %d: parent not found: %v", i, err)
+			continue
+		}
+		if parent.WaitState != model.WaitStateCollecting {
+			t.Errorf("iteration %d: parent wait_state = %q, want collecting", i, parent.WaitState)
+		}
+	}
+}
+
+// TestStress_CancelProcess_vs_FinishChild fires CancelProcess on a waiting parent
+// while N goroutines concurrently call FinishChild on its children.
+//
+// CancelProcess locks rows top-down via a recursive CTE (parent first, then children).
+// FinishChild locks parent first, then updates the child within the same transaction.
+// When the CTE locks a child before the parent row within a single execution plan,
+// the lock order can invert relative to a concurrent FinishChild — producing a deadlock.
+//
+// Invariant: all errors must be nil or a PostgreSQL deadlock; no instance may be
+// left in 'running' after both sides complete.
+func TestStress_CancelProcess_vs_FinishChild(t *testing.T) {
+	if sharedPgDB == nil {
+		t.Skip("PostgreSQL not available (set POSTGRES_DSN)")
+	}
+	ctx := context.Background()
+	db := sharedPgDB
+
+	const (
+		iterations = 20
+		siblings   = 4
+	)
+
+	for i := 0; i < iterations; i++ {
+		db.sqldb.ExecContext(ctx, "DELETE FROM process_instances")
+		insertInstW(t, db, "parent", model.StatusRunning, model.WaitStateWaiting, "", nil, "")
+		for j := 0; j < siblings; j++ {
+			insertInst(t, db, fmt.Sprintf("child-%d", j), model.StatusRunning, "parent", []string{"parent"}, "")
+		}
+
+		children := make([]*model.ProcessInstance, siblings)
+		for j := 0; j < siblings; j++ {
+			inst, err := db.GetInstance(fmt.Sprintf("child-%d", j))
+			if err != nil {
+				t.Fatalf("iteration %d: GetInstance child-%d: %v", i, j, err)
+			}
+			inst.Status = model.StatusCompleted
+			children[j] = inst
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := db.CancelProcess(ctx, "parent"); err != nil && !pgDeadlock(err) {
+				t.Errorf("iteration %d: CancelProcess: %v", i, err)
+			}
+		}()
+		for _, child := range children {
+			wg.Add(1)
+			child := child
+			go func() {
+				defer wg.Done()
+				if err := db.FinishChild(child); err != nil && !pgDeadlock(err) {
+					t.Errorf("iteration %d: FinishChild %s: %v", i, child.ID, err)
+				}
+			}()
+		}
+		wg.Wait()
+
+		// No instance may be stuck in 'running' after all operations settle.
+		ids := make([]string, 0, 1+siblings)
+		ids = append(ids, "parent")
+		for j := 0; j < siblings; j++ {
+			ids = append(ids, fmt.Sprintf("child-%d", j))
+		}
+		for _, id := range ids {
+			inst, err := db.GetInstance(id)
+			if err != nil {
+				t.Errorf("iteration %d: %s not found: %v", i, id, err)
+				continue
+			}
+			if inst.Status == model.StatusRunning {
+				t.Errorf("iteration %d: %s still 'running' after cancel+finish — inconsistent state", i, id)
+			}
+		}
 	}
 }

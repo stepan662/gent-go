@@ -29,7 +29,7 @@ test-unit:
 	$(BUILD_FLAGS) go test ./...
 
 test-stress:
-	$(BUILD_FLAGS) go test ./internal/db/... -run TestStress -v --count=3
+	$(BUILD_FLAGS) go test ./internal/db/... ./internal/engine/... -run TestStress -v --count=3
 
 swagger:
 	$(BUILD_FLAGS) go run ./cmd/gentspec
