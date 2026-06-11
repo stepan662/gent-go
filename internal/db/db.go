@@ -522,6 +522,7 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 				  AND wait_state <> 'waiting'
 				  AND (next_retry_at IS NULL OR next_retry_at <= $3)
 				  AND (worker_id IS NULL OR lease_expires_at <= $4)
+				ORDER BY created_at ASC, id ASC
 				LIMIT $5
 				FOR UPDATE SKIP LOCKED
 			)
@@ -538,6 +539,7 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 				  AND wait_state <> 'waiting'
 				  AND (next_retry_at IS NULL OR next_retry_at <= ?)
 				  AND (worker_id IS NULL OR lease_expires_at <= ?)
+				ORDER BY created_at ASC, id ASC
 				LIMIT ?
 			)
 			RETURNING id, process_name, process_version, step_queue, context_data, parent_id,
@@ -945,8 +947,10 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 	}
 
 	// Insert children with the parent's current status (propagates cancelling if needed).
+	// Each child gets created_at = now+i so siblings have a strict ordering by definition
+	// position — ClaimInstances (ORDER BY created_at) always processes them in spawn order.
 	now := nowUnix()
-	for _, child := range children {
+	for i, child := range children {
 		queue, err := json.Marshal(child.StepQueue)
 		if err != nil {
 			return err
@@ -959,6 +963,7 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 		if err != nil {
 			return err
 		}
+		ts := now + int64(i)
 		if err := qtx.InsertInstance(ctx, dbgen.InsertInstanceParams{
 			ID:             child.ID,
 			ProcessName:    child.ProcessName,
@@ -972,8 +977,8 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 			Status:         currentStatus,
 			WaitState:      string(model.WaitStateNone),
 			Error:          child.Error,
-			CreatedAt:      now,
-			UpdatedAt:      now,
+			CreatedAt:      ts,
+			UpdatedAt:      ts,
 		}); err != nil {
 			return fmt.Errorf("insert child: %w", err)
 		}

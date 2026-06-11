@@ -9,13 +9,15 @@
  * The server runs in manual-tick mode (--poll 0, --max-concurrent 1) so every
  * DB state transition is inspectable between ticks.
  *
- * buildTree() leaves the tree at:
- *   gp={status:"running", wait_state:"waiting"}, parent={status:"running", wait_state:"waiting"},
- *   a=running, b=running
+ * status() returns "status wait_state".trim(), e.g. "running waiting", "cancelling collecting".
+ * Instances with no wait_state show just their status, e.g. "running", "cancelled".
  *
- * The two interesting moments to observe:
- *   1. Immediately after CancelProcess — the DB state before any tick runs.
- *   2. After tickUntilIdle() — the fully settled final state.
+ * ClaimInstances uses ORDER BY created_at ASC, and SpawnChildrenAndWait assigns
+ * each sibling a strictly increasing created_at (now+0, now+1, …), so parallel
+ * siblings are always processed in definition order: a before b.
+ *
+ * buildTree() leaves the tree at:
+ *   gp="running waiting", parent="running waiting", a="running", b="running"
  */
 import { expect, test, beforeAll, afterAll } from "vitest";
 import { startMockService } from "../helpers/client.ts";
@@ -75,8 +77,7 @@ beforeAll(async () => {
 afterAll(() => stopMock?.());
 
 // Builds the full tree and leaves it at:
-//   gp={status:"running", wait_state:"waiting"}, parent={status:"running", wait_state:"waiting"},
-//   a=running, b=running
+//   gp="running waiting", parent="running waiting", a="running", b="running"
 async function buildTree() {
   const gp = await ctx.env.start(gpName);
 
@@ -94,8 +95,6 @@ async function buildTree() {
     a: "running",
     b: "running",
   });
-  expect(await ctx.env.waitState(gp)).toBe("waiting");
-  expect(await ctx.env.waitState(parent)).toBe("waiting");
 
   return { gp, parent, a, b };
 }
@@ -103,7 +102,36 @@ async function buildTree() {
 test("happy path — tree completes when ticked to completion", async () => {
   const { gp, parent, a, b } = await buildTree();
   try {
-    await ctx.env.tickUntilIdle();
+    // tick: a (spawned first) completes; b still running, parent stays waiting
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "running waiting",
+      parent: "running waiting",
+      a: "completed",
+      b: "running",
+    });
+
+    // tick: b completes; count = 0 → parent.wait_state = 'collecting'
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "running waiting",
+      parent: "running collecting",
+      a: "completed",
+      b: "completed",
+    });
+
+    // tick: parent (running+collecting) collects outputs, advances to end → completed
+    //       FinishChild(parent): gp.wait_state = 'collecting'
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "running collecting",
+      parent: "completed",
+      a: "completed",
+      b: "completed",
+    });
+
+    // tick: gp (running+collecting) collects output, advances to end → completed
+    await ctx.env.tick();
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "completed",
       parent: "completed",
@@ -120,8 +148,8 @@ test("cancel grandparent — entire tree becomes cancelling instantly, cancelled
   try {
     await ctx.env.cancel(gp);
 
-    // CancelProcess is atomic: the recursive CTE marks all descendants,
-    // ancestors (none here) in one transaction.
+    // CancelProcess is atomic. gp and parent keep wait_state='waiting' — they stay
+    // suspended until their children settle via FinishChild.
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "cancelling waiting",
       parent: "cancelling waiting",
@@ -129,8 +157,36 @@ test("cancel grandparent — entire tree becomes cancelling instantly, cancelled
       b: "cancelling",
     });
 
-    await ctx.env.tickUntilIdle();
+    // tick: a cancelled; b still active, parent not yet woken
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "cancelling waiting",
+      parent: "cancelling waiting",
+      a: "cancelled",
+      b: "cancelling",
+    });
 
+    // tick: b cancelled; count = 0 → parent.wait_state = 'collecting'
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "cancelling waiting",
+      parent: "cancelling collecting",
+      a: "cancelled",
+      b: "cancelled",
+    });
+
+    // tick: parent (cancelling+collecting) → cancelInstance → cancelled
+    //       FinishChild(parent): gp.wait_state = 'collecting'
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "cancelling collecting",
+      parent: "cancelled",
+      a: "cancelled",
+      b: "cancelled",
+    });
+
+    // tick: gp (cancelling+collecting) → cancelInstance → cancelled
+    await ctx.env.tick();
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "cancelled",
       parent: "cancelled",
@@ -148,7 +204,7 @@ test("cancel parent — subtree + grandparent become cancelling, all settled to 
     await ctx.env.cancel(parent);
 
     // Descendants: parent, a, b.
-    // Ancestors: gp (running+wait_state=waiting → cancelling+wait_state=waiting).
+    // Ancestors: gp keeps wait_state='waiting' — still suspended for parent.
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "cancelling waiting",
       parent: "cancelling waiting",
@@ -156,8 +212,35 @@ test("cancel parent — subtree + grandparent become cancelling, all settled to 
       b: "cancelling",
     });
 
-    await ctx.env.tickUntilIdle();
+    // tick: a cancelled
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "cancelling waiting",
+      parent: "cancelling waiting",
+      a: "cancelled",
+      b: "cancelling",
+    });
 
+    // tick: b cancelled → parent.wait_state = 'collecting'
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "cancelling waiting",
+      parent: "cancelling collecting",
+      a: "cancelled",
+      b: "cancelled",
+    });
+
+    // tick: parent cancelled → gp.wait_state = 'collecting'
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "cancelling collecting",
+      parent: "cancelled",
+      a: "cancelled",
+      b: "cancelled",
+    });
+
+    // tick: gp cancelled
+    await ctx.env.tick();
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "cancelled",
       parent: "cancelled",
@@ -176,8 +259,7 @@ test("cancel one child — sibling is unaffected, ancestors cascade to cancelled
 
     // Only a and its ancestor chain become cancelling.
     // Sibling b remains running — it was not in a's descendant or ancestor set.
-    // gp and parent stay running with wait_state=waiting (the cancel only changes status,
-    // not wait_state — they still have live children).
+    // gp and parent keep wait_state='waiting': they still have live children.
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "cancelling waiting",
       parent: "cancelling waiting",
@@ -185,22 +267,27 @@ test("cancel one child — sibling is unaffected, ancestors cascade to cancelled
       b: "running",
     });
 
-    // tick 1: a or b processed.
-    // tick 2: the other leaf processed; last sibling done → parent.wait_state='collecting'
+    // tick: a (smaller created_at) is claimed first → cancelled; b still running
     await ctx.env.tick();
-    await ctx.env.tick();
-
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "cancelling waiting",
-      parent: "cancelling collecting", // still cancelling, now with wait_state='collecting'
+      parent: "cancelling waiting",
+      a: "cancelled",
+      b: "running",
+    });
+
+    // tick: b completes; count = 0 → parent.wait_state = 'collecting'
+    await ctx.env.tick();
+    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
+      gp: "cancelling waiting",
+      parent: "cancelling collecting",
       a: "cancelled",
       b: "completed",
     });
 
-    // tick 3: parent claimed (cancelling+collecting) → cancelInstance → FinishChild
-    //         → gp.wait_state='collecting'
+    // tick: parent (cancelling+collecting) → cancelInstance → cancelled
+    //       FinishChild(parent): gp.wait_state = 'collecting'
     await ctx.env.tick();
-
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "cancelling collecting",
       parent: "cancelled",
@@ -208,9 +295,8 @@ test("cancel one child — sibling is unaffected, ancestors cascade to cancelled
       b: "completed",
     });
 
-    // tick 4: gp claimed (cancelling+collecting) → cancelInstance → cancelled
+    // tick: gp (cancelling+collecting) → cancelInstance → cancelled
     await ctx.env.tick();
-
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "cancelled",
       parent: "cancelled",

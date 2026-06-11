@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -583,8 +584,15 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 // buildParallelChildren resolves definitions, evaluates inputs, and constructs
 // ProcessInstances for all parallel children. Does not persist anything.
 func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessInstance, step *model.Step, callStack []string) ([]*model.ProcessInstance, error) {
+	keys := make([]string, 0, len(step.Call.Children))
+	for key := range step.Call.Children {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	children := make([]*model.ProcessInstance, 0, len(step.Call.Children))
-	for key, entry := range step.Call.Children {
+	for _, key := range keys {
+		entry := step.Call.Children[key]
 		version := entry.Version
 		if version == 0 {
 			if entry.Name == inst.ProcessName {
