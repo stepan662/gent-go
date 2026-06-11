@@ -453,10 +453,7 @@ func (e *Engine) saveAndNotify(inst *model.ProcessInstance) error {
 		return e.db.UpdateInstance(inst)
 	}
 	if inst.Status == model.StatusFailed {
-		if err := e.db.UpdateInstance(inst); err != nil {
-			return err
-		}
-		return e.db.FailAncestors(inst)
+		return e.db.FailInstanceAndAncestors(inst)
 	}
 	return e.db.FinishChild(inst)
 }

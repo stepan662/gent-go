@@ -130,7 +130,10 @@ type VersionedDef struct {
 
 // ── Process Definitions ───────────────────────────────────────────────────────
 
-func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []DependencyRow, hash string) error {
+// SaveDefinition persists a new process definition version with its dependencies.
+// If channel is non-empty, the channel pointer is updated in the same transaction
+// so a crash cannot leave a definition saved without a channel pointing to it.
+func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []DependencyRow, hash string, channel string) error {
 	data, err := json.Marshal(def)
 	if err != nil {
 		return err
@@ -165,6 +168,16 @@ func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []D
 			ChildKey:      d.ChildKey,
 			ChildName:     d.ChildName,
 			ChildVersion:  int64(d.ChildVersion),
+		}); err != nil {
+			return err
+		}
+	}
+	if channel != "" {
+		if err := qtx.UpsertChannel(ctx, dbgen.UpsertChannelParams{
+			Name:      def.Name,
+			Channel:   channel,
+			Version:   int64(version),
+			UpdatedAt: nowUnix(),
 		}); err != nil {
 			return err
 		}
@@ -732,6 +745,60 @@ func (db *DB) FailAncestors(child *model.ProcessInstance) error {
 	)
 	_, err := db.sqldb.ExecContext(context.Background(), query, args...)
 	return err
+}
+
+// FailInstanceAndAncestors atomically marks a child instance as failed and propagates
+// the failure to all ancestors in its call stack in a single transaction.
+// This is the safe replacement for calling UpdateInstance + FailAncestors separately.
+func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
+	ctx := context.Background()
+	tx, qtx, err := db.beginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	queue, err := json.Marshal(child.StepQueue)
+	if err != nil {
+		return err
+	}
+	ctxData, err := json.Marshal(child.ContextData)
+	if err != nil {
+		return err
+	}
+	if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
+		ID:          child.ID,
+		StepQueue:   string(queue),
+		ContextData: string(ctxData),
+		RetryCount:  int64(child.RetryCount),
+		NextRetryAt: fromTimePtr(child.NextRetryAt),
+		Status:      string(child.Status),
+		WaitState:   string(child.WaitState),
+		Error:       child.Error,
+		UpdatedAt:   nowUnix(),
+	}); err != nil {
+		return err
+	}
+
+	if len(child.CallStack) > 0 {
+		args := make([]any, 0, len(child.CallStack)+2)
+		args = append(args, child.Error, nowUnix())
+		placeholders := make([]string, len(child.CallStack))
+		for i, id := range child.CallStack {
+			args = append(args, id)
+			placeholders[i] = db.ph(len(args))
+		}
+		query := fmt.Sprintf(
+			`UPDATE process_instances SET status = 'failed', wait_state = '', error = %s, updated_at = %s
+			 WHERE id IN (%s) AND status IN ('running', 'cancelling')`,
+			db.ph(1), db.ph(2), strings.Join(placeholders, ", "),
+		)
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 // CancelProcess atomically marks an entire process tree as cancelling.

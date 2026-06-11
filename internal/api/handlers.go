@@ -174,7 +174,7 @@ func (h *Handlers) putDefinition(raw json.RawMessage) Reply {
 	if err := validation.ValidateChildProcessRefs(&req.ProcessDefinition, version, h.db); err != nil {
 		return errReply(err)
 	}
-	if err := h.db.SaveDefinition(&req.ProcessDefinition, version, nil, ""); err != nil {
+	if err := h.db.SaveDefinition(&req.ProcessDefinition, version, nil, "", ""); err != nil {
 		return errReply(fmt.Errorf("save: %w", err))
 	}
 	return okReply(map[string]interface{}{"saved": true, "name": req.Name, "version": version})
@@ -558,11 +558,8 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 			return nil, fmt.Errorf("%s: %w", def.Name, err)
 		}
 
-		if err := h.db.SaveDefinition(def, newVersion, newDeps, hash); err != nil {
+		if err := h.db.SaveDefinition(def, newVersion, newDeps, hash, channel); err != nil {
 			return nil, fmt.Errorf("save %s: %w", def.Name, err)
-		}
-		if err := h.db.SaveChannel(def.Name, channel, newVersion); err != nil {
-			return nil, fmt.Errorf("channel %s: %w", def.Name, err)
 		}
 		batchVersions[def.Name] = newVersion
 		results = append(results, BatchApplyResult{Name: def.Name, Version: newVersion, Saved: true})
@@ -703,11 +700,8 @@ func (h *Handlers) cascadeUpdate(channel string, changedVersions map[string]int,
 				return nil, fmt.Errorf("auto-update %s: child input incompatible after upgrade: %w", vd.Def.Name, err)
 			}
 
-			if err := h.db.SaveDefinition(vd.Def, newVersion, newDeps, hash); err != nil {
+			if err := h.db.SaveDefinition(vd.Def, newVersion, newDeps, hash, channel); err != nil {
 				return nil, fmt.Errorf("auto-update save %s: %w", vd.Def.Name, err)
-			}
-			if err := h.db.SaveChannel(vd.Def.Name, channel, newVersion); err != nil {
-				return nil, fmt.Errorf("auto-update channel %s: %w", vd.Def.Name, err)
 			}
 
 			allUpdated[vd.Def.Name] = newVersion
