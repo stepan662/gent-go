@@ -7,7 +7,7 @@ log     ?= info
 
 # BUILD_FLAGS = CGO_ENABLED=1
 
-.PHONY: run build test test-unit test-int swagger client clean generate
+.PHONY: run build test test-unit test-int test-stress swagger client clean generate
 
 run:
 	$(BUILD_FLAGS) go run ./cmd/gent \
@@ -27,6 +27,9 @@ test: test-unit test-int
 
 test-unit:
 	$(BUILD_FLAGS) go test ./...
+
+test-stress:
+	$(BUILD_FLAGS) go test ./internal/db/... -run TestStress -v --count=3
 
 swagger:
 	$(BUILD_FLAGS) go run ./cmd/gentspec
