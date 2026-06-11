@@ -780,20 +780,16 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 		return err
 	}
 
-	if len(child.CallStack) > 0 {
-		args := make([]any, 0, len(child.CallStack)+2)
-		args = append(args, child.Error, nowUnix())
-		placeholders := make([]string, len(child.CallStack))
-		for i, id := range child.CallStack {
-			args = append(args, id)
-			placeholders[i] = db.ph(len(args))
-		}
+	// Update ancestors nearest-first so lock order matches RetryProcess and avoids
+	// deadlocks on PostgreSQL when both run concurrently on sibling processes.
+	now := nowUnix()
+	for i := len(child.CallStack) - 1; i >= 0; i-- {
 		query := fmt.Sprintf(
 			`UPDATE process_instances SET status = 'failed', wait_state = '', error = %s, updated_at = %s
-			 WHERE id IN (%s) AND status IN ('running', 'cancelling')`,
-			db.ph(1), db.ph(2), strings.Join(placeholders, ", "),
+			 WHERE id = %s AND status IN ('running', 'cancelling')`,
+			db.ph(1), db.ph(2), db.ph(3),
 		)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, query, child.Error, now, child.CallStack[i]); err != nil {
 			return err
 		}
 	}
