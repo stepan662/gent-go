@@ -148,7 +148,8 @@ export function useTickEnv(port: number) {
     const bin = await getBin();
     const db = join(tmpdir(), `gent_tick_${Date.now()}.db`);
     // poll=0 → manual tick mode; max-concurrent=1 → one instance per tick (predictable ordering)
-    const gent = await startGent(bin, port, db, undefined, 0, 1);
+    // immediateRetries=true → no backoff, retries are claimable on the very next tick
+    const gent = await startGent(bin, port, db, undefined, 0, 1, true);
     ctx.env = new TickEnv(gent);
   }, 60_000);
 

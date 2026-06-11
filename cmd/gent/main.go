@@ -25,6 +25,7 @@ func main() {
 	udsPath := flag.String("uds", "", "Unix socket path, e.g. /tmp/gent.sock (empty to disable)")
 	pollMs := flag.Int("poll", 500, "Engine poll interval in milliseconds")
 	maxConcurrent := flag.Int("max-concurrent", 100_000, "Max instances processed concurrently")
+	immediateRetries := flag.Bool("immediate-retries", false, "Disable retry backoff (retries fire instantly); for testing only")
 	pprofAddr := flag.String("pprof", "", "pprof listen address, e.g. localhost:6060 (empty to disable)")
 	logLevel := flag.String("log", "debug", "Log level: debug, info, warn, error")
 	flag.Parse()
@@ -46,7 +47,7 @@ func main() {
 	}
 	defer database.Close()
 
-	eng := engine.New(database, time.Duration(*pollMs)*time.Millisecond, *maxConcurrent, log)
+	eng := engine.New(database, time.Duration(*pollMs)*time.Millisecond, *maxConcurrent, *immediateRetries, log)
 	handlers := api.NewHandlers(database, eng)
 	srv := api.NewServer(handlers, log)
 

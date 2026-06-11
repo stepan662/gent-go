@@ -24,11 +24,13 @@ function spawnProc(
   pgDSN?: string,
   pollMs?: number,
   maxConcurrent?: number,
+  immediateRetries?: boolean,
 ): ChildProcess {
   const dbArgs = pgDSN ? ["--pg", pgDSN] : ["--db", db];
   const pollArgs = pollMs !== undefined ? ["--poll", String(pollMs)] : [];
   const concArgs = maxConcurrent !== undefined ? ["--max-concurrent", String(maxConcurrent)] : [];
-  return spawn(bin, [...dbArgs, "--http", `:${port}`, "--log", "error", ...pollArgs, ...concArgs], {
+  const retryArgs = immediateRetries ? ["--immediate-retries"] : [];
+  return spawn(bin, [...dbArgs, "--http", `:${port}`, "--log", "error", ...pollArgs, ...concArgs, ...retryArgs], {
     stdio: "ignore",
   });
 }
@@ -59,8 +61,9 @@ export async function startGent(
   pgDSN?: string,
   pollMs?: number,
   maxConcurrent?: number,
+  immediateRetries?: boolean,
 ): Promise<GentProcess> {
-  const proc = spawnProc(bin, port, db, pgDSN, pollMs, maxConcurrent);
+  const proc = spawnProc(bin, port, db, pgDSN, pollMs, maxConcurrent, immediateRetries);
   await waitUntilReady(port);
   return {
     client: createClientTyped({ baseUrl: `http://localhost:${port}` }),

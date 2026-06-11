@@ -26,26 +26,36 @@ const (
 // Engine is the main orchestration loop. It polls the database for pending
 // instances and advances each one step at a time.
 type Engine struct {
-	db        *db.DB
-	pollEvery time.Duration
-	log       *slog.Logger
-	sem       chan struct{}
-	workerID  string
+	db               *db.DB
+	pollEvery        time.Duration
+	immediateRetries bool
+	log              *slog.Logger
+	sem              chan struct{}
+	workerID         string
 }
 
 // New creates an Engine. pollEvery controls how often SQLite is checked for work.
 // maxConcurrent limits how many instances are processed in parallel and how many
-// are fetched per tick.
-func New(database *db.DB, pollEvery time.Duration, maxConcurrent int, log *slog.Logger) *Engine {
+// are fetched per tick. immediateRetries disables exponential backoff (retries fire
+// instantly); intended for tests only.
+func New(database *db.DB, pollEvery time.Duration, maxConcurrent int, immediateRetries bool, log *slog.Logger) *Engine {
 	hostname, _ := os.Hostname()
 	workerID := fmt.Sprintf("%s-%d", hostname, os.Getpid())
 	return &Engine{
-		db:        database,
-		pollEvery: pollEvery,
-		log:       log,
-		sem:       make(chan struct{}, maxConcurrent),
-		workerID:  workerID,
+		db:               database,
+		pollEvery:        pollEvery,
+		immediateRetries: immediateRetries,
+		log:              log,
+		sem:              make(chan struct{}, maxConcurrent),
+		workerID:         workerID,
 	}
+}
+
+func (e *Engine) retryDelay(attempt int) time.Duration {
+	if e.immediateRetries {
+		return 0
+	}
+	return transport.RetryDelay(attempt)
 }
 
 // Run starts the engine loop and blocks until ctx is cancelled.
@@ -363,7 +373,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 
 	if matched != nil && inst.RetryCount < matched.Retries && isRetryAllowed(step, errCode, matched) {
 		inst.RetryCount++
-		next := time.Now().Add(transport.RetryDelay(inst.RetryCount))
+		next := time.Now().Add(e.retryDelay(inst.RetryCount))
 		inst.NextRetryAt = &next
 		e.log.Warn("step failed, scheduling retry",
 			"id", inst.ID, "step", step.ID,
