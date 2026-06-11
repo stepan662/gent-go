@@ -44,6 +44,35 @@ func mustError(t *testing.T, db *DB, id string) string {
 	return inst.Error
 }
 
+func mustWaitState(t *testing.T, db *DB, id string) model.WaitState {
+	t.Helper()
+	inst, err := db.GetInstance(id)
+	if err != nil {
+		t.Fatalf("GetInstance %q: %v", id, err)
+	}
+	return inst.WaitState
+}
+
+// insertInstW inserts an instance with an explicit wait_state (for testing waiting parents).
+func insertInstW(t *testing.T, db *DB, id string, status model.Status, waitState model.WaitState, parentID string, callStack []string, errMsg string) {
+	t.Helper()
+	inst := &model.ProcessInstance{
+		ID:             id,
+		ProcessName:    "test",
+		ProcessVersion: 1,
+		StepQueue:      []*model.Step{{ID: "step1"}},
+		ContextData:    map[string]any{},
+		Status:         status,
+		WaitState:      waitState,
+		ParentID:       parentID,
+		CallStack:      callStack,
+		Error:          errMsg,
+	}
+	if err := db.SaveInstance(inst); err != nil {
+		t.Fatalf("insertInstW %q: %v", id, err)
+	}
+}
+
 // TestCancelProcess_SingleInstance verifies a running instance becomes cancelling.
 func TestCancelProcess_SingleInstance(t *testing.T) {
 	for _, b := range testBackends(t) {
@@ -67,7 +96,7 @@ func TestCancelProcess_Descendants(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			insertInst(t, b.db, "root", model.StatusRunning, "", nil, "")
 			insertInst(t, b.db, "child1", model.StatusRunning, "root", []string{"root"}, "")
-			insertInst(t, b.db, "child2", model.StatusWaiting, "root", []string{"root"}, "")
+			insertInstW(t, b.db, "child2", model.StatusRunning, model.WaitStateWaiting, "root", []string{"root"}, "")
 			// grandchild of root via child1
 			insertInst(t, b.db, "gc1", model.StatusRunning, "child1", []string{"root", "child1"}, "")
 
@@ -138,6 +167,28 @@ func TestCancelProcess_LeafCancelsAncestors(t *testing.T) {
 			// sibling of the leaf's parent is NOT affected
 			if got := mustStatus(t, b.db, "sibling"); got != model.StatusRunning {
 				t.Errorf("sibling: expected running (untouched), got %q", got)
+			}
+		})
+	}
+}
+
+// TestCancelProcess_WaitingAncestors verifies that waiting ancestors (not just running ones)
+// are also marked cancelling when a leaf is cancelled.
+func TestCancelProcess_WaitingAncestors(t *testing.T) {
+	for _, b := range testBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			insertInstW(t, b.db, "gp", model.StatusRunning, model.WaitStateWaiting, "", nil, "")
+			insertInstW(t, b.db, "parent", model.StatusRunning, model.WaitStateWaiting, "gp", []string{"gp"}, "")
+			insertInst(t, b.db, "leaf", model.StatusRunning, "parent", []string{"gp", "parent"}, "")
+
+			if err := b.db.CancelProcess(context.Background(), "leaf"); err != nil {
+				t.Fatalf("CancelProcess: %v", err)
+			}
+
+			for _, id := range []string{"leaf", "parent", "gp"} {
+				if got := mustStatus(t, b.db, id); got != model.StatusCancelling {
+					t.Errorf("%q: expected cancelling, got %q", id, got)
+				}
 			}
 		})
 	}
@@ -220,8 +271,11 @@ func TestSpawnChildrenAndWait_RunningParent(t *testing.T) {
 				t.Fatalf("SpawnChildrenAndWait: %v", err)
 			}
 
-			if got := mustStatus(t, b.db, "parent"); got != model.StatusWaiting {
-				t.Errorf("parent: expected waiting, got %q", got)
+			if got := mustStatus(t, b.db, "parent"); got != model.StatusRunning {
+				t.Errorf("parent: expected running, got %q", got)
+			}
+			if got := mustWaitState(t, b.db, "parent"); got != model.WaitStateWaiting {
+				t.Errorf("parent: expected wait_state=waiting, got %q", got)
 			}
 			if got := mustStatus(t, b.db, "child"); got != model.StatusRunning {
 				t.Errorf("child: expected running, got %q", got)
@@ -230,7 +284,8 @@ func TestSpawnChildrenAndWait_RunningParent(t *testing.T) {
 	}
 }
 
-// TestSpawnChildrenAndWait_CancellingParent verifies that a concurrent cancel prevents spawn.
+// TestSpawnChildrenAndWait_CancellingParent verifies that a cancelling parent spawns
+// cancelling children (they self-cancel and wake the parent via FinishChild).
 func TestSpawnChildrenAndWait_CancellingParent(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
@@ -250,14 +305,20 @@ func TestSpawnChildrenAndWait_CancellingParent(t *testing.T) {
 				Status:      model.StatusRunning,
 			}
 
-			err = b.db.SpawnChildrenAndWait(context.Background(), parent, []*model.ProcessInstance{child})
-			if err != ErrParentNotRunning {
-				t.Fatalf("expected ErrParentNotRunning, got %v", err)
+			if err := b.db.SpawnChildrenAndWait(context.Background(), parent, []*model.ProcessInstance{child}); err != nil {
+				t.Fatalf("SpawnChildrenAndWait: %v", err)
 			}
 
-			// child must not have been inserted
-			if _, err := b.db.GetInstance("child"); err == nil {
-				t.Error("child should not exist after rejected spawn")
+			// parent keeps cancelling status but enters wait_state=waiting
+			if got := mustStatus(t, b.db, "parent"); got != model.StatusCancelling {
+				t.Errorf("parent: expected cancelling, got %q", got)
+			}
+			if got := mustWaitState(t, b.db, "parent"); got != model.WaitStateWaiting {
+				t.Errorf("parent: expected wait_state=waiting, got %q", got)
+			}
+			// child is spawned as cancelling (inherits parent status)
+			if got := mustStatus(t, b.db, "child"); got != model.StatusCancelling {
+				t.Errorf("child: expected cancelling, got %q", got)
 			}
 		})
 	}
@@ -279,8 +340,11 @@ func TestRetryProcess_OnlyBlocker(t *testing.T) {
 			if got := mustStatus(t, b.db, "child-bad"); got != model.StatusRunning {
 				t.Errorf("child-bad: expected running, got %q", got)
 			}
-			if got := mustStatus(t, b.db, "parent"); got != model.StatusWaiting {
-				t.Errorf("parent: expected waiting (unblocked), got %q", got)
+			if got := mustStatus(t, b.db, "parent"); got != model.StatusRunning {
+				t.Errorf("parent: expected running (unblocked), got %q", got)
+			}
+			if got := mustWaitState(t, b.db, "parent"); got != model.WaitStateWaiting {
+				t.Errorf("parent: expected wait_state=waiting (unblocked), got %q", got)
 			}
 		})
 	}

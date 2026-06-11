@@ -20,13 +20,18 @@ import (
 
 const defaultChannel = "latest"
 
-// Handlers holds business logic for all API operations.
-type Handlers struct {
-	db *db.DB
+type tickProvider interface {
+	Tick(ctx context.Context) (int, error)
 }
 
-func NewHandlers(database *db.DB) *Handlers {
-	return &Handlers{db: database}
+// Handlers holds business logic for all API operations.
+type Handlers struct {
+	db     *db.DB
+	engine tickProvider
+}
+
+func NewHandlers(database *db.DB, eng tickProvider) *Handlers {
+	return &Handlers{db: database, engine: eng}
 }
 
 // --- Request / Response types ---
@@ -114,15 +119,16 @@ type BatchApplyResult struct {
 }
 
 type InstanceStatusResp struct {
-	ID         string         `json:"id"`
-	Process    string         `json:"process"`
-	Version    int            `json:"version"`
-	Status     model.Status   `json:"status"`
-	RetryCount int            `json:"retry_count"`
-	Context    map[string]any `json:"context"`
-	Error      string         `json:"error,omitempty"`
-	CreatedAt  string         `json:"created_at"`
-	UpdatedAt  string         `json:"updated_at"`
+	ID         string           `json:"id"`
+	Process    string           `json:"process"`
+	Version    int              `json:"version"`
+	Status     model.Status     `json:"status"`
+	WaitState  model.WaitState  `json:"wait_state,omitempty"`
+	RetryCount int              `json:"retry_count"`
+	Context    map[string]any   `json:"context"`
+	Error      string           `json:"error,omitempty"`
+	CreatedAt  string           `json:"created_at"`
+	UpdatedAt  string           `json:"updated_at"`
 }
 
 // --- Envelope ---
@@ -296,12 +302,24 @@ func (h *Handlers) retryInstance(id string) Reply {
 	return okReply(map[string]any{"retried": true})
 }
 
+func (h *Handlers) tick() Reply {
+	if h.engine == nil {
+		return errReply(fmt.Errorf("engine not available"))
+	}
+	n, err := h.engine.Tick(context.Background())
+	if err != nil {
+		return errReply(err)
+	}
+	return okReply(map[string]any{"count": n})
+}
+
 func instanceToResp(inst *model.ProcessInstance) InstanceStatusResp {
 	return InstanceStatusResp{
 		ID:         inst.ID,
 		Process:    inst.ProcessName,
 		Version:    inst.ProcessVersion,
 		Status:     inst.Status,
+		WaitState:  inst.WaitState,
 		RetryCount: inst.RetryCount,
 		Context:    orderedContext(inst.ContextData),
 		Error:      inst.Error,

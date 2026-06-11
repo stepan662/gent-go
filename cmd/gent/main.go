@@ -47,7 +47,7 @@ func main() {
 	defer database.Close()
 
 	eng := engine.New(database, time.Duration(*pollMs)*time.Millisecond, *maxConcurrent, log)
-	handlers := api.NewHandlers(database)
+	handlers := api.NewHandlers(database, eng)
 	srv := api.NewServer(handlers, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

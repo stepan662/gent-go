@@ -1,73 +1,99 @@
-import { expect, test } from "vitest";
-import { client, startMockService, waitForInstance } from "../helpers/client.ts";
+import { expect, test, beforeAll } from "vitest";
+import { join } from "path";
+import { tmpdir } from "os";
+import { buildGentBinary, startGent, type GentProcess } from "../helpers/server.ts";
+import { startMockService, tick } from "../helpers/client.ts";
 
-// Verifies that a cancel arriving while step N is executing takes effect after
-// step N completes: step N+1 is never started, and the instance ends up cancelled.
-// This exercises the UpdateInstanceProgress path — it preserves the DB status
-// (cancelling) rather than overwriting it with 'running', so the next tick
-// sees 'cancelling' and stops cleanly.
-test("cancel during active step — next step is not executed, instance becomes cancelled", async () => {
-  const id = crypto.randomUUID();
-  const processName = `cancel_between_steps_${id}`;
+const TICK_PORT = 20013;
 
-  // step1Mock holds the first request until release() is called.
-  const step1Mock = await startMockService(0, {
-    response: { ok: true },
-    firstRequestDelayMs: Infinity,
+let gentBin: string;
+beforeAll(async () => {
+  gentBin = await buildGentBinary();
+}, 60_000);
+
+async function getStatus(gent: GentProcess, id: string) {
+  const { data, error } = await gent.client.GET("/instances/{id}", {
+    params: { path: { id } },
   });
-  // step2Mock should never receive a request if cancel works correctly.
+  if (error) throw new Error(`get_instance failed: ${JSON.stringify(error)}`);
+  return data!;
+}
+
+// Verifies that cancelling between two steps stops execution cleanly.
+// Uses manual tick mode (-poll 0) so each engine cycle is explicit, making
+// every intermediate DB state directly observable.
+test("cancel between steps — status transitions and step2 never executed", async () => {
+  const processName = `cancel_tick_${crypto.randomUUID()}`;
+  const db = join(tmpdir(), `gent_cancel_${Date.now()}.db`);
+  const gent = await startGent(gentBin, TICK_PORT, db, undefined, 0);
+
+  const step1Mock = await startMockService(0, { response: { ok: true } });
   const step2Mock = await startMockService(0, { response: { done: true } });
 
-  await client.PUT("/definitions", {
-    body: {
-      name: processName,
-      steps: [
-        {
-          id: "step1",
-          call: {
-            type: "rest" as const,
-            endpoint: `http://localhost:${step1Mock.port}/action`,
+  try {
+    await gent.client.PUT("/definitions", {
+      body: {
+        name: processName,
+        steps: [
+          {
+            id: "step1",
+            call: {
+              type: "rest" as const,
+              endpoint: `http://localhost:${step1Mock.port}/action`,
+            },
+            timeout_ms: 5_000,
+            switch: [{ goto: "next" }],
           },
-          timeout_ms: 10_000,
-          switch: [{ goto: "next" }],
-        },
-        {
-          id: "step2",
-          call: {
-            type: "rest" as const,
-            endpoint: `http://localhost:${step2Mock.port}/action`,
+          {
+            id: "step2",
+            call: {
+              type: "rest" as const,
+              endpoint: `http://localhost:${step2Mock.port}/action`,
+            },
+            timeout_ms: 5_000,
+            switch: [{ goto: "end" }],
           },
-          timeout_ms: 5_000,
-          switch: [{ goto: "end" }],
-        },
-      ],
-    },
-  });
+        ],
+      },
+    });
 
-  const { data, error } = await client.POST("/instances", {
-    body: { process: processName },
-  });
-  expect(error).toBeUndefined();
-  expect(data).toBeDefined();
+    const { data: startData } = await gent.client.POST("/instances", {
+      body: { process: processName },
+    });
+    const id = startData!.id;
 
-  // Wait until the worker is mid-execution of step1.
-  await step1Mock.firstRequestReceived;
+    // Before any tick: instance exists but no steps have run yet.
+    const s0 = await getStatus(gent, id);
+    expect(s0.status).toBe("running");
+    expect(step1Mock.requestCount()).toBe(0);
 
-  // Cancel while step1 is still executing. The DB is now 'cancelling'.
-  const { error: cancelError } = await client.POST("/instances/{id}/cancel", {
-    params: { path: { id: data!.id } },
-  });
-  expect(cancelError).toBeUndefined();
+    // Tick 1 — engine executes step1, then writes updated queue via
+    // UpdateInstanceProgress (does not touch status).
+    expect(await tick(gent.client)).toBe(1);
+    expect(step1Mock.requestCount()).toBe(1);
+    expect(step2Mock.requestCount()).toBe(0);
 
-  // Let step1's HTTP response return. The engine writes the updated queue via
-  // UpdateInstanceProgress without touching status — DB stays 'cancelling'.
-  step1Mock.release();
+    const s1 = await getStatus(gent, id);
+    expect(s1.status).toBe("running"); // still running, waiting for next tick
 
-  // The instance must end up cancelled and step2 must never have been called.
-  const status = await waitForInstance(data!.id, 10_000);
-  expect(status).toBe("cancelled");
-  expect(step2Mock.requestCount()).toBe(0);
+    // Cancel between steps — DB transitions to 'cancelling' immediately.
+    await gent.client.POST("/instances/{id}/cancel", {
+      params: { path: { id } },
+    });
 
-  step1Mock.stop();
-  step2Mock.stop();
-});
+    const s2 = await getStatus(gent, id);
+    expect(s2.status).toBe("cancelling");
+
+    // Tick 2 — engine sees 'cancelling' at the top of advance(), transitions
+    // to 'cancelled' without touching step2.
+    expect(await tick(gent.client)).toBe(1);
+    expect(step2Mock.requestCount()).toBe(0);
+
+    const s3 = await getStatus(gent, id);
+    expect(s3.status).toBe("cancelled");
+  } finally {
+    gent.stop();
+    await step1Mock.stop();
+    await step2Mock.stop();
+  }
+}, 30_000);

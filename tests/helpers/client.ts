@@ -9,6 +9,7 @@ export const createClientTyped: typeof createClient<paths> = (options) =>
   createClient<paths>(options);
 
 type ApiClient = Pick<typeof client, "GET">;
+type PostClient = Pick<typeof client, "POST">;
 
 export async function waitForInstance(
   id: string,
@@ -26,6 +27,14 @@ export async function waitForInstance(
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`instance ${id} did not complete within ${timeoutMs}ms`);
+}
+
+// Trigger one engine poll cycle. Returns the number of instances processed.
+// Only useful when the server was started with --poll 0 (manual tick mode).
+export async function tick(apiClient: PostClient = client): Promise<number> {
+  const { data, error } = await apiClient.POST("/tick", {});
+  if (error) throw new Error(`tick failed: ${JSON.stringify(error)}`);
+  return (data as { count: number }).count;
 }
 
 interface MockServiceOptions {

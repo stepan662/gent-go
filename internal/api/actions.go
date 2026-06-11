@@ -316,5 +316,17 @@ var registry = func() []actionDef {
 				return h.retryInstance(env.ID)
 			},
 		},
+		{
+			Name:    "tick",
+			Method:  http.MethodPost,
+			Path:    "/tick",
+			Summary: "Manually trigger one engine poll cycle (useful when started with -poll 0)",
+			Tags:    []string{"Debug"},
+			Resp:    map[string]any{"count": 0},
+			fromHTTP: func(_ *http.Request) (Envelope, error) {
+				return Envelope{Action: "tick"}, nil
+			},
+			handle: func(h *Handlers, _ Envelope) Reply { return h.tick() },
+		},
 	}
 }()

@@ -281,7 +281,7 @@ func (q *Queries) GetFirstFailingChild(ctx context.Context, parentID string) (Ge
 const getInstance = `-- name: GetInstance :one
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at
+       created_at, updated_at, worker_id, lease_expires_at, wait_state
 FROM process_instances
 WHERE id = ?1
 `
@@ -305,6 +305,7 @@ func (q *Queries) GetInstance(ctx context.Context, id string) (ProcessInstance, 
 		&i.UpdatedAt,
 		&i.WorkerID,
 		&i.LeaseExpiresAt,
+		&i.WaitState,
 	)
 	return i, err
 }
@@ -312,7 +313,7 @@ func (q *Queries) GetInstance(ctx context.Context, id string) (ProcessInstance, 
 const getSiblings = `-- name: GetSiblings :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at
+       created_at, updated_at, worker_id, lease_expires_at, wait_state
 FROM process_instances
 WHERE parent_id = ?1
 `
@@ -342,6 +343,7 @@ func (q *Queries) GetSiblings(ctx context.Context, parentID string) ([]ProcessIn
 			&i.UpdatedAt,
 			&i.WorkerID,
 			&i.LeaseExpiresAt,
+			&i.WaitState,
 		); err != nil {
 			return nil, err
 		}
@@ -410,12 +412,12 @@ func (q *Queries) InsertDependency(ctx context.Context, arg InsertDependencyPara
 const insertInstance = `-- name: InsertInstance :exec
 INSERT INTO process_instances
     (id, process_name, process_version, step_queue, context_data, parent_id,
-     call_stack, retry_count, next_retry_at, status, error, created_at, updated_at)
+     call_stack, retry_count, next_retry_at, status, wait_state, error, created_at, updated_at)
 VALUES
     (?1, ?2, ?3,
      ?4, ?5, ?6,
      ?7, ?8, ?9,
-     ?10, ?11, ?12, ?13)
+     ?10, ?11, ?12, ?13, ?14)
 `
 
 type InsertInstanceParams struct {
@@ -429,6 +431,7 @@ type InsertInstanceParams struct {
 	RetryCount     int64
 	NextRetryAt    sql.NullInt64
 	Status         string
+	WaitState      string
 	Error          string
 	CreatedAt      int64
 	UpdatedAt      int64
@@ -446,6 +449,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 		arg.RetryCount,
 		arg.NextRetryAt,
 		arg.Status,
+		arg.WaitState,
 		arg.Error,
 		arg.CreatedAt,
 		arg.UpdatedAt,
@@ -569,7 +573,7 @@ func (q *Queries) ListDefinitions(ctx context.Context) ([]ProcessDefinition, err
 const listInstances = `-- name: ListInstances :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at
+       created_at, updated_at, worker_id, lease_expires_at, wait_state
 FROM process_instances
 ORDER BY created_at DESC
 `
@@ -599,6 +603,7 @@ func (q *Queries) ListInstances(ctx context.Context) ([]ProcessInstance, error) 
 			&i.UpdatedAt,
 			&i.WorkerID,
 			&i.LeaseExpiresAt,
+			&i.WaitState,
 		); err != nil {
 			return nil, err
 		}
@@ -616,7 +621,7 @@ func (q *Queries) ListInstances(ctx context.Context) ([]ProcessInstance, error) 
 const listInstancesByStatus = `-- name: ListInstancesByStatus :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at
+       created_at, updated_at, worker_id, lease_expires_at, wait_state
 FROM process_instances
 WHERE status = ?1
 ORDER BY created_at DESC
@@ -647,6 +652,7 @@ func (q *Queries) ListInstancesByStatus(ctx context.Context, status string) ([]P
 			&i.UpdatedAt,
 			&i.WorkerID,
 			&i.LeaseExpiresAt,
+			&i.WaitState,
 		); err != nil {
 			return nil, err
 		}
@@ -677,6 +683,21 @@ func (q *Queries) RenewWorkerLeases(ctx context.Context, arg RenewWorkerLeasesPa
 	return err
 }
 
+const setParentCollecting = `-- name: SetParentCollecting :exec
+UPDATE process_instances SET wait_state = 'collecting', updated_at = ?1
+WHERE id = ?2
+`
+
+type SetParentCollectingParams struct {
+	UpdatedAt int64
+	ID        string
+}
+
+func (q *Queries) SetParentCollecting(ctx context.Context, arg SetParentCollectingParams) error {
+	_, err := q.db.ExecContext(ctx, setParentCollecting, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const updateInstance = `-- name: UpdateInstance :exec
 UPDATE process_instances
 SET step_queue       = ?1,
@@ -684,11 +705,12 @@ SET step_queue       = ?1,
     retry_count      = ?3,
     next_retry_at    = ?4,
     status           = ?5,
-    error            = ?6,
-    updated_at       = ?7,
+    wait_state       = ?6,
+    error            = ?7,
+    updated_at       = ?8,
     worker_id        = NULL,
     lease_expires_at = NULL
-WHERE id = ?8
+WHERE id = ?9
 `
 
 type UpdateInstanceParams struct {
@@ -697,6 +719,7 @@ type UpdateInstanceParams struct {
 	RetryCount  int64
 	NextRetryAt sql.NullInt64
 	Status      string
+	WaitState   string
 	Error       string
 	UpdatedAt   int64
 	ID          string
@@ -709,6 +732,7 @@ func (q *Queries) UpdateInstance(ctx context.Context, arg UpdateInstanceParams) 
 		arg.RetryCount,
 		arg.NextRetryAt,
 		arg.Status,
+		arg.WaitState,
 		arg.Error,
 		arg.UpdatedAt,
 		arg.ID,
@@ -769,24 +793,5 @@ func (q *Queries) UpsertChannel(ctx context.Context, arg UpsertChannelParams) er
 		arg.Version,
 		arg.UpdatedAt,
 	)
-	return err
-}
-
-const wakeParent = `-- name: WakeParent :exec
-UPDATE process_instances
-SET status       = 'running',
-    context_data = ?1,
-    updated_at   = ?2
-WHERE id = ?3 AND status = 'waiting'
-`
-
-type WakeParentParams struct {
-	ContextData string
-	UpdatedAt   int64
-	ID          string
-}
-
-func (q *Queries) WakeParent(ctx context.Context, arg WakeParentParams) error {
-	_, err := q.db.ExecContext(ctx, wakeParent, arg.ContextData, arg.UpdatedAt, arg.ID)
 	return err
 }

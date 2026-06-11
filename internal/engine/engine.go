@@ -48,13 +48,21 @@ func New(database *db.DB, pollEvery time.Duration, maxConcurrent int, log *slog.
 }
 
 // Run starts the engine loop and blocks until ctx is cancelled.
+// When pollEvery is zero the engine does not auto-tick; call Tick explicitly.
 func (e *Engine) Run(ctx context.Context) {
-	ticker := time.NewTicker(e.pollEvery)
-	defer ticker.Stop()
-
 	e.log.Info("engine started", "poll_interval", e.pollEvery, "max_concurrent", cap(e.sem), "worker_id", e.workerID)
 
 	go e.leaseRenewer(ctx)
+
+	if e.pollEvery == 0 {
+		e.log.Info("engine in manual tick mode")
+		<-ctx.Done()
+		e.log.Info("engine stopped")
+		return
+	}
+
+	ticker := time.NewTicker(e.pollEvery)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -62,7 +70,7 @@ func (e *Engine) Run(ctx context.Context) {
 			e.log.Info("engine stopped")
 			return
 		case <-ticker.C:
-			e.tick(ctx)
+			e.Tick(ctx)
 		}
 	}
 }
@@ -85,14 +93,15 @@ func (e *Engine) leaseRenewer(ctx context.Context) {
 	}
 }
 
-// tick claims pending instances and processes each in its own goroutine.
+// Tick claims pending instances and processes each in its own goroutine.
 // It blocks until all goroutines finish, so ticks never overlap and the same
-// instance is never advanced twice concurrently.
-func (e *Engine) tick(ctx context.Context) {
+// instance is never advanced twice concurrently. Returns the number of instances
+// that were claimed and processed.
+func (e *Engine) Tick(ctx context.Context) (int, error) {
 	instances, err := e.db.ClaimInstances(e.workerID, leaseDuration, cap(e.sem))
 	if err != nil {
 		e.log.Error("claim instances", "err", err)
-		return
+		return 0, err
 	}
 	var wg sync.WaitGroup
 	for _, inst := range instances {
@@ -100,7 +109,7 @@ func (e *Engine) tick(ctx context.Context) {
 		case e.sem <- struct{}{}:
 		case <-ctx.Done():
 			wg.Wait()
-			return
+			return 0, ctx.Err()
 		}
 		wg.Add(1)
 		go func(inst *model.ProcessInstance) {
@@ -112,6 +121,7 @@ func (e *Engine) tick(ctx context.Context) {
 		}(inst)
 	}
 	wg.Wait()
+	return len(instances), nil
 }
 
 // advance executes the next step in the instance's queue.
@@ -131,10 +141,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 			return e.failInstance(inst, err.Error())
 		}
 		e.log.Info("instance completed", "id", inst.ID, "process", inst.ProcessName)
-		if err := e.db.UpdateInstance(inst); err != nil {
-			return err
-		}
-		return e.notifyParent(inst)
+		return e.saveAndNotify(inst)
 	}
 
 	step := inst.StepQueue[0]
@@ -169,10 +176,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 			return e.failInstance(inst, err.Error())
 		}
 		e.log.Info("instance completed", "id", inst.ID, "step", step.ID)
-		if err := e.db.UpdateInstance(inst); err != nil {
-			return err
-		}
-		return e.notifyParent(inst)
+		return e.saveAndNotify(inst)
 	}
 
 	if gotoID == model.GotoNext {
@@ -380,10 +384,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 			inst.Status = model.StatusCompleted
 			inst.NextRetryAt = nil
 			e.log.Info("instance completed via error route", "id", inst.ID, "step", step.ID, "code", errCode)
-			if err := e.db.UpdateInstance(inst); err != nil {
-				return err
-			}
-			return e.notifyParent(inst)
+			return e.saveAndNotify(inst)
 		}
 		newQueue, err := e.queueFromStep(inst, matched.Goto)
 		if err != nil {
@@ -417,57 +418,60 @@ func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (m
 
 func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error {
 	inst.Status = model.StatusFailed
+	inst.WaitState = model.WaitStateNone
 	inst.Error = reason
 	inst.NextRetryAt = nil
 	e.log.Error("instance failed", "id", inst.ID, "reason", reason)
-	if err := e.db.UpdateInstance(inst); err != nil {
-		return err
-	}
-	return e.notifyParent(inst)
+	return e.saveAndNotify(inst)
 }
 
 func (e *Engine) cancelInstance(inst *model.ProcessInstance) error {
 	inst.Status = model.StatusCancelled
+	inst.WaitState = model.WaitStateNone
 	inst.NextRetryAt = nil
 	e.log.Info("instance cancelled", "id", inst.ID)
-	if err := e.db.UpdateInstance(inst); err != nil {
-		return err
-	}
-	return e.notifyParent(inst)
+	return e.saveAndNotify(inst)
 }
 
-// runChildProcesses starts child instance(s) for a child or child_parallel call,
-// then suspends the parent atomically. The parent resumes (via db.TryWakeParent)
-// once all children complete or are cancelled.
-func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
-	// If TryWakeParent already wrote the final output, return it so the engine
-	// advances the queue normally.
-	if outputs, ok := inst.ContextData["outputs"].(map[string]any); ok {
-		if existing, ok := outputs[step.ID]; ok {
-			switch step.Call.Type {
-			case model.CallTypeChild:
-				// Placeholder is a string (child ID); final result is a map.
-				if _, isStr := existing.(string); !isStr {
-					return existing, false, nil
-				}
-			case model.CallTypeChildParallel:
-				// Placeholder is map[key]→string ID; final result is map[key]→object.
-				if m, ok := existing.(map[string]any); ok {
-					allStrings := true
-					for _, v := range m {
-						if _, ok := v.(string); !ok {
-							allStrings = false
-							break
-						}
-					}
-					if !allStrings {
-						return existing, false, nil
-					}
-				}
-			}
+// saveAndNotify is the single exit point for all terminal instance states.
+// For root instances and failed instances it saves directly; for non-failed child
+// instances it uses FinishChild, which atomically saves the child and transitions
+// the parent to WaitStateCollecting when all siblings are done.
+func (e *Engine) saveAndNotify(inst *model.ProcessInstance) error {
+	if inst.ParentID == "" {
+		return e.db.UpdateInstance(inst)
+	}
+	if inst.Status == model.StatusFailed {
+		if err := e.db.UpdateInstance(inst); err != nil {
+			return err
 		}
+		return e.db.FailAncestors(inst)
+	}
+	return e.db.FinishChild(inst)
+}
+
+// runChildProcesses handles the two-phase child lifecycle:
+//
+//  1. WaitStateNone → spawn children, suspend parent (wait_state='waiting').
+//  2. WaitStateCollecting → all children are terminal; merge their outputs into
+//     parent context and return so advance() continues past this step.
+//
+// A cancelling parent spawns cancelling children: they self-cancel and call
+// FinishChild, which transitions the parent to WaitStateCollecting normally.
+func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
+	// Phase 2: parent woke up with children done — collect their outputs.
+	if inst.WaitState == model.WaitStateCollecting {
+		if err := e.db.CollectChildOutputs(ctx, inst, step); err != nil {
+			inst.WaitState = model.WaitStateNone
+			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q collect: %v", step.ID, err))
+		}
+		inst.WaitState = model.WaitStateNone
+		output := inst.ContextData["outputs"].(map[string]any)[step.ID]
+		e.log.Info("parent collected child outputs", "id", inst.ID, "step", step.ID)
+		return output, false, nil
 	}
 
+	// Phase 1: spawn children.
 	childCallStack := append(inst.CallStack, inst.ID)
 
 	if inst.ContextData["outputs"] == nil {
@@ -513,14 +517,7 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 	inst.RetryCount = 0
 	inst.NextRetryAt = nil
 
-	// Atomically insert children and transition parent to waiting, guarded by a
-	// parent status check. If the parent was concurrently set to 'cancelling', roll
-	// back and let advance() cancel it on the next tick.
 	if err := e.db.SpawnChildrenAndWait(ctx, inst, children); err != nil {
-		if err == db.ErrParentNotRunning {
-			e.log.Info("spawn aborted: parent no longer running", "id", inst.ID, "step", step.ID)
-			return nil, true, nil
-		}
 		return nil, true, e.failInstance(inst, fmt.Sprintf("step %q spawn: %v", step.ID, err))
 	}
 
@@ -677,20 +674,6 @@ func (e *Engine) computeOutput(inst *model.ProcessInstance) error {
 	return nil
 }
 
-// notifyParent tells the DB to handle parent state after a child terminates.
-// A no-op for root instances (ParentID == "").
-//   - failed child  → FailAncestors: bulk-marks the entire ancestor chain as failed immediately.
-//   - completed/cancelled child → TryWakeParent: checks whether all siblings are terminal
-//     and, if so, wakes the parent (success) or transitions a cancelling parent to cancelled.
-func (e *Engine) notifyParent(inst *model.ProcessInstance) error {
-	if inst.ParentID == "" {
-		return nil
-	}
-	if inst.Status == model.StatusFailed {
-		return e.db.FailAncestors(inst)
-	}
-	return e.db.TryWakeParent(inst)
-}
 
 // resolveHeaders evaluates each header value expression against the instance
 // context and coerces the result to a string. Returns nil for calls without headers.

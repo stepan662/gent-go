@@ -20,7 +20,7 @@ func newTestHandlers(t *testing.T) (*Handlers, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewHandlers(database), func() {
+	return NewHandlers(database, nil), func() {
 		database.Close()
 		os.Remove(f.Name())
 	}

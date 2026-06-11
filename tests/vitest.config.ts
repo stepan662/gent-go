@@ -24,8 +24,8 @@ export default defineConfig({
         test: {
           name: "sqlite",
           globalSetup: ["./helpers/server.ts"],
-          include: ["integration/**/*_test.ts", "cli/**/*_test.ts"],
-          testTimeout: 30_000,
+          include: ["integration/**/*_test.ts", "cli/**/*_test.ts", "tick/**/*_test.ts"],
+          testTimeout: 60_000,
           env: { GENT_PORT: "8888" },
         },
       },

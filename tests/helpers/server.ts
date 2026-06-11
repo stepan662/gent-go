@@ -22,9 +22,13 @@ function spawnProc(
   port: number,
   db: string,
   pgDSN?: string,
+  pollMs?: number,
+  maxConcurrent?: number,
 ): ChildProcess {
   const dbArgs = pgDSN ? ["--pg", pgDSN] : ["--db", db];
-  return spawn(bin, [...dbArgs, "--http", `:${port}`, "--log", "error"], {
+  const pollArgs = pollMs !== undefined ? ["--poll", String(pollMs)] : [];
+  const concArgs = maxConcurrent !== undefined ? ["--max-concurrent", String(maxConcurrent)] : [];
+  return spawn(bin, [...dbArgs, "--http", `:${port}`, "--log", "error", ...pollArgs, ...concArgs], {
     stdio: "ignore",
   });
 }
@@ -53,8 +57,10 @@ export async function startGent(
   port: number,
   db: string,
   pgDSN?: string,
+  pollMs?: number,
+  maxConcurrent?: number,
 ): Promise<GentProcess> {
-  const proc = spawnProc(bin, port, db, pgDSN);
+  const proc = spawnProc(bin, port, db, pgDSN, pollMs, maxConcurrent);
   await waitUntilReady(port);
   return {
     client: createClientTyped({ baseUrl: `http://localhost:${port}` }),

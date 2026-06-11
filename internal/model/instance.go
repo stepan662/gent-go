@@ -9,9 +9,17 @@ const (
 	StatusRunning    Status = "running"
 	StatusCompleted  Status = "completed"
 	StatusFailed     Status = "failed"
-	StatusWaiting    Status = "waiting"
 	StatusCancelling Status = "cancelling"
 	StatusCancelled  Status = "cancelled"
+)
+
+// WaitState tracks where a parent instance is in the child-process lifecycle.
+type WaitState string
+
+const (
+	WaitStateNone       WaitState = ""           // not in a child-process wait cycle
+	WaitStateWaiting    WaitState = "waiting"    // children spawned, waiting for them
+	WaitStateCollecting WaitState = "collecting" // all children terminal, collect their outputs
 )
 
 // ProcessInstance is a single running execution of a ProcessDefinition.
@@ -40,6 +48,7 @@ type ProcessInstance struct {
 	RetryCount    int
 	NextRetryAt   *time.Time
 	Status        Status
+	WaitState     WaitState
 	Error         string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
