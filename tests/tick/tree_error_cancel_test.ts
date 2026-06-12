@@ -148,25 +148,71 @@ test("a fails — FailAncestors cascades to parent and gp; completed sibling lea
 });
 
 test("a fails while ancestors are cancelling — FailAncestors overrides 'cancelling'; cancelled sibling leaves parent failed", async () => {
-  const { gp, parent, a, b } = await buildTree();
+  // A separate tree whose failing worker holds its first request open, so the
+  // root can be cancelled while a's call is still in flight. The failure then
+  // lands on 'cancelling' ancestors and must override them to 'failed'.
+  const uid = crypto.randomUUID().slice(0, 8);
+  const holdMock = await startMockService(0, {
+    statusCode: 500,
+    firstRequestDelayMs: Infinity,
+  });
   try {
-    // Cancel b: marks b as 'cancelling' and propagates up through b's call_stack
-    // (parent, gp), overriding their 'running' to 'cancelling' while preserving
-    // wait_state='waiting' so they remain suspended.
-    // Sibling a is not in b's descendant or ancestor set — stays 'running'.
-    await ctx.env.cancel(b);
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling waiting",
-      parent: "cancelling waiting",
-      a: "running",
-      b: "cancelling",
-    });
+    const holdWorker = `hold_worker_${uid}`;
+    await ctx.env.define(holdWorker, [
+      {
+        id: "work",
+        call: {
+          type: "rest" as const,
+          endpoint: `http://localhost:${holdMock.port}/action`,
+        },
+        timeout_ms: 5_000,
+        switch: [{ goto: "end" }],
+      },
+    ]);
+    const parent2Name = `parent2_${uid}`;
+    await ctx.env.define(parent2Name, [
+      {
+        id: "run_children",
+        call: {
+          type: "child_parallel" as const,
+          children: {
+            a: { name: holdWorker },
+            b: { name: successWorkerName },
+          },
+        },
+        switch: [{ goto: "end" }],
+      },
+    ]);
+    const gp2Name = `gp2_${uid}`;
+    await ctx.env.define(gp2Name, [
+      {
+        id: "run_parent",
+        call: { type: "child" as const, name: parent2Name },
+        switch: [{ goto: "end" }],
+      },
+    ]);
 
-    // tick: a (smaller created_at) is processed first; a is still 'running'.
-    // a's REST call returns 500 → failInstance(a) → FailAncestors:
-    // WHERE status IN ('running', 'cancelling') — so the cancelling ancestors are
-    // targeted and overridden to 'failed', clearing their wait_state.
+    const gp = await ctx.env.start(gp2Name);
     await ctx.env.tick();
+    const parent = await ctx.env.childOf(gp, "run_parent");
+    await ctx.env.tick();
+    const { a, b } = await ctx.env.childrenOf(parent, "run_children");
+
+    // Tick 3 claims a (spawned first); its call hangs on the held mock.
+    const tickPromise = ctx.env.tick();
+    await holdMock.firstRequestReceived;
+
+    // Cancel the root while a's call is in flight — the whole tree (including
+    // the claimed a, whose DB row is still 'running') becomes 'cancelling'.
+    await ctx.env.cancel(gp);
+
+    // Release the held 500. The engine still holds a as in-memory 'running',
+    // so the failure path runs: failInstance(a) → FailAncestors:
+    // WHERE status IN ('running', 'cancelling') — the cancelling ancestors are
+    // overridden to 'failed', clearing their wait_state.
+    holdMock.release();
+    await tickPromise;
+
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
       gp: "failed",
       parent: "failed",
@@ -192,5 +238,6 @@ test("a fails while ancestors are cancelling — FailAncestors overrides 'cancel
     expect(parentInst?.error).toBeTruthy();
   } finally {
     await ctx.env.tickUntilIdle();
+    await holdMock.stop();
   }
 });

@@ -11,6 +11,9 @@
 //	gentctl channel delete <process> <channel>
 //	gentctl promote  --from <channel> --to <channel> [--process <name>]
 //	gentctl status   --channel <channel>
+//	gentctl instances [--status <status>]
+//	gentctl cancel   <instance-id>
+//	gentctl retry    [--force] <instance-id>
 //
 // Environment:
 //
@@ -62,6 +65,12 @@ func main() {
 		runPromoteCmd(server, args)
 	case "status":
 		runStatusCmd(server, args)
+	case "instances":
+		runInstancesCmd(server, args)
+	case "cancel":
+		runCancelCmd(server, args)
+	case "retry":
+		runRetryCmd(server, args)
 	case "config":
 		runConfigCmd(args)
 	default:
@@ -264,6 +273,74 @@ func runStatusCmd(server string, args []string) {
 	if allClean {
 		fmt.Printf("channel %q is coherent\n", *channelFlag)
 	}
+}
+
+func runInstancesCmd(server string, args []string) {
+	fs := flag.NewFlagSet("instances", flag.ExitOnError)
+	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	statusFlag := fs.String("status", "", "filter by status (running, completed, failed, cancelling, cancelled)")
+	fs.Parse(args)
+
+	u := *serverFlag + "/instances"
+	if *statusFlag != "" {
+		u += "?status=" + url.QueryEscape(*statusFlag)
+	}
+	var resp []struct {
+		ID      string `json:"id"`
+		Process string `json:"process"`
+		Version int    `json:"version"`
+		Status  string `json:"status"`
+		Error   string `json:"error"`
+	}
+	if err := callGet(u, &resp); err != nil {
+		fatal("%v", err)
+	}
+	for _, inst := range resp {
+		line := fmt.Sprintf("%s  %-10s  %s@v%d", inst.ID, inst.Status, inst.Process, inst.Version)
+		if inst.Error != "" {
+			errMsg := inst.Error
+			if len(errMsg) > 60 {
+				errMsg = errMsg[:57] + "..."
+			}
+			line += "  " + errMsg
+		}
+		fmt.Println(line)
+	}
+}
+
+func runCancelCmd(server string, args []string) {
+	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
+	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		fatal("usage: gentctl cancel <instance-id>")
+	}
+	id := fs.Arg(0)
+
+	if err := call(*serverFlag+"/instances/"+url.PathEscape(id)+"/cancel", http.MethodPost, nil, nil); err != nil {
+		fatal("%v", err)
+	}
+	fmt.Printf("cancelled: %s\n", id)
+}
+
+func runRetryCmd(server string, args []string) {
+	fs := flag.NewFlagSet("retry", flag.ExitOnError)
+	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	forceFlag := fs.Bool("force", false, "override only_once retry protection")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		fatal("usage: gentctl retry [--force] <instance-id>")
+	}
+	id := fs.Arg(0)
+
+	u := *serverFlag + "/instances/" + url.PathEscape(id) + "/retry"
+	if *forceFlag {
+		u += "?force=true"
+	}
+	if err := call(u, http.MethodPost, nil, nil); err != nil {
+		fatal("%v", err)
+	}
+	fmt.Printf("retried: %s\n", id)
 }
 
 // callGet sends a GET request with no body and decodes the response into out.
@@ -488,6 +565,9 @@ func usage() {
   gentctl channel delete <process> <channel>
   gentctl promote  --from <channel> --to <channel> [--process <name>]
   gentctl status   --channel <channel>
+  gentctl instances [--status <status>]
+  gentctl cancel   <instance-id>
+  gentctl retry    [--force] <instance-id>
   gentctl config   get <key>
   gentctl config   set <key> <value>
 

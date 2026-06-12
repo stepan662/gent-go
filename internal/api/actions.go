@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"gent/internal/model"
 	"gent/internal/schema"
@@ -146,7 +147,7 @@ var registry = func() []actionDef {
 			Summary: "List process instances",
 			Tags:    []string{"Instances"},
 			PathQuery: struct {
-				Status string `query:"status" enum:"running,completed,failed" description:"Filter by status"`
+				Status string `query:"status" enum:"running,completed,failed,cancelling,cancelled" description:"Filter by status"`
 			}{},
 			Resp: []InstanceStatusResp{},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
@@ -286,7 +287,7 @@ var registry = func() []actionDef {
 			Name:    "cancel_instance",
 			Method:  http.MethodPost,
 			Path:    "/instances/{id}/cancel",
-			Summary: "Cancel a running process instance and its entire descendant tree",
+			Summary: "Cancel a running root process instance and its entire descendant tree",
 			Tags:    []string{"Instances"},
 			PathQuery: struct {
 				ID string `path:"id" format:"uuid"`
@@ -303,17 +304,20 @@ var registry = func() []actionDef {
 			Name:    "retry_instance",
 			Method:  http.MethodPost,
 			Path:    "/instances/{id}/retry",
-			Summary: "Retry a failed or cancelled process instance from its current step",
+			Summary: "Retry a failed or cancelled root process instance, resuming its tree where it was interrupted",
 			Tags:    []string{"Instances"},
 			PathQuery: struct {
-				ID string `path:"id" format:"uuid"`
+				ID    string `path:"id" format:"uuid"`
+				Force bool   `query:"force" description:"Override only_once retry protection"`
 			}{},
 			Resp: map[string]any{"retried": true},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
-				return Envelope{Action: "retry_instance", ID: r.PathValue("id")}, nil
+				force, _ := strconv.ParseBool(r.URL.Query().Get("force"))
+				b, _ := json.Marshal(RetryInstanceReq{Force: force})
+				return Envelope{Action: "retry_instance", ID: r.PathValue("id"), Payload: b}, nil
 			},
 			handle: func(h *Handlers, env Envelope) Reply {
-				return h.retryInstance(env.ID)
+				return h.retryInstance(env.ID, env.Payload)
 			},
 		},
 		{

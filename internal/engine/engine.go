@@ -568,7 +568,6 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 		"outputs":          map[string]any{},
 		"output_order":     []string{},
 		"error":            nil,
-		"_spawn_step_id":   step.ID,
 		"_spawn_call_type": string(model.CallTypeChild),
 	}
 	if step.Call.OutputSchema != nil {
@@ -584,6 +583,7 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 		ContextData:    childCtx,
 		Status:         model.StatusRunning,
 		ParentID:       inst.ID,
+		SpawnStepID:    step.ID,
 		CallStack:      callStack,
 	}, nil
 }
@@ -631,7 +631,6 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 			"outputs":          map[string]any{},
 			"output_order":     []string{},
 			"error":            nil,
-			"_spawn_step_id":   step.ID,
 			"_spawn_call_type": string(model.CallTypeChildParallel),
 			"_spawn_child_key": key,
 		}
@@ -648,6 +647,7 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 			ContextData:    childCtx,
 			Status:         model.StatusRunning,
 			ParentID:       inst.ID,
+			SpawnStepID:    step.ID,
 			CallStack:      callStack,
 		})
 	}

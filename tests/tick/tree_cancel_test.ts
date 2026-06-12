@@ -198,110 +198,24 @@ test("cancel grandparent — entire tree becomes cancelling instantly, cancelled
   }
 });
 
-test("cancel parent — subtree + grandparent become cancelling, all settled to cancelled", async () => {
+test("cancel non-root — rejected naming the root; tree unaffected", async () => {
   const { gp, parent, a, b } = await buildTree();
   try {
-    await ctx.env.cancel(parent);
+    // Cancellation is a whole-tree decision: only the root is accepted.
+    for (const id of [parent, a]) {
+      const { error } = await ctx.env.client.POST("/instances/{id}/cancel", {
+        params: { path: { id } },
+      });
+      expect(error).toBeDefined();
+      expect(JSON.stringify(error)).toContain(gp);
+    }
 
-    // Descendants: parent, a, b.
-    // Ancestors: gp keeps wait_state='waiting' — still suspended for parent.
+    // The rejected cancels left the tree untouched.
     expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling waiting",
-      parent: "cancelling waiting",
-      a: "cancelling",
-      b: "cancelling",
-    });
-
-    // tick: a cancelled
-    await ctx.env.tick();
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling waiting",
-      parent: "cancelling waiting",
-      a: "cancelled",
-      b: "cancelling",
-    });
-
-    // tick: b cancelled → parent.wait_state = 'collecting'
-    await ctx.env.tick();
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling waiting",
-      parent: "cancelling collecting",
-      a: "cancelled",
-      b: "cancelled",
-    });
-
-    // tick: parent cancelled → gp.wait_state = 'collecting'
-    await ctx.env.tick();
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling collecting",
-      parent: "cancelled",
-      a: "cancelled",
-      b: "cancelled",
-    });
-
-    // tick: gp cancelled
-    await ctx.env.tick();
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelled",
-      parent: "cancelled",
-      a: "cancelled",
-      b: "cancelled",
-    });
-  } finally {
-    await ctx.env.tickUntilIdle();
-  }
-});
-
-test("cancel one child — sibling is unaffected, ancestors cascade to cancelled", async () => {
-  const { gp, parent, a, b } = await buildTree();
-  try {
-    await ctx.env.cancel(a);
-
-    // Only a and its ancestor chain become cancelling.
-    // Sibling b remains running — it was not in a's descendant or ancestor set.
-    // gp and parent keep wait_state='waiting': they still have live children.
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling waiting",
-      parent: "cancelling waiting",
-      a: "cancelling",
+      gp: "running waiting",
+      parent: "running waiting",
+      a: "running",
       b: "running",
-    });
-
-    // tick: a (smaller created_at) is claimed first → cancelled; b still running
-    await ctx.env.tick();
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling waiting",
-      parent: "cancelling waiting",
-      a: "cancelled",
-      b: "running",
-    });
-
-    // tick: b completes; count = 0 → parent.wait_state = 'collecting'
-    await ctx.env.tick();
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling waiting",
-      parent: "cancelling collecting",
-      a: "cancelled",
-      b: "completed",
-    });
-
-    // tick: parent (cancelling+collecting) → cancelInstance → cancelled
-    //       FinishChild(parent): gp.wait_state = 'collecting'
-    await ctx.env.tick();
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelling collecting",
-      parent: "cancelled",
-      a: "cancelled",
-      b: "completed",
-    });
-
-    // tick: gp (cancelling+collecting) → cancelInstance → cancelled
-    await ctx.env.tick();
-    expect(await ctx.env.statuses({ gp, parent, a, b })).toEqual({
-      gp: "cancelled",
-      parent: "cancelled",
-      a: "cancelled",
-      b: "completed",
     });
   } finally {
     await ctx.env.tickUntilIdle();

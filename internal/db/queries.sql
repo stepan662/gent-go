@@ -68,11 +68,11 @@ WHERE channel = sqlc.arg(channel);
 
 -- name: InsertInstance :exec
 INSERT INTO process_instances
-    (id, process_name, process_version, step_queue, context_data, parent_id,
+    (id, process_name, process_version, step_queue, context_data, parent_id, spawn_step_id,
      call_stack, retry_count, next_retry_at, status, wait_state, error, created_at, updated_at)
 VALUES
     (sqlc.arg(id), sqlc.arg(process_name), sqlc.arg(process_version),
-     sqlc.arg(step_queue), sqlc.arg(context_data), sqlc.arg(parent_id),
+     sqlc.arg(step_queue), sqlc.arg(context_data), sqlc.arg(parent_id), sqlc.arg(spawn_step_id),
      sqlc.arg(call_stack), sqlc.arg(retry_count), sqlc.arg(next_retry_at),
      sqlc.arg(status), sqlc.arg(wait_state), sqlc.arg(error), sqlc.arg(created_at), sqlc.arg(updated_at));
 
@@ -104,21 +104,21 @@ WHERE id = sqlc.arg(id);
 -- name: GetInstance :one
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 WHERE id = sqlc.arg(id);
 
 -- name: ListInstances :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 ORDER BY created_at DESC;
 
 -- name: ListInstancesByStatus :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 WHERE status = sqlc.arg(status)
 ORDER BY created_at DESC;
@@ -131,30 +131,20 @@ WHERE worker_id = sqlc.arg(worker_id);
 -- name: CountActiveSiblings :one
 SELECT COUNT(*) FROM process_instances
 WHERE parent_id = sqlc.arg(parent_id)
+  AND spawn_step_id = sqlc.arg(spawn_step_id)
   AND status NOT IN ('completed', 'failed', 'cancelled');
 
 -- name: SetParentCollecting :exec
 UPDATE process_instances SET wait_state = 'collecting', updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id);
 
--- name: GetSiblings :many
+-- name: GetChildrenForStep :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
-WHERE parent_id = sqlc.arg(parent_id);
-
--- name: CountFailingChildren :one
-SELECT COUNT(*) FROM process_instances
 WHERE parent_id = sqlc.arg(parent_id)
-  AND status = 'failed';
-
--- name: GetFirstFailingChild :one
-SELECT id, error FROM process_instances
-WHERE parent_id = sqlc.arg(parent_id)
-  AND status = 'failed'
-LIMIT 1;
-
+  AND spawn_step_id = sqlc.arg(spawn_step_id);
 
 -- name: FindParentsOf :many
 SELECT pd.parent_name, pc.version AS parent_version, pd.child_name, pd.child_version AS baked_version

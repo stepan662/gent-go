@@ -104,7 +104,11 @@ type StartInstanceResp struct {
 }
 
 type ListInstancesReq struct {
-	Status string `json:"status"` // optional filter: running, completed, failed
+	Status string `json:"status"` // optional filter: running, completed, failed, cancelling, cancelled
+}
+
+type RetryInstanceReq struct {
+	Force bool `json:"force"` // override only_once retry protection
 }
 
 type DefinitionSummary struct {
@@ -292,11 +296,15 @@ func (h *Handlers) cancelInstance(id string) Reply {
 	return okReply(map[string]any{"cancelled": true})
 }
 
-func (h *Handlers) retryInstance(id string) Reply {
+func (h *Handlers) retryInstance(id string, raw json.RawMessage) Reply {
 	if id == "" {
 		return errReply(fmt.Errorf("id is required"))
 	}
-	if err := h.db.RetryProcess(context.Background(), id); err != nil {
+	var req RetryInstanceReq
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &req)
+	}
+	if err := h.db.RetryProcess(context.Background(), id, req.Force); err != nil {
 		return errReply(err)
 	}
 	return okReply(map[string]any{"retried": true})

@@ -49,4 +49,5 @@ type ProcessInstance struct {
 	WorkerID       sql.NullString
 	LeaseExpiresAt sql.NullInt64
 	WaitState      string
+	SpawnStepID    string
 }

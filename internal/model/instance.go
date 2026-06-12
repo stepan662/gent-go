@@ -41,6 +41,11 @@ type ProcessInstance struct {
 	// Empty string means this is a root instance.
 	ParentID string
 
+	// SpawnStepID is the ID of the parent step that spawned this instance.
+	// Empty string for root instances. Scopes sibling queries to one spawn batch
+	// so consecutive spawn steps under the same parent never mix.
+	SpawnStepID string
+
 	// CallStack is the ordered list of ancestor instance IDs (root first).
 	// Used for O(1) ancestor lookup during error cascade.
 	CallStack []string

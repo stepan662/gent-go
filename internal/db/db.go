@@ -453,6 +453,7 @@ func (db *DB) SaveInstance(inst *model.ProcessInstance) error {
 		StepQueue:      string(queue),
 		ContextData:    string(ctx),
 		ParentID:       inst.ParentID,
+		SpawnStepID:    inst.SpawnStepID,
 		CallStack:      string(callStack),
 		RetryCount:     int64(inst.RetryCount),
 		NextRetryAt:    fromTimePtr(inst.NextRetryAt),
@@ -543,7 +544,7 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 			)
 			RETURNING id, process_name, process_version, step_queue, context_data, parent_id,
 			          call_stack, retry_count, next_retry_at, status, error,
-			          created_at, updated_at, worker_id, lease_expires_at, wait_state`
+			          created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id`
 	} else {
 		query = `
 			UPDATE process_instances
@@ -559,7 +560,7 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 			)
 			RETURNING id, process_name, process_version, step_queue, context_data, parent_id,
 			          call_stack, retry_count, next_retry_at, status, error,
-			          created_at, updated_at, worker_id, lease_expires_at, wait_state`
+			          created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id`
 	}
 
 	rows, err := db.sqldb.QueryContext(ctx, query, workerID, leaseExpiry, now, now, limit)
@@ -576,7 +577,7 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 			&r.StepQueue, &r.ContextData, &r.ParentID,
 			&r.CallStack, &r.RetryCount, &r.NextRetryAt,
 			&r.Status, &r.Error, &r.CreatedAt, &r.UpdatedAt,
-			&r.WorkerID, &r.LeaseExpiresAt, &r.WaitState,
+			&r.WorkerID, &r.LeaseExpiresAt, &r.WaitState, &r.SpawnStepID,
 		); err != nil {
 			return nil, err
 		}
@@ -692,7 +693,10 @@ func (db *DB) FinishChild(child *model.ProcessInstance) error {
 
 	// If the parent was found and is waiting, check whether all siblings are terminal.
 	if parentFound && model.WaitState(parentWaitState) == model.WaitStateWaiting {
-		active, err := qtx.CountActiveSiblings(ctx, child.ParentID)
+		active, err := qtx.CountActiveSiblings(ctx, dbgen.CountActiveSiblingsParams{
+			ParentID:    child.ParentID,
+			SpawnStepID: child.SpawnStepID,
+		})
 		if err != nil {
 			return fmt.Errorf("count siblings: %w", err)
 		}
@@ -713,9 +717,12 @@ func (db *DB) FinishChild(child *model.ProcessInstance) error {
 // It reads all child instances and merges their outputs into inst.ContextData.
 // On success, inst.ContextData["outputs"][step.ID] holds the merged result.
 func (db *DB) CollectChildOutputs(ctx context.Context, inst *model.ProcessInstance, step *model.Step) error {
-	siblings, err := db.q.GetSiblings(ctx, inst.ID)
+	siblings, err := db.q.GetChildrenForStep(ctx, dbgen.GetChildrenForStepParams{
+		ParentID:    inst.ID,
+		SpawnStepID: step.ID,
+	})
 	if err != nil {
-		return fmt.Errorf("get siblings: %w", err)
+		return fmt.Errorf("get children for step: %w", err)
 	}
 	if inst.ContextData["outputs"] == nil {
 		inst.ContextData["outputs"] = map[string]any{}
@@ -821,17 +828,21 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 }
 
 // CancelProcess atomically marks an entire process tree as cancelling.
-// Downward: all running descendants of id are marked cancelling.
-// CancelProcess marks the target, all its descendants (rows whose call_stack contains
-// the target), and all its ancestors (the target's own call_stack entries) as 'cancelling'.
+// It only accepts root instances — cancellation is a decision about the whole
+// tree, so cancelling a descendant directly is rejected with the root's ID.
+// All running instances of the tree (the root and every row whose call_stack
+// contains it) transition to 'cancelling'.
 //
 // On PostgreSQL a single locking CTE acquires every row lock in created_at, id order
 // before the UPDATE runs — the same order used by FinishChild and FailInstanceAndAncestors,
-// eliminating deadlocks. Descendants are found via the JSONB ? operator; ancestors via
-// jsonb_array_elements_text on the target's own call_stack. No Go-side ID manipulation.
+// eliminating deadlocks. Descendants are found via the JSONB ? operator.
 func (db *DB) CancelProcess(ctx context.Context, id string) error {
-	if _, err := db.q.GetInstance(ctx, id); err != nil {
+	row, err := db.q.GetInstance(ctx, id)
+	if err != nil {
 		return fmt.Errorf("get instance: %w", err)
+	}
+	if err := requireRoot(row, "cancel"); err != nil {
+		return err
 	}
 
 	tx, err := db.sqldb.BeginTx(ctx, nil)
@@ -847,11 +858,7 @@ func (db *DB) CancelProcess(ctx context.Context, id string) error {
 		_, qErr = tx.ExecContext(ctx, `
 			WITH locked AS (
 				SELECT id FROM process_instances
-				WHERE id = $1
-				   OR call_stack::jsonb ? $1
-				   OR id IN (SELECT jsonb_array_elements_text(
-				                 (SELECT call_stack::jsonb FROM process_instances WHERE id = $1)
-				             ))
+				WHERE id = $1 OR call_stack::jsonb ? $1
 				ORDER BY created_at, id FOR UPDATE
 			)
 			UPDATE process_instances SET status = 'cancelling', updated_at = $2
@@ -862,11 +869,8 @@ func (db *DB) CancelProcess(ctx context.Context, id string) error {
 			UPDATE process_instances SET status = 'cancelling', updated_at = ?
 			WHERE status = 'running'
 			  AND (id = ?
-			       OR EXISTS (SELECT 1 FROM json_each(call_stack) WHERE value = ?)
-			       OR id IN (SELECT value FROM json_each(
-			                     (SELECT call_stack FROM process_instances WHERE id = ?)
-			                 )))`,
-			now, id, id, id)
+			       OR EXISTS (SELECT 1 FROM json_each(call_stack) WHERE value = ?))`,
+			now, id, id)
 	}
 	if qErr != nil {
 		return fmt.Errorf("cancel process: %w", qErr)
@@ -875,32 +879,38 @@ func (db *DB) CancelProcess(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
-// RetryProcess resumes a failed or cancelled process from its current step.
-// It transitions the process to 'running' and walks the call_stack to unblock
-// ancestor processes that were waiting only on this process.
-// Returns an error if the current step is marked only_once (force-retry not supported yet).
-func (db *DB) RetryProcess(ctx context.Context, id string) error {
-	instRow, err := db.q.GetInstance(ctx, id)
+// requireRoot rejects operations on non-root instances, pointing the caller at
+// the tree root (call_stack[0]) instead.
+func requireRoot(row dbgen.ProcessInstance, op string) error {
+	if row.ParentID == "" {
+		return nil
+	}
+	var stack []string
+	if err := json.Unmarshal([]byte(row.CallStack), &stack); err != nil || len(stack) == 0 {
+		return fmt.Errorf("instance %q is not a root instance", row.ID)
+	}
+	return fmt.Errorf("instance %q is not a root instance; %s root instance %q instead", row.ID, op, stack[0])
+}
+
+// RetryProcess resumes a failed or cancelled root process from where its tree
+// was interrupted. Failed/cancelled instances on the current execution path are
+// revived in place: leaves re-run their pending step, parents are reconstructed
+// as waiting (live children) or collecting (all children done). Completed work
+// is never redone. force overrides the only_once protection on pending steps.
+//
+// Only root instances are accepted — like cancellation, retry is a decision
+// about the whole tree.
+func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
+	rootRow, err := db.q.GetInstance(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get instance: %w", err)
 	}
-
-	status := model.Status(instRow.Status)
-	if status != model.StatusFailed && status != model.StatusCancelled {
-		return fmt.Errorf("process is not retryable (status: %s)", status)
-	}
-
-	inst, err := toInstance(instRow)
-	if err != nil {
+	if err := requireRoot(rootRow, "retry"); err != nil {
 		return err
 	}
-
-	// Reject retry if the pending step is only_once.
-	if len(inst.StepQueue) > 0 {
-		step := inst.StepQueue[0]
-		if step.OnlyOnce != nil && *step.OnlyOnce {
-			return fmt.Errorf("step %q is marked only_once and has already been attempted; use force-retry to override", step.ID)
-		}
+	status := model.Status(rootRow.Status)
+	if status != model.StatusFailed && status != model.StatusCancelled {
+		return fmt.Errorf("process is not retryable (status: %s)", status)
 	}
 
 	tx, qtx, err := db.beginTx(ctx, nil)
@@ -909,80 +919,137 @@ func (db *DB) RetryProcess(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback()
 
-	// Transition the process back to running.
-	inst.Status = model.StatusRunning
-	inst.WaitState = model.WaitStateNone
-	inst.Error = ""
-	inst.RetryCount = 0
-	inst.NextRetryAt = nil
-	if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
-		ID:          inst.ID,
-		StepQueue:   instRow.StepQueue,
-		ContextData: instRow.ContextData,
-		RetryCount:  0,
-		NextRetryAt: sql.NullInt64{},
-		Status:      string(model.StatusRunning),
-		WaitState:   string(model.WaitStateNone),
-		Error:       "",
-		UpdatedAt:   nowUnix(),
-	}); err != nil {
-		return fmt.Errorf("update instance: %w", err)
+	// Lock and load the whole tree (root + descendants) in created_at, id order —
+	// the same lock order as CancelProcess/FinishChild/FailInstanceAndAncestors —
+	// so concurrent cancels and child completions serialize against the revival.
+	cols := `id, process_name, process_version, step_queue, context_data, parent_id,
+	         call_stack, retry_count, next_retry_at, status, error,
+	         created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id`
+	var query string
+	if db.dialect == "postgres" {
+		query = `SELECT ` + cols + ` FROM process_instances
+			WHERE id = $1 OR call_stack::jsonb ? $1
+			ORDER BY created_at, id FOR UPDATE`
+	} else {
+		query = `SELECT ` + cols + ` FROM process_instances
+			WHERE id = ? OR EXISTS (SELECT 1 FROM json_each(call_stack) WHERE value = ?)
+			ORDER BY created_at, id`
+	}
+	args := []any{id}
+	if db.dialect != "postgres" {
+		args = append(args, id)
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("lock tree: %w", err)
+	}
+	defer rows.Close()
+
+	nodes := make(map[string]*model.ProcessInstance)
+	rawRows := make(map[string]dbgen.ProcessInstance)
+	children := make(map[string]map[string][]*model.ProcessInstance) // parentID → spawnStepID → batch
+	for rows.Next() {
+		var r dbgen.ProcessInstance
+		if err := rows.Scan(
+			&r.ID, &r.ProcessName, &r.ProcessVersion,
+			&r.StepQueue, &r.ContextData, &r.ParentID,
+			&r.CallStack, &r.RetryCount, &r.NextRetryAt,
+			&r.Status, &r.Error, &r.CreatedAt, &r.UpdatedAt,
+			&r.WorkerID, &r.LeaseExpiresAt, &r.WaitState, &r.SpawnStepID,
+		); err != nil {
+			return fmt.Errorf("scan tree row: %w", err)
+		}
+		inst, err := toInstance(r)
+		if err != nil {
+			return err
+		}
+		nodes[inst.ID] = inst
+		rawRows[inst.ID] = r
+		if inst.ParentID != "" {
+			if children[inst.ParentID] == nil {
+				children[inst.ParentID] = make(map[string][]*model.ProcessInstance)
+			}
+			children[inst.ParentID][inst.SpawnStepID] = append(children[inst.ParentID][inst.SpawnStepID], inst)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close() // release the connection for the updates below (SQLite single-conn)
+	root, ok := nodes[id]
+	if !ok {
+		return fmt.Errorf("instance not found")
 	}
 
-	// Walk the call_stack nearest-first, unblocking ancestors that were only
-	// blocked by this process.
-	for i := len(inst.CallStack) - 1; i >= 0; i-- {
-		ancestorID := inst.CallStack[i]
-		ancestorRow, err := qtx.GetInstance(ctx, ancestorID)
-		if err != nil {
-			return fmt.Errorf("get ancestor %q: %w", ancestorID, err)
+	// Walk the tree top-down, reviving the interrupted path. Only the root and
+	// the front-step children of revived nodes are visited, so completed steps
+	// and finished side branches are never touched.
+	var dirty []*model.ProcessInstance
+	var revive func(node *model.ProcessInstance) error
+	revive = func(node *model.ProcessInstance) error {
+		switch node.Status {
+		case model.StatusCompleted:
+			return nil // finished work is kept
+		case model.StatusRunning, model.StatusCancelling:
+			return nil // still live; the engine owns it
 		}
-		if model.Status(ancestorRow.Status) != model.StatusFailed {
-			break
+		// node is failed or cancelled
+		newWaitState := model.WaitStateNone
+		if len(node.StepQueue) > 0 {
+			front := node.StepQueue[0]
+			kids := children[node.ID][front.ID]
+			if len(kids) > 0 {
+				// Interrupted inside this spawn step's wait/collect cycle —
+				// revive the batch and reconstruct the wait state. (Kids exist
+				// only for spawn steps: SpawnChildrenAndWait is atomic.)
+				anyActive := false
+				for _, k := range kids {
+					if err := revive(k); err != nil {
+						return err
+					}
+					if k.Status != model.StatusCompleted && k.Status != model.StatusFailed && k.Status != model.StatusCancelled {
+						anyActive = true
+					}
+				}
+				if anyActive {
+					newWaitState = model.WaitStateWaiting
+				} else {
+					newWaitState = model.WaitStateCollecting // re-run the lost collect
+				}
+			} else if front.OnlyOnce != nil && *front.OnlyOnce && !force {
+				// Reviving with wait_state none re-executes the front step.
+				return fmt.Errorf("instance %q step %q is marked only_once and may have already been attempted; use force to override", node.ID, front.ID)
+			}
 		}
+		// Empty queue: interrupted between the last step and the completed
+		// write — advance() completes it on the next claim.
+		node.Status = model.StatusRunning
+		node.WaitState = newWaitState
+		node.Error = ""
+		node.RetryCount = 0
+		node.NextRetryAt = nil
+		dirty = append(dirty, node)
+		return nil
+	}
+	if err := revive(root); err != nil {
+		return err
+	}
 
-		failingCount, err := qtx.CountFailingChildren(ctx, ancestorID)
-		if err != nil {
-			return fmt.Errorf("count failing children of %q: %w", ancestorID, err)
-		}
-
-		if failingCount == 0 {
-			// This ancestor's only failing child was the one we just retried —
-			// transition it back to running+waiting (it's still suspended for its children).
-			if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
-				ID:          ancestorID,
-				StepQueue:   ancestorRow.StepQueue,
-				ContextData: ancestorRow.ContextData,
-				RetryCount:  ancestorRow.RetryCount,
-				NextRetryAt: ancestorRow.NextRetryAt,
-				Status:      string(model.StatusRunning),
-				WaitState:   string(model.WaitStateWaiting),
-				Error:       "",
-				UpdatedAt:   nowUnix(),
-			}); err != nil {
-				return fmt.Errorf("unblock ancestor %q: %w", ancestorID, err)
-			}
-		} else {
-			// Other children are still failing — update the error message to
-			// reflect the next blocker, and stop walking up.
-			nextChild, err := qtx.GetFirstFailingChild(ctx, ancestorID)
-			if err != nil {
-				return fmt.Errorf("get next failing child of %q: %w", ancestorID, err)
-			}
-			if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
-				ID:          ancestorID,
-				StepQueue:   ancestorRow.StepQueue,
-				ContextData: ancestorRow.ContextData,
-				RetryCount:  ancestorRow.RetryCount,
-				NextRetryAt: ancestorRow.NextRetryAt,
-				Status:      string(model.StatusFailed),
-				WaitState:   string(model.WaitStateNone),
-				Error:       nextChild.Error,
-				UpdatedAt:   nowUnix(),
-			}); err != nil {
-				return fmt.Errorf("update ancestor error %q: %w", ancestorID, err)
-			}
-			break
+	now := nowUnix()
+	for _, node := range dirty {
+		raw := rawRows[node.ID]
+		if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
+			ID:          node.ID,
+			StepQueue:   raw.StepQueue,
+			ContextData: raw.ContextData,
+			RetryCount:  0,
+			NextRetryAt: sql.NullInt64{},
+			Status:      string(node.Status),
+			WaitState:   string(node.WaitState),
+			Error:       "",
+			UpdatedAt:   now,
+		}); err != nil {
+			return fmt.Errorf("revive instance %q: %w", node.ID, err)
 		}
 	}
 
@@ -1046,6 +1113,7 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 			StepQueue:      string(queue),
 			ContextData:    string(ctxData),
 			ParentID:       child.ParentID,
+			SpawnStepID:    child.SpawnStepID,
 			CallStack:      string(callStack),
 			RetryCount:     int64(child.RetryCount),
 			NextRetryAt:    sql.NullInt64{},
@@ -1140,6 +1208,7 @@ func toInstance(r dbgen.ProcessInstance) (*model.ProcessInstance, error) {
 		ProcessName:    r.ProcessName,
 		ProcessVersion: int(r.ProcessVersion),
 		ParentID:       r.ParentID,
+		SpawnStepID:    r.SpawnStepID,
 		RetryCount:     int(r.RetryCount),
 		Status:         model.Status(r.Status),
 		WaitState:      model.WaitState(r.WaitState),
