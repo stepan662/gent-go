@@ -25,11 +25,17 @@ beforeAll(async () => {
   if (rawDsn) {
     tempDbName = `gent_crash_${Date.now()}`;
     const adminDsn = replaceDbName(rawDsn, "postgres");
-    const result = spawnSync("psql", [adminDsn, "-c", `CREATE DATABASE ${tempDbName}`], {
-      stdio: "pipe",
-    });
+    const result = spawnSync(
+      "psql",
+      [adminDsn, "-c", `CREATE DATABASE ${tempDbName}`],
+      {
+        stdio: "pipe",
+      },
+    );
     if (result.status !== 0) {
-      throw new Error(`Failed to create crash recovery database: ${result.stderr.toString()}`);
+      throw new Error(
+        `Failed to create crash recovery database: ${result.stderr.toString()}`,
+      );
     }
     crashPgDSN = replaceDbName(rawDsn, tempDbName);
   }
@@ -38,7 +44,11 @@ beforeAll(async () => {
 afterAll(() => {
   if (tempDbName) {
     const adminDsn = replaceDbName(process.env.POSTGRES_DSN!, "postgres");
-    spawnSync("psql", [adminDsn, "-c", `DROP DATABASE ${tempDbName} WITH (FORCE)`], { stdio: "pipe" });
+    spawnSync(
+      "psql",
+      [adminDsn, "-c", `DROP DATABASE ${tempDbName} WITH (FORCE)`],
+      { stdio: "pipe" },
+    );
   }
 });
 
@@ -62,7 +72,10 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
         steps: [
           {
             id: "work",
-            call: { type: "rest" as const, endpoint: `http://localhost:${mock.port}/action` },
+            call: {
+              type: "rest" as const,
+              endpoint: `http://localhost:${mock.port}/action`,
+            },
             // Long enough that the step never times out before the crash.
             timeout_ms: 120_000,
             switch: [{ goto: "end" }],
@@ -90,11 +103,11 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
     // Crash: SIGKILL leaves the lease in the database without releasing it.
     gent1.crash();
 
-    // The engine lease is 10 s. Waiting 12 s ensures it has expired
-    // before the next worker polls.
-    await new Promise((r) => setTimeout(r, 12_000));
-
     const gent2 = await startGent(gentBin, GENT2_PORT, db, crashPgDSN);
+    // The engine lease is 10 s. Instead of waiting it out, shift gent2's
+    // clock forward so gent1's lease is already expired from its view,
+    // and tick immediately so it reclaims the instance.
+    await gent2.client.POST("/tick", { body: { advance_seconds: 12 } });
     try {
       const finalStatus = await waitForInstance(
         instanceId,

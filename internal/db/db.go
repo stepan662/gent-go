@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -89,7 +90,20 @@ func (db *DB) ph(n int) string {
 
 // ── time helpers ─────────────────────────────────────────────────────────────
 
-func nowUnix() int64 { return time.Now().UTC().Unix() }
+// clockOffset shifts this process's notion of "now" for all DB reads/writes.
+// Only ever increased, via AdvanceClock (debug /clock/advance endpoint), so
+// tests can expire leases and retry timers without real waits.
+var clockOffset atomic.Int64
+
+func nowUnix() int64 { return time.Now().UTC().Unix() + clockOffset.Load() }
+
+// AdvanceClock shifts the DB clock forward by the given number of seconds and
+// returns the new total offset. Testing only.
+func AdvanceClock(seconds int64) int64 { return clockOffset.Add(seconds) }
+
+// Now returns the current time as seen by the DB clock (including any test
+// offset). Anything compared against DB timestamps must use this, not time.Now.
+func Now() time.Time { return toTime(nowUnix()) }
 
 func toTime(unix int64) time.Time { return time.Unix(unix, 0).UTC() }
 
@@ -493,7 +507,7 @@ func (db *DB) UpdateInstance(inst *model.ProcessInstance) error {
 // result is preserved in the DB for the next tick. wait_state IS written: it is
 // owned exclusively by the lease-holding worker (SetParentCollecting only fires
 // while the DB row says 'waiting', which is never the case mid-claim), and the
-// post-collect reset to '' must be persisted or the stale 'collecting' would
+// post-collect reset to ” must be persisted or the stale 'collecting' would
 // make the next spawn step skip phase 1 entirely.
 func (db *DB) UpdateInstanceProgress(inst *model.ProcessInstance) error {
 	queue, err := json.Marshal(inst.StepQueue)
@@ -633,7 +647,7 @@ func (db *DB) ListInstances(status string) ([]*model.ProcessInstance, error) {
 // FinishChild atomically saves the child as terminal and, if all siblings are
 // now done, wakes the waiting parent. A healthy (running) parent wakes to
 // 'collecting' — it will actually merge child outputs; a draining
-// (failing/cancelling) parent wakes to '' and just settles. 'collecting'
+// (failing/cancelling) parent wakes to ” and just settles. 'collecting'
 // therefore strictly means "all children completed, outputs will be merged".
 //
 // The parent row is locked first (FOR UPDATE on PostgreSQL) to prevent race conditions
@@ -784,7 +798,7 @@ func (db *DB) FailAncestors(child *model.ProcessInstance) error {
 // FailInstanceAndAncestors atomically marks a child instance as failed,
 // propagates 'failing' to all ancestors in its call stack, and — when the
 // failed child was the last active member of its spawn batch — wakes the
-// parent (to '', the parent is failing by then) so the engine can settle it
+// parent (to ”, the parent is failing by then) so the engine can settle it
 // on the next tick. All in a single transaction; the safe replacement for
 // calling UpdateInstance + FailAncestors separately.
 func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {

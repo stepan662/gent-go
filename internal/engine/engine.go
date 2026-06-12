@@ -376,7 +376,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 
 	if matched != nil && inst.RetryCount < matched.Retries && isRetryAllowed(step, errCode, matched) {
 		inst.RetryCount++
-		next := time.Now().Add(e.retryDelay(inst.RetryCount))
+		next := db.Now().Add(e.retryDelay(inst.RetryCount))
 		inst.NextRetryAt = &next
 		e.log.Warn("step failed, scheduling retry",
 			"id", inst.ID, "step", step.ID,

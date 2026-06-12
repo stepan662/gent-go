@@ -111,6 +111,10 @@ type RetryInstanceReq struct {
 	Force bool `json:"force"` // override only_once retry protection
 }
 
+type TickReq struct {
+	AdvanceSeconds int64 `json:"advance_seconds"` // shift the server clock forward before ticking (testing only)
+}
+
 type DefinitionSummary struct {
 	Name    string `json:"name"`
 	Version int    `json:"version"`
@@ -310,9 +314,19 @@ func (h *Handlers) retryInstance(id string, raw json.RawMessage) Reply {
 	return okReply(map[string]any{"retried": true})
 }
 
-func (h *Handlers) tick() Reply {
+func (h *Handlers) tick(raw json.RawMessage) Reply {
 	if h.engine == nil {
 		return errReply(fmt.Errorf("engine not available"))
+	}
+	var req TickReq
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &req)
+	}
+	if req.AdvanceSeconds < 0 {
+		return errReply(fmt.Errorf("advance_seconds must not be negative"))
+	}
+	if req.AdvanceSeconds > 0 {
+		db.AdvanceClock(req.AdvanceSeconds)
 	}
 	n, err := h.engine.Tick(context.Background())
 	if err != nil {

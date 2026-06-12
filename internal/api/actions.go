@@ -324,13 +324,11 @@ var registry = func() []actionDef {
 			Name:    "tick",
 			Method:  http.MethodPost,
 			Path:    "/tick",
-			Summary: "Manually trigger one engine poll cycle (useful when started with -poll 0)",
+			Summary: "Manually trigger one engine poll cycle (useful when started with -poll 0); optionally shift the server clock forward first to expire leases and retry timers without real waits (testing only)",
 			Tags:    []string{"Debug"},
+			Req:     TickReq{AdvanceSeconds: 12},
 			Resp:    map[string]any{"count": 0},
-			fromHTTP: func(_ *http.Request) (Envelope, error) {
-				return Envelope{Action: "tick"}, nil
-			},
-			handle: func(h *Handlers, _ Envelope) Reply { return h.tick() },
+			handle: func(h *Handlers, env Envelope) Reply { return h.tick(env.Payload) },
 		},
 	}
 }()
