@@ -31,14 +31,14 @@ export async function waitForInstance(
 
 // Trigger one engine poll cycle. Returns the number of instances processed.
 // Only useful when the server was started with --poll 0 (manual tick mode).
-// advanceSeconds shifts the server clock forward before the tick, expiring
-// leases and retry timers without real waits.
+// advanceMs shifts the server clock forward (milliseconds) before the tick,
+// expiring leases and retry timers without real waits.
 export async function tick(
   apiClient: PostClient = client,
-  advanceSeconds?: number,
+  advanceMs?: number,
 ): Promise<number> {
   const { data, error } = await apiClient.POST("/tick", {
-    body: advanceSeconds ? { advance_seconds: advanceSeconds } : undefined,
+    body: advanceMs ? { advance_ms: advanceMs } : undefined,
   });
   if (error) throw new Error(`tick failed: ${JSON.stringify(error)}`);
   return (data as { count: number }).count;

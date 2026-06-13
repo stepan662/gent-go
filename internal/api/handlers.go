@@ -112,7 +112,7 @@ type RetryInstanceReq struct {
 }
 
 type TickReq struct {
-	AdvanceSeconds int64 `json:"advance_seconds"` // shift the server clock forward before ticking (testing only)
+	AdvanceMs int64 `json:"advance_ms"` // shift the server clock forward (milliseconds) before ticking (testing only)
 }
 
 type DefinitionSummary struct {
@@ -322,11 +322,11 @@ func (h *Handlers) tick(raw json.RawMessage) Reply {
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &req)
 	}
-	if req.AdvanceSeconds < 0 {
-		return errReply(fmt.Errorf("advance_seconds must not be negative"))
+	if req.AdvanceMs < 0 {
+		return errReply(fmt.Errorf("advance_ms must not be negative"))
 	}
-	if req.AdvanceSeconds > 0 {
-		db.AdvanceClock(req.AdvanceSeconds)
+	if req.AdvanceMs > 0 {
+		db.AdvanceClock(time.Duration(req.AdvanceMs) * time.Millisecond)
 	}
 	n, err := h.engine.Tick(context.Background())
 	if err != nil {

@@ -90,22 +90,26 @@ func (db *DB) ph(n int) string {
 
 // ── time helpers ─────────────────────────────────────────────────────────────
 
-// clockOffset shifts this process's notion of "now" for all DB reads/writes.
-// Only ever increased, via AdvanceClock (debug /clock/advance endpoint), so
-// tests can expire leases and retry timers without real waits.
+// All DB timestamps are unix milliseconds (BIGINT columns).
+
+// clockOffset (milliseconds) shifts this process's notion of "now" for all DB
+// reads/writes. Only ever increased, via AdvanceClock (debug /tick endpoint),
+// so tests can expire leases and retry timers without real waits.
 var clockOffset atomic.Int64
 
-func nowUnix() int64 { return time.Now().UTC().Unix() + clockOffset.Load() }
+func nowMillis() int64 { return time.Now().UnixMilli() + clockOffset.Load() }
 
-// AdvanceClock shifts the DB clock forward by the given number of seconds and
-// returns the new total offset. Testing only.
-func AdvanceClock(seconds int64) int64 { return clockOffset.Add(seconds) }
+// AdvanceClock shifts the DB clock forward by d and returns the new total
+// offset. Testing only.
+func AdvanceClock(d time.Duration) time.Duration {
+	return time.Duration(clockOffset.Add(d.Milliseconds())) * time.Millisecond
+}
 
 // Now returns the current time as seen by the DB clock (including any test
 // offset). Anything compared against DB timestamps must use this, not time.Now.
-func Now() time.Time { return toTime(nowUnix()) }
+func Now() time.Time { return toTime(nowMillis()) }
 
-func toTime(unix int64) time.Time { return time.Unix(unix, 0).UTC() }
+func toTime(ms int64) time.Time { return time.UnixMilli(ms).UTC() }
 
 func toTimePtr(n sql.NullInt64) *time.Time {
 	if !n.Valid {
@@ -119,7 +123,7 @@ func fromTimePtr(t *time.Time) sql.NullInt64 {
 	if t == nil {
 		return sql.NullInt64{}
 	}
-	return sql.NullInt64{Int64: t.Unix(), Valid: true}
+	return sql.NullInt64{Int64: t.UnixMilli(), Valid: true}
 }
 
 func nullStringPtr(n sql.NullString) *string {
@@ -179,7 +183,7 @@ func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []D
 		Version:     int64(version),
 		Definition:  string(data),
 		ContentHash: hash,
-		CreatedAt:   nowUnix(),
+		CreatedAt:   nowMillis(),
 	}); err != nil {
 		return err
 	}
@@ -206,7 +210,7 @@ func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []D
 			Name:      def.Name,
 			Channel:   channel,
 			Version:   int64(version),
-			UpdatedAt: nowUnix(),
+			UpdatedAt: nowMillis(),
 		}); err != nil {
 			return err
 		}
@@ -400,7 +404,7 @@ func (db *DB) SaveChannel(name, channel string, version int) error {
 		Name:      name,
 		Channel:   channel,
 		Version:   int64(version),
-		UpdatedAt: nowUnix(),
+		UpdatedAt: nowMillis(),
 	})
 }
 
@@ -459,7 +463,7 @@ func (db *DB) SaveInstance(inst *model.ProcessInstance) error {
 	if err != nil {
 		return err
 	}
-	now := nowUnix()
+	now := nowMillis()
 	return db.q.InsertInstance(context.Background(), dbgen.InsertInstanceParams{
 		ID:             inst.ID,
 		ProcessName:    inst.ProcessName,
@@ -497,7 +501,7 @@ func (db *DB) UpdateInstance(inst *model.ProcessInstance) error {
 		Status:      string(inst.Status),
 		WaitState:   string(inst.WaitState),
 		Error:       inst.Error,
-		UpdatedAt:   nowUnix(),
+		UpdatedAt:   nowMillis(),
 	})
 }
 
@@ -525,14 +529,14 @@ func (db *DB) UpdateInstanceProgress(inst *model.ProcessInstance) error {
 		RetryCount:  int64(inst.RetryCount),
 		NextRetryAt: fromTimePtr(inst.NextRetryAt),
 		WaitState:   string(inst.WaitState),
-		UpdatedAt:   nowUnix(),
+		UpdatedAt:   nowMillis(),
 	})
 }
 
 func (db *DB) RenewWorkerLeases(workerID string, leaseDur time.Duration) error {
 	return db.q.RenewWorkerLeases(context.Background(), dbgen.RenewWorkerLeasesParams{
 		WorkerID:       sql.NullString{String: workerID, Valid: true},
-		LeaseExpiresAt: sql.NullInt64{Int64: nowUnix() + int64(leaseDur.Seconds()), Valid: true},
+		LeaseExpiresAt: sql.NullInt64{Int64: nowMillis() + leaseDur.Milliseconds(), Valid: true},
 	})
 }
 
@@ -543,8 +547,8 @@ func (db *DB) RenewWorkerLeases(workerID string, leaseDur time.Duration) error {
 // wait_state <> 'waiting' excludes parents suspended for children.
 // Both ” (none) and 'collecting' are claimable.
 func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int) ([]*model.ProcessInstance, error) {
-	now := nowUnix()
-	leaseExpiry := now + int64(leaseDur.Seconds())
+	now := nowMillis()
+	leaseExpiry := now + leaseDur.Milliseconds()
 	ctx := context.Background()
 
 	var query string
@@ -709,7 +713,7 @@ func (db *DB) FinishChild(child *model.ProcessInstance) error {
 		Status:      string(child.Status),
 		WaitState:   string(child.WaitState),
 		Error:       child.Error,
-		UpdatedAt:   nowUnix(),
+		UpdatedAt:   nowMillis(),
 	}); err != nil {
 		return fmt.Errorf("save child: %w", err)
 	}
@@ -726,7 +730,7 @@ func (db *DB) FinishChild(child *model.ProcessInstance) error {
 		if active == 0 {
 			if err := qtx.WakeParent(ctx, dbgen.WakeParentParams{
 				ID:        child.ParentID,
-				UpdatedAt: nowUnix(),
+				UpdatedAt: nowMillis(),
 			}); err != nil {
 				return fmt.Errorf("wake parent: %w", err)
 			}
@@ -790,7 +794,7 @@ func (db *DB) FailAncestors(child *model.ProcessInstance) error {
 	}
 	return db.q.FailAncestors(context.Background(), dbgen.FailAncestorsParams{
 		Error:     child.Error,
-		UpdatedAt: nowUnix(),
+		UpdatedAt: nowMillis(),
 		Ids:       string(idsJSON),
 	})
 }
@@ -843,7 +847,7 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 		Status:      string(child.Status),
 		WaitState:   string(child.WaitState),
 		Error:       child.Error,
-		UpdatedAt:   nowUnix(),
+		UpdatedAt:   nowMillis(),
 	}); err != nil {
 		return err
 	}
@@ -856,7 +860,7 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 		}
 		if err := qtx.FailAncestors(ctx, dbgen.FailAncestorsParams{
 			Error:     child.Error,
-			UpdatedAt: nowUnix(),
+			UpdatedAt: nowMillis(),
 			Ids:       string(idsJSON),
 		}); err != nil {
 			return err
@@ -886,7 +890,7 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 			if active == 0 {
 				if err := qtx.WakeParent(ctx, dbgen.WakeParentParams{
 					ID:        child.ParentID,
-					UpdatedAt: nowUnix(),
+					UpdatedAt: nowMillis(),
 				}); err != nil {
 					return fmt.Errorf("wake parent: %w", err)
 				}
@@ -921,7 +925,7 @@ func (db *DB) CancelProcess(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback()
 
-	now := nowUnix()
+	now := nowMillis()
 
 	var qErr error
 	if db.dialect == "postgres" {
@@ -1110,7 +1114,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 		return err
 	}
 
-	now := nowUnix()
+	now := nowMillis()
 	for _, node := range dirty {
 		raw := rawRows[node.ID]
 		if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
@@ -1166,7 +1170,7 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 	// Insert children with the parent's current status (propagates cancelling if needed).
 	// Each child gets created_at = now+i so siblings have a strict ordering by definition
 	// position — ClaimInstances (ORDER BY created_at) always processes them in spawn order.
-	now := nowUnix()
+	now := nowMillis()
 	for i, child := range children {
 		queue, err := json.Marshal(child.StepQueue)
 		if err != nil {
@@ -1220,7 +1224,7 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 		Status:      currentStatus,
 		WaitState:   string(model.WaitStateWaiting),
 		Error:       parent.Error,
-		UpdatedAt:   nowUnix(),
+		UpdatedAt:   nowMillis(),
 	}); err != nil {
 		return fmt.Errorf("suspend parent: %w", err)
 	}

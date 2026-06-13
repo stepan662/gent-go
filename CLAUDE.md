@@ -11,7 +11,7 @@ The server supports both **SQLite** (default, single-file) and **PostgreSQL** (p
 All SQL in `queries.sql` must be compatible with both engines.
 
 Rules:
-- Use `BIGINT` (unix seconds) for all timestamp columns — works natively on both engines, no type overrides needed. Convert to/from `time.Time` using `toTime()` / `fromTimePtr()` in `db.go`.
+- Use `BIGINT` (unix milliseconds) for all timestamp columns — works natively on both engines, no type overrides needed. Convert to/from `time.Time` using `toTime()` / `fromTimePtr()` in `db.go`; get "now" via `nowMillis()` / `db.Now()`, never `time.Now()` directly (the DB clock can be shifted by tests).
 - Use `sqlc.arg(name)` for all query parameters — never hardcode `?` or `$1`. sqlc translates this to the correct placeholder per engine.
 - `gen_pg_validate/` is gitignored. Run `sqlc generate` then `go build ./...` locally to validate cross-engine compatibility.
 

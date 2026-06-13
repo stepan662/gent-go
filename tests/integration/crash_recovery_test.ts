@@ -107,7 +107,7 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
     // The engine lease is 10 s. Instead of waiting it out, shift gent2's
     // clock forward so gent1's lease is already expired from its view,
     // and tick immediately so it reclaims the instance.
-    await gent2.client.POST("/tick", { body: { advance_seconds: 12 } });
+    await gent2.client.POST("/tick", { body: { advance_ms: 12_000 } });
     try {
       const finalStatus = await waitForInstance(
         instanceId,

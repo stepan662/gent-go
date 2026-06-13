@@ -326,7 +326,7 @@ var registry = func() []actionDef {
 			Path:    "/tick",
 			Summary: "Manually trigger one engine poll cycle (useful when started with -poll 0); optionally shift the server clock forward first to expire leases and retry timers without real waits (testing only)",
 			Tags:    []string{"Debug"},
-			Req:     TickReq{AdvanceSeconds: 12},
+			Req:     TickReq{AdvanceMs: 12_000},
 			Resp:    map[string]any{"count": 0},
 			handle: func(h *Handlers, env Envelope) Reply { return h.tick(env.Payload) },
 		},

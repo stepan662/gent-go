@@ -181,6 +181,11 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 	if err != nil {
 		return e.failInstance(inst, fmt.Sprintf("step %q switch: %v", step.ID, err))
 	}
+	if gotoID == "" {
+		// Validation requires a catch-all case, but legacy rows in the DB may
+		// predate that rule — fail the instance rather than panic on gotoID[1:].
+		return e.failInstance(inst, fmt.Sprintf("step %q switch: no case matched", step.ID))
+	}
 
 	if gotoID == model.GotoEnd {
 		inst.Status = model.StatusCompleted

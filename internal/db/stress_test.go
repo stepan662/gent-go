@@ -148,9 +148,9 @@ func TestStress_ClaimInstances_MultiWorker(t *testing.T) {
 					t.Errorf("worker %s: ClaimInstances: %v", workerID, err)
 					return
 				}
-				// Mirror the DB's integer-second truncation so the Go-side expiry
+				// Mirror the DB's integer-millisecond truncation so the Go-side expiry
 				// matches exactly when the DB considers the lease expired.
-				expiry := time.Unix(claimedAt.Unix()+int64(leaseDur.Seconds()), 0)
+				expiry := time.UnixMilli(claimedAt.UnixMilli() + leaseDur.Milliseconds())
 				mu.Lock()
 				for _, inst := range instances {
 					if prev, exists := active[inst.ID]; exists &&
