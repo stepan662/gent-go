@@ -237,15 +237,17 @@ func TestApplyBatch_VersionedSelfRefCreatesDep(t *testing.T) {
 		t.Fatalf("apply v2 failed: %s", r.Error)
 	}
 
-	deps, err := h.db.GetDependencies("recursive", 2)
+	// The pinned reference is baked as a dependency on recursive@v1.
+	pinnedV, err := h.db.GetDependencyVersion("recursive", 2, "recurse", "pinned")
 	if err != nil {
-		t.Fatalf("GetDependencies: %v", err)
+		t.Fatalf("GetDependencyVersion(pinned): %v", err)
 	}
-	if len(deps) != 1 {
-		t.Fatalf("expected 1 dep row for recursive@v2, got %d: %+v", len(deps), deps)
+	if pinnedV != 1 {
+		t.Errorf("expected pinned dep on recursive@v1, got recursive@v%d", pinnedV)
 	}
-	if deps[0].ChildName != "recursive" || deps[0].ChildVersion != 1 {
-		t.Errorf("expected dep on recursive@v1, got %+v", deps[0])
+	// The unpinned "latest" reference is resolved dynamically, not baked as a dep row.
+	if _, err := h.db.GetDependencyVersion("recursive", 2, "recurse", "latest"); err == nil {
+		t.Errorf("expected no baked dep row for unpinned \"latest\" reference")
 	}
 }
 

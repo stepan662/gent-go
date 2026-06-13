@@ -170,23 +170,23 @@ func TestCancelProcess_NonRootRejected(t *testing.T) {
 	}
 }
 
-// TestFailAncestors_OverridesCancelling verifies that a child failure marks
+// TestFailInstanceAndAncestors_OverridesCancelling verifies that a child failure marks
 // 'cancelling' ancestors as 'failing' (error wins over cancellation) while
 // preserving their wait_state so they keep draining until children settle.
-func TestFailAncestors_OverridesCancelling(t *testing.T) {
+func TestFailInstanceAndAncestors_OverridesCancelling(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			insertInstW(t, b.db, "grand", model.StatusCancelling, model.WaitStateWaiting, "", nil, "")
 			insertInstW(t, b.db, "parent", model.StatusCancelling, model.WaitStateWaiting, "grand", []string{"grand"}, "")
-			// leaf is already failed and triggers FailAncestors
+			// leaf is already failed and triggers ancestor failure propagation
 			leaf := &model.ProcessInstance{
 				ID:        "leaf",
 				CallStack: []string{"grand", "parent"},
 				Error:     "boom",
 			}
 
-			if err := b.db.FailAncestors(leaf); err != nil {
-				t.Fatalf("FailAncestors: %v", err)
+			if err := b.db.FailInstanceAndAncestors(leaf); err != nil {
+				t.Fatalf("FailInstanceAndAncestors: %v", err)
 			}
 
 			for _, id := range []string{"grand", "parent"} {
@@ -204,8 +204,8 @@ func TestFailAncestors_OverridesCancelling(t *testing.T) {
 	}
 }
 
-// TestFailAncestors_AlreadyFailed verifies that already-failed ancestors are not overwritten.
-func TestFailAncestors_AlreadyFailed(t *testing.T) {
+// TestFailInstanceAndAncestors_AlreadyFailed verifies that already-failed ancestors are not overwritten.
+func TestFailInstanceAndAncestors_AlreadyFailed(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			insertInst(t, b.db, "parent", model.StatusFailed, "", nil, "original error")
@@ -215,8 +215,8 @@ func TestFailAncestors_AlreadyFailed(t *testing.T) {
 				Error:     "new error",
 			}
 
-			if err := b.db.FailAncestors(leaf); err != nil {
-				t.Fatalf("FailAncestors: %v", err)
+			if err := b.db.FailInstanceAndAncestors(leaf); err != nil {
+				t.Fatalf("FailInstanceAndAncestors: %v", err)
 			}
 
 			// Failed ancestors are excluded from the UPDATE (status IN condition)

@@ -291,65 +291,6 @@ func (q *Queries) GetDefinition(ctx context.Context, arg GetDefinitionParams) (P
 	return i, err
 }
 
-const getDefinitionRaw = `-- name: GetDefinitionRaw :one
-SELECT definition FROM process_definitions
-WHERE name = ?1 AND version = ?2
-`
-
-type GetDefinitionRawParams struct {
-	Name    string
-	Version int64
-}
-
-func (q *Queries) GetDefinitionRaw(ctx context.Context, arg GetDefinitionRawParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getDefinitionRaw, arg.Name, arg.Version)
-	var definition string
-	err := row.Scan(&definition)
-	return definition, err
-}
-
-const getDependencies = `-- name: GetDependencies :many
-SELECT parent_name, parent_version, step_id, child_key, child_name, child_version
-FROM process_dependencies
-WHERE parent_name = ?1 AND parent_version = ?2
-ORDER BY step_id, child_key
-`
-
-type GetDependenciesParams struct {
-	ParentName    string
-	ParentVersion int64
-}
-
-func (q *Queries) GetDependencies(ctx context.Context, arg GetDependenciesParams) ([]ProcessDependency, error) {
-	rows, err := q.db.QueryContext(ctx, getDependencies, arg.ParentName, arg.ParentVersion)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProcessDependency
-	for rows.Next() {
-		var i ProcessDependency
-		if err := rows.Scan(
-			&i.ParentName,
-			&i.ParentVersion,
-			&i.StepID,
-			&i.ChildKey,
-			&i.ChildName,
-			&i.ChildVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getDependencyVersion = `-- name: GetDependencyVersion :one
 SELECT child_version FROM process_dependencies
 WHERE parent_name = ?1

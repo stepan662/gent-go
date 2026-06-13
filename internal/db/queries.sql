@@ -8,10 +8,6 @@ SELECT name, version, definition, content_hash, created_at
 FROM process_definitions
 WHERE name = sqlc.arg(name) AND version = sqlc.arg(version);
 
--- name: GetDefinitionRaw :one
-SELECT definition FROM process_definitions
-WHERE name = sqlc.arg(name) AND version = sqlc.arg(version);
-
 -- name: LatestVersion :one
 SELECT MAX(version) FROM process_definitions WHERE name = sqlc.arg(name);
 
@@ -31,12 +27,6 @@ WHERE parent_name = sqlc.arg(parent_name) AND parent_version = sqlc.arg(parent_v
 -- name: InsertDependency :exec
 INSERT INTO process_dependencies (parent_name, parent_version, step_id, child_key, child_name, child_version)
 VALUES (sqlc.arg(parent_name), sqlc.arg(parent_version), sqlc.arg(step_id), sqlc.arg(child_key), sqlc.arg(child_name), sqlc.arg(child_version));
-
--- name: GetDependencies :many
-SELECT parent_name, parent_version, step_id, child_key, child_name, child_version
-FROM process_dependencies
-WHERE parent_name = sqlc.arg(parent_name) AND parent_version = sqlc.arg(parent_version)
-ORDER BY step_id, child_key;
 
 -- name: GetDependencyVersion :one
 SELECT child_version FROM process_dependencies

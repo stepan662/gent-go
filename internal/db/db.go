@@ -252,20 +252,6 @@ func (db *DB) ListDefinitions() ([]VersionedDef, error) {
 	return out, nil
 }
 
-func (db *DB) GetDefinitionRaw(name string, version int) ([]byte, error) {
-	raw, err := db.q.GetDefinitionRaw(context.Background(), dbgen.GetDefinitionRawParams{
-		Name:    name,
-		Version: int64(version),
-	})
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("definition %q v%d not found", name, version)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return []byte(raw), nil
-}
-
 func (db *DB) FindVersionByHash(name, hash string) (int, error) {
 	v, err := db.q.FindVersionByHash(context.Background(), dbgen.FindVersionByHashParams{
 		Name:        name,
@@ -278,28 +264,6 @@ func (db *DB) FindVersionByHash(name, hash string) (int, error) {
 		return 0, fmt.Errorf("no version found for %q with given hash", name)
 	}
 	return int(v.(int64)), nil
-}
-
-func (db *DB) GetDependencies(name string, version int) ([]DependencyRow, error) {
-	rows, err := db.q.GetDependencies(context.Background(), dbgen.GetDependenciesParams{
-		ParentName:    name,
-		ParentVersion: int64(version),
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]DependencyRow, len(rows))
-	for i, r := range rows {
-		out[i] = DependencyRow{
-			ParentName:    r.ParentName,
-			ParentVersion: int(r.ParentVersion),
-			StepID:        r.StepID,
-			ChildKey:      r.ChildKey,
-			ChildName:     r.ChildName,
-			ChildVersion:  int(r.ChildVersion),
-		}
-	}
-	return out, nil
 }
 
 func (db *DB) GetDependencyVersion(parentName string, parentVersion int, stepID string, childKey string) (int, error) {
@@ -774,28 +738,6 @@ func (db *DB) CollectChildOutputs(ctx context.Context, inst *model.ProcessInstan
 		return fmt.Errorf("%s", wakeErr)
 	}
 	return nil
-}
-
-// FailAncestors marks all ancestor processes in the child's call stack as
-// 'failing' — doomed but still draining. Ancestors keep their wait_state
-// ('waiting'), so they stay unclaimable until their children settle; the engine
-// then transitions them to 'failed' one level per tick, mirroring cancellation.
-// This is a single bulk UPDATE — O(1) queries regardless of tree depth.
-// It targets ancestors in 'running' or 'cancelling' state, so errors always
-// take precedence over cancellation and the first error wins.
-func (db *DB) FailAncestors(child *model.ProcessInstance) error {
-	if len(child.CallStack) == 0 {
-		return nil
-	}
-	idsJSON, err := json.Marshal(child.CallStack)
-	if err != nil {
-		return err
-	}
-	return db.q.FailAncestors(context.Background(), dbgen.FailAncestorsParams{
-		Error:     child.Error,
-		UpdatedAt: nowMillis(),
-		Ids:       string(idsJSON),
-	})
 }
 
 // FailInstanceAndAncestors atomically marks a child instance as failed,
