@@ -76,12 +76,27 @@ func (e *Engine) Run(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
+		if ctx.Err() != nil {
+			e.log.Info("engine stopped")
+			return
+		}
+
+		// Adaptive polling: when a tick did work there is likely more queued, so
+		// drain straight into the next tick instead of idling for pollEvery. Only
+		// fall back to the timer once a tick finds nothing — that keeps an idle
+		// engine at the configured poll rate without busy-spinning. In production
+		// (immediateRetries=false) a failing instance backs off into the future,
+		// so it cannot be re-claimed instantly and spin this loop.
+		n, _ := e.Tick(ctx)
+		if n > 0 {
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
 			e.log.Info("engine stopped")
 			return
 		case <-ticker.C:
-			e.Tick(ctx)
 		}
 	}
 }
@@ -148,71 +163,94 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		return e.cancelInstance(inst)
 	}
 
-	if len(inst.StepQueue) == 0 {
-		inst.Status = model.StatusCompleted
-		inst.NextRetryAt = nil
-		if err := e.computeOutput(inst); err != nil {
-			return e.failInstance(inst, err.Error())
-		}
-		e.log.Info("instance completed", "id", inst.ID, "process", inst.ProcessName)
-		return e.saveAndNotify(inst)
-	}
-
-	step := inst.StepQueue[0]
-	var selfOutput any
-
-	if step.Call != nil {
-		if step.Call.Type == model.CallTypeChild || step.Call.Type == model.CallTypeChildParallel {
-			out, done, err := e.runChildProcesses(ctx, inst, step)
-			if done || err != nil {
-				return err
+	// Process steps in a loop. A call-less step (pure switch/routing) has no
+	// external side effects, so once it resolves its goto we continue to the next
+	// step in-memory without persisting — collapsing a chain of switch-only steps
+	// into a single claim and a single DB write at the boundary. We stop and
+	// persist at the first step that has a call (child spawn or remote action), at
+	// a terminal state, or after maxInlineSteps transitions (a guard against a
+	// pathological all-switch loop holding the goroutine/lease forever).
+	//
+	// This is crash-safe: skipping persistence between call-less steps is fine
+	// because they only re-evaluate switches against already-persisted context, so
+	// resuming from the last persisted step queue is deterministic. Durable state
+	// only changes at the boundaries (spawn txn, action result, terminal save),
+	// each of which writes the live step queue.
+	const maxInlineSteps = 1000
+	for i := 0; ; i++ {
+		if len(inst.StepQueue) == 0 {
+			inst.Status = model.StatusCompleted
+			inst.NextRetryAt = nil
+			if err := e.computeOutput(inst); err != nil {
+				return e.failInstance(inst, err.Error())
 			}
-			selfOutput = out
+			e.log.Info("instance completed", "id", inst.ID, "process", inst.ProcessName)
+			return e.saveAndNotify(inst)
+		}
+
+		step := inst.StepQueue[0]
+		hasCall := step.Call != nil
+		var selfOutput any
+
+		if hasCall {
+			if step.Call.Type == model.CallTypeChild || step.Call.Type == model.CallTypeChildParallel {
+				out, done, err := e.runChildProcesses(ctx, inst, step)
+				if done || err != nil {
+					return err
+				}
+				selfOutput = out
+			} else {
+				out, done, err := e.executeAction(ctx, inst, step)
+				if done || err != nil {
+					return err
+				}
+				selfOutput = out
+			}
+		}
+
+		gotoID, err := e.evalSwitch(inst, step, selfOutput)
+		if err != nil {
+			return e.failInstance(inst, fmt.Sprintf("step %q switch: %v", step.ID, err))
+		}
+		if gotoID == "" {
+			// Validation requires a catch-all case, but legacy rows in the DB may
+			// predate that rule — fail the instance rather than panic on gotoID[1:].
+			return e.failInstance(inst, fmt.Sprintf("step %q switch: no case matched", step.ID))
+		}
+
+		if gotoID == model.GotoEnd {
+			inst.Status = model.StatusCompleted
+			inst.RetryCount = 0
+			inst.NextRetryAt = nil
+			if err := e.computeOutput(inst); err != nil {
+				return e.failInstance(inst, err.Error())
+			}
+			e.log.Info("instance completed", "id", inst.ID, "step", step.ID)
+			return e.saveAndNotify(inst)
+		}
+
+		if gotoID == model.GotoNext {
+			inst.StepQueue = inst.StepQueue[1:]
 		} else {
-			out, done, err := e.executeAction(ctx, inst, step)
-			if done || err != nil {
-				return err
+			// gotoID is a step reference like "$ship" — strip the sigil.
+			newQueue, err := e.queueFromStep(inst, gotoID[1:])
+			if err != nil {
+				return e.failInstance(inst, err.Error())
 			}
-			selfOutput = out
+			inst.StepQueue = newQueue
 		}
-	}
 
-	gotoID, err := e.evalSwitch(inst, step, selfOutput)
-	if err != nil {
-		return e.failInstance(inst, fmt.Sprintf("step %q switch: %v", step.ID, err))
-	}
-	if gotoID == "" {
-		// Validation requires a catch-all case, but legacy rows in the DB may
-		// predate that rule — fail the instance rather than panic on gotoID[1:].
-		return e.failInstance(inst, fmt.Sprintf("step %q switch: no case matched", step.ID))
-	}
-
-	if gotoID == model.GotoEnd {
-		inst.Status = model.StatusCompleted
 		inst.RetryCount = 0
 		inst.NextRetryAt = nil
-		if err := e.computeOutput(inst); err != nil {
-			return e.failInstance(inst, err.Error())
-		}
-		e.log.Info("instance completed", "id", inst.ID, "step", step.ID)
-		return e.saveAndNotify(inst)
-	}
+		e.log.Info("step completed", "id", inst.ID, "step", step.ID)
 
-	if gotoID == model.GotoNext {
-		inst.StepQueue = inst.StepQueue[1:]
-	} else {
-		// gotoID is a step reference like "$ship" — strip the sigil.
-		newQueue, err := e.queueFromStep(inst, gotoID[1:])
-		if err != nil {
-			return e.failInstance(inst, err.Error())
+		// A step with a call has just executed a side effect — checkpoint and yield.
+		// A call-less routing step had none, so continue in-memory to the next step
+		// unless we've hit the inline-step guard.
+		if hasCall || i >= maxInlineSteps {
+			return e.db.UpdateInstanceProgress(inst)
 		}
-		inst.StepQueue = newQueue
 	}
-
-	inst.RetryCount = 0
-	inst.NextRetryAt = nil
-	e.log.Info("step completed", "id", inst.ID, "step", step.ID)
-	return e.db.UpdateInstanceProgress(inst)
 }
 
 // executeAction sends a request to the step's endpoint and stores the output in

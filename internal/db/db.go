@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,20 @@ type DB struct {
 	q       *dbgen.Queries
 	exec    dbgen.DBTX // rewrites ?→$N on Postgres; use for hand-written SQL
 	dialect string     // "sqlite" | "postgres"
+
+	// defCache memoises GetDefinition lookups, keyed by defKey → definition JSON.
+	// Definitions are write-once per (name, version) in normal operation, so the
+	// raw JSON is safe to cache; we re-unmarshal a fresh copy per call so callers
+	// never share mutable Step pointers. SaveDefinition invalidates the key on
+	// write to cover the ON CONFLICT DO UPDATE overwrite path. This is the engine's
+	// hottest read (every spawn/goto/output resolves a definition) and on SQLite it
+	// otherwise contends with writes for the single connection.
+	defCache sync.Map // defKey → string
+}
+
+type defKey struct {
+	name    string
+	version int
 }
 
 // OpenSQLite opens (or creates) the SQLite database at path and runs migrations.
@@ -209,20 +224,34 @@ func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []D
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Drop any stale cache entry: InsertDefinition uses ON CONFLICT DO UPDATE, so
+	// re-registering an existing (name, version) can change its content.
+	db.defCache.Delete(defKey{name: def.Name, version: version})
+	return nil
 }
 
 func (db *DB) GetDefinition(name string, version int) (*model.ProcessDefinition, error) {
-	ctx := context.Background()
-	row, err := db.q.GetDefinition(ctx, dbgen.GetDefinitionParams{Name: name, Version: int64(version)})
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("definition %q v%d not found", name, version)
+	key := defKey{name: name, version: version}
+
+	raw, ok := db.defCache.Load(key)
+	if !ok {
+		row, err := db.q.GetDefinition(context.Background(), dbgen.GetDefinitionParams{Name: name, Version: int64(version)})
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("definition %q v%d not found", name, version)
+		}
+		if err != nil {
+			return nil, err
+		}
+		raw = row.Definition
+		db.defCache.Store(key, raw)
 	}
-	if err != nil {
-		return nil, err
-	}
+
+	// Unmarshal a fresh copy every call so callers never share mutable Step pointers.
 	var def model.ProcessDefinition
-	return &def, json.Unmarshal([]byte(row.Definition), &def)
+	return &def, json.Unmarshal([]byte(raw.(string)), &def)
 }
 
 func (db *DB) LatestVersion(name string) (int, error) {
