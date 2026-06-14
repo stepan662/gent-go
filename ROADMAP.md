@@ -13,6 +13,8 @@
 - [x] non-idempotent tasks - steps which can't be safely repateated
 - [] logs for each process
 - [x] let user to repeat the task manually (how will it interact with parents?)
+- [] pagination
+- [] filtering
 
 # docs
 
