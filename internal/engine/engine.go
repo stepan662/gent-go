@@ -660,13 +660,8 @@ func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (m
 // never abort an advance. The structured slog output at each call site is left
 // intact for operational logging; this is the durable, queryable trail.
 func (e *Engine) audit(inst *model.ProcessInstance, level model.LogLevel, event, step, msg, code string, detail map[string]any) {
-	rootID := inst.ID
-	if len(inst.CallStack) > 0 {
-		rootID = inst.CallStack[0]
-	}
 	if err := e.db.AppendLog(&model.LogEntry{
 		InstanceID: inst.ID,
-		RootID:     rootID,
 		Level:      level,
 		Event:      event,
 		StepID:     step,

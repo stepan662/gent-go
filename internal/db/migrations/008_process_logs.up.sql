@@ -6,7 +6,6 @@
 CREATE TABLE process_logs (
     id          TEXT   NOT NULL PRIMARY KEY,   -- uuid
     instance_id TEXT   NOT NULL,
-    root_id     TEXT   NOT NULL DEFAULT '',    -- call_stack[0] (or self if root); enables tree queries
     level       TEXT   NOT NULL,               -- debug|info|warn|error
     event       TEXT   NOT NULL,               -- step_started, step_succeeded, retry_scheduled, ...
     step_id     TEXT   NOT NULL DEFAULT '',
@@ -19,8 +18,8 @@ CREATE TABLE process_logs (
 -- Reads are "logs for instance X, oldest first"; (created_at, id) also serves
 -- cursor pagination. Within one instance advance() is single-threaded under the
 -- lease, so events are naturally ordered and ms granularity + id tie-break suffices.
+-- Subtree ("logs for X and all its descendants") walks process_instances.parent_id
+-- with a recursive CTE and joins this same index. See ListSubtreeLogs.
 CREATE INDEX idx_process_logs_instance ON process_logs (instance_id, created_at, id);
--- Tree view: every log for a whole process subtree, keyed on the root instance.
-CREATE INDEX idx_process_logs_root     ON process_logs (root_id, created_at, id);
 -- Retention pruner scans by age.
 CREATE INDEX idx_process_logs_created  ON process_logs (created_at);

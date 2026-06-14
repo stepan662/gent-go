@@ -36,7 +36,6 @@ const (
 type LogEntry struct {
 	ID         string         `json:"id"`
 	InstanceID string         `json:"instance_id"`
-	RootID     string         `json:"root_id"`
 	Level      LogLevel       `json:"level"`
 	Event      string         `json:"event"`
 	StepID     string         `json:"step_id,omitempty"`

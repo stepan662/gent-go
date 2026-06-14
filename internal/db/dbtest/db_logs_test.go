@@ -10,11 +10,10 @@ import (
 
 // appendLog writes one entry with an explicit timestamp so ordering and
 // time-window assertions are deterministic.
-func appendLog(t *testing.T, db *dbpkg.DB, instanceID, rootID string, level model.LogLevel, event string, atMillis int64) {
+func appendLog(t *testing.T, db *dbpkg.DB, instanceID string, level model.LogLevel, event string, atMillis int64) {
 	t.Helper()
 	err := db.AppendLog(&model.LogEntry{
 		InstanceID: instanceID,
-		RootID:     rootID,
 		Level:      level,
 		Event:      event,
 		StepID:     "s1",
@@ -27,15 +26,32 @@ func appendLog(t *testing.T, db *dbpkg.DB, instanceID, rootID string, level mode
 	}
 }
 
+// spawnInstance saves a bare instance row with the given parent, so the subtree
+// recursive CTE in ListTreeLogs has a real parent_id chain to walk.
+func spawnInstance(t *testing.T, db *dbpkg.DB, id, parentID string) {
+	t.Helper()
+	if err := db.SaveInstance(&model.ProcessInstance{
+		ID:             id,
+		ProcessName:    "test",
+		ProcessVersion: 1,
+		StepQueue:      []*model.Step{},
+		ContextData:    map[string]any{},
+		ParentID:       parentID,
+		Status:         model.StatusRunning,
+	}); err != nil {
+		t.Fatalf("SaveInstance(%s): %v", id, err)
+	}
+}
+
 func TestListLogs_OrderAndFilters(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
-			appendLog(t, b.db, "inst-1", "inst-1", model.LogInfo, model.EventStepStarted, 1000)
-			appendLog(t, b.db, "inst-1", "inst-1", model.LogWarn, model.EventRetryScheduled, 2000)
-			appendLog(t, b.db, "inst-1", "inst-1", model.LogInfo, model.EventStepSucceeded, 3000)
-			appendLog(t, b.db, "inst-1", "inst-1", model.LogInfo, model.EventInstanceDone, 4000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepStarted, 1000)
+			appendLog(t, b.db, "inst-1", model.LogWarn, model.EventRetryScheduled, 2000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepSucceeded, 3000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventInstanceDone, 4000)
 			// A different instance must not leak into inst-1's logs.
-			appendLog(t, b.db, "inst-2", "inst-2", model.LogInfo, model.EventStepStarted, 1500)
+			appendLog(t, b.db, "inst-2", model.LogInfo, model.EventStepStarted, 1500)
 
 			all, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{})
 			if err != nil {
@@ -83,7 +99,7 @@ func TestListLogs_CursorPagination(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			for i := int64(1); i <= 5; i++ {
-				appendLog(t, b.db, "inst-1", "inst-1", model.LogInfo, model.EventStepCompleted, i*1000)
+				appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepCompleted, i*1000)
 			}
 
 			page1, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{Limit: 2})
@@ -117,20 +133,41 @@ func TestListLogs_CursorPagination(t *testing.T) {
 func TestListTreeLogs_AggregatesSubtree(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
-			// root + two descendants all share root_id = "root".
-			appendLog(t, b.db, "root", "root", model.LogInfo, model.EventChildrenSpawned, 1000)
-			appendLog(t, b.db, "child-a", "root", model.LogInfo, model.EventStepSucceeded, 2000)
-			appendLog(t, b.db, "child-b", "root", model.LogInfo, model.EventStepSucceeded, 3000)
-			// An unrelated tree.
-			appendLog(t, b.db, "other", "other", model.LogInfo, model.EventStepStarted, 2500)
+			// Build a real parent chain so the recursive CTE has edges to walk:
+			//   root → child-a → grandchild
+			//   root → child-b
+			// plus an unrelated tree (other) that must never leak in.
+			spawnInstance(t, b.db, "root", "")
+			spawnInstance(t, b.db, "child-a", "root")
+			spawnInstance(t, b.db, "child-b", "root")
+			spawnInstance(t, b.db, "grandchild", "child-a")
+			spawnInstance(t, b.db, "other", "")
 
-			tree, err := b.db.ListTreeLogs("root", dbpkg.LogQuery{})
+			appendLog(t, b.db, "root", model.LogInfo, model.EventChildrenSpawned, 1000)
+			appendLog(t, b.db, "child-a", model.LogInfo, model.EventChildrenSpawned, 2000)
+			appendLog(t, b.db, "child-b", model.LogInfo, model.EventStepSucceeded, 3000)
+			appendLog(t, b.db, "grandchild", model.LogInfo, model.EventStepSucceeded, 4000)
+			appendLog(t, b.db, "other", model.LogInfo, model.EventStepStarted, 2500)
+
+			// Subtree from the root: root + a + b + grandchild = 4 (not "other").
+			fromRoot, err := b.db.ListTreeLogs("root", dbpkg.LogQuery{})
 			if err != nil {
-				t.Fatalf("ListTreeLogs: %v", err)
+				t.Fatalf("ListTreeLogs(root): %v", err)
 			}
-			if len(tree) != 3 {
-				t.Fatalf("tree: want 3 entries, got %d", len(tree))
+			if len(fromRoot) != 4 {
+				t.Fatalf("subtree(root): want 4 entries, got %d", len(fromRoot))
 			}
+
+			// Subtree from a mid-tree node: child-a + grandchild = 2. Works from any
+			// node, not just the root — the win over the old root_id column.
+			fromChildA, err := b.db.ListTreeLogs("child-a", dbpkg.LogQuery{})
+			if err != nil {
+				t.Fatalf("ListTreeLogs(child-a): %v", err)
+			}
+			if len(fromChildA) != 2 {
+				t.Fatalf("subtree(child-a): want 2 entries, got %d", len(fromChildA))
+			}
+
 			// Per-instance view stays scoped to one instance.
 			single, err := b.db.ListLogs("child-a", dbpkg.LogQuery{})
 			if err != nil {
@@ -146,9 +183,9 @@ func TestListTreeLogs_AggregatesSubtree(t *testing.T) {
 func TestPruneLogs_DeletesOlderThanCutoff(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
-			appendLog(t, b.db, "inst-1", "inst-1", model.LogInfo, model.EventStepStarted, 1000)
-			appendLog(t, b.db, "inst-1", "inst-1", model.LogInfo, model.EventStepSucceeded, 2000)
-			appendLog(t, b.db, "inst-1", "inst-1", model.LogInfo, model.EventInstanceDone, 3000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepStarted, 1000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepSucceeded, 2000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventInstanceDone, 3000)
 
 			n, err := b.db.PruneLogs(2500)
 			if err != nil {

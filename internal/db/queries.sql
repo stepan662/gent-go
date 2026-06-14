@@ -174,16 +174,16 @@ WHERE pd.parent_version = pc.version
 
 -- name: InsertLog :exec
 INSERT INTO process_logs
-    (id, instance_id, root_id, level, event, step_id, message, code, detail, created_at)
+    (id, instance_id, level, event, step_id, message, code, detail, created_at)
 VALUES
-    (sqlc.arg(id), sqlc.arg(instance_id), sqlc.arg(root_id), sqlc.arg(level), sqlc.arg(event),
+    (sqlc.arg(id), sqlc.arg(instance_id), sqlc.arg(level), sqlc.arg(event),
      sqlc.arg(step_id), sqlc.arg(message), sqlc.arg(code), sqlc.arg(detail), sqlc.arg(created_at));
 
 -- name: ListLogs :many
 -- Empty level lists every level. since=0 lists from the start. The (after_ts,
 -- after_id) pair is a keyset cursor: pass (0, '') for the first page. The tuple
 -- comparison is spelled out (not row-value syntax) so it runs on SQLite too.
-SELECT id, instance_id, root_id, level, event, step_id, message, code, detail, created_at
+SELECT id, instance_id, level, event, step_id, message, code, detail, created_at
 FROM process_logs
 WHERE instance_id = sqlc.arg(instance_id)
   AND (sqlc.arg(level) = '' OR level = sqlc.arg(level))
@@ -193,17 +193,9 @@ WHERE instance_id = sqlc.arg(instance_id)
 ORDER BY created_at, id
 LIMIT sqlc.arg(lim);
 
--- name: ListLogsByRoot :many
--- Tree view: all logs for a process subtree, keyed on the root instance id.
-SELECT id, instance_id, root_id, level, event, step_id, message, code, detail, created_at
-FROM process_logs
-WHERE root_id = sqlc.arg(root_id)
-  AND (sqlc.arg(level) = '' OR level = sqlc.arg(level))
-  AND created_at >= sqlc.arg(since)
-  AND (created_at > sqlc.arg(after_ts)
-       OR (created_at = sqlc.arg(after_ts) AND id > sqlc.arg(after_id)))
-ORDER BY created_at, id
-LIMIT sqlc.arg(lim);
+-- Subtree log view ("logs for X and all its descendants") is hand-written in
+-- db_logs.go (ListTreeLogs): a WITH RECURSIVE walk over process_instances.parent_id
+-- that sqlc's SQLite grammar can't parse. Both runtime drivers support it.
 
 -- name: DeleteLogsBefore :execrows
 DELETE FROM process_logs WHERE created_at < sqlc.arg(before);

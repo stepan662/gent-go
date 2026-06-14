@@ -59,9 +59,13 @@ func (q *Queries) DeleteDependencies(ctx context.Context, arg DeleteDependencies
 }
 
 const deleteLogsBefore = `-- name: DeleteLogsBefore :execrows
+
 DELETE FROM process_logs WHERE created_at < ?1
 `
 
+// Subtree log view ("logs for X and all its descendants") is hand-written in
+// db_logs.go (ListTreeLogs): a WITH RECURSIVE walk over process_instances.parent_id
+// that sqlc's SQLite grammar can't parse. Both runtime drivers support it.
 func (q *Queries) DeleteLogsBefore(ctx context.Context, before int64) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteLogsBefore, before)
 	if err != nil {
@@ -466,16 +470,15 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 
 const insertLog = `-- name: InsertLog :exec
 INSERT INTO process_logs
-    (id, instance_id, root_id, level, event, step_id, message, code, detail, created_at)
+    (id, instance_id, level, event, step_id, message, code, detail, created_at)
 VALUES
-    (?1, ?2, ?3, ?4, ?5,
-     ?6, ?7, ?8, ?9, ?10)
+    (?1, ?2, ?3, ?4,
+     ?5, ?6, ?7, ?8, ?9)
 `
 
 type InsertLogParams struct {
 	ID         string
 	InstanceID string
-	RootID     string
 	Level      string
 	Event      string
 	StepID     string
@@ -489,7 +492,6 @@ func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
 	_, err := q.db.ExecContext(ctx, insertLog,
 		arg.ID,
 		arg.InstanceID,
-		arg.RootID,
 		arg.Level,
 		arg.Event,
 		arg.StepID,
@@ -633,7 +635,7 @@ func (q *Queries) ListInstances(ctx context.Context, status interface{}) ([]Proc
 }
 
 const listLogs = `-- name: ListLogs :many
-SELECT id, instance_id, root_id, level, event, step_id, message, code, detail, created_at
+SELECT id, instance_id, level, event, step_id, message, code, detail, created_at
 FROM process_logs
 WHERE instance_id = ?1
   AND (?2 = '' OR level = ?2)
@@ -675,70 +677,6 @@ func (q *Queries) ListLogs(ctx context.Context, arg ListLogsParams) ([]ProcessLo
 		if err := rows.Scan(
 			&i.ID,
 			&i.InstanceID,
-			&i.RootID,
-			&i.Level,
-			&i.Event,
-			&i.StepID,
-			&i.Message,
-			&i.Code,
-			&i.Detail,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLogsByRoot = `-- name: ListLogsByRoot :many
-SELECT id, instance_id, root_id, level, event, step_id, message, code, detail, created_at
-FROM process_logs
-WHERE root_id = ?1
-  AND (?2 = '' OR level = ?2)
-  AND created_at >= ?3
-  AND (created_at > ?4
-       OR (created_at = ?4 AND id > ?5))
-ORDER BY created_at, id
-LIMIT ?6
-`
-
-type ListLogsByRootParams struct {
-	RootID  string
-	Level   interface{}
-	Since   int64
-	AfterTs int64
-	AfterID string
-	Lim     int64
-}
-
-// Tree view: all logs for a process subtree, keyed on the root instance id.
-func (q *Queries) ListLogsByRoot(ctx context.Context, arg ListLogsByRootParams) ([]ProcessLog, error) {
-	rows, err := q.db.QueryContext(ctx, listLogsByRoot,
-		arg.RootID,
-		arg.Level,
-		arg.Since,
-		arg.AfterTs,
-		arg.AfterID,
-		arg.Lim,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProcessLog
-	for rows.Next() {
-		var i ProcessLog
-		if err := rows.Scan(
-			&i.ID,
-			&i.InstanceID,
-			&i.RootID,
 			&i.Level,
 			&i.Event,
 			&i.StepID,

@@ -55,7 +55,6 @@ type ProcessInstance struct {
 type ProcessLog struct {
 	ID         string
 	InstanceID string
-	RootID     string
 	Level      string
 	Event      string
 	StepID     string

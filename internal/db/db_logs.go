@@ -62,7 +62,6 @@ func (db *DB) AppendLog(entry *model.LogEntry) error {
 	return db.q.InsertLog(context.Background(), dbgen.InsertLogParams{
 		ID:         id,
 		InstanceID: entry.InstanceID,
-		RootID:     entry.RootID,
 		Level:      string(entry.Level),
 		Event:      entry.Event,
 		StepID:     entry.StepID,
@@ -90,21 +89,51 @@ func (db *DB) ListLogs(instanceID string, opts LogQuery) ([]*model.LogEntry, err
 	return toLogEntries(rows)
 }
 
-// ListTreeLogs returns every log for a whole process subtree, keyed on the root
-// instance id, oldest-first.
+// treeLogsQuery returns the logs for the subtree rooted at any instance, oldest
+// first. A recursive CTE walks process_instances.parent_id from the given id down
+// (the base row covers the node itself), then joins its logs — no denormalised
+// root_id and no closure table, so it adds zero write cost. The walk rides the
+// idx_instances_parent_step index. Hand-written (not sqlc) because sqlc's SQLite
+// grammar can't parse WITH RECURSIVE; both runtime drivers support it, and db.exec
+// rewrites ? → $N on Postgres. The cursor/level predicates mirror ListLogs.
+const treeLogsQuery = `
+WITH RECURSIVE subtree(id) AS (
+    SELECT id FROM process_instances WHERE id = ?
+    UNION ALL
+    SELECT pi.id FROM process_instances pi JOIN subtree s ON pi.parent_id = s.id
+)
+SELECT pl.id, pl.instance_id, pl.level, pl.event, pl.step_id, pl.message, pl.code, pl.detail, pl.created_at
+FROM process_logs pl
+WHERE pl.instance_id IN (SELECT id FROM subtree)
+  AND (? = '' OR pl.level = ?)
+  AND pl.created_at >= ?
+  AND (pl.created_at > ? OR (pl.created_at = ? AND pl.id > ?))
+ORDER BY pl.created_at, pl.id
+LIMIT ?`
+
+// ListTreeLogs returns every log for the subtree rooted at the given instance
+// (the node itself and all descendants), oldest-first. rootID may be any node.
 func (db *DB) ListTreeLogs(rootID string, opts LogQuery) ([]*model.LogEntry, error) {
-	rows, err := db.q.ListLogsByRoot(context.Background(), dbgen.ListLogsByRootParams{
-		RootID:  rootID,
-		Level:   opts.Level,
-		Since:   opts.Since,
-		AfterTs: opts.AfterTs,
-		AfterID: opts.AfterID,
-		Lim:     opts.limit(),
-	})
+	rows, err := db.exec.QueryContext(context.Background(), treeLogsQuery,
+		rootID, opts.Level, opts.Level, opts.Since,
+		opts.AfterTs, opts.AfterTs, opts.AfterID, opts.limit())
 	if err != nil {
 		return nil, err
 	}
-	return toLogEntries(rows)
+	defer rows.Close()
+	var logs []dbgen.ProcessLog
+	for rows.Next() {
+		var r dbgen.ProcessLog
+		if err := rows.Scan(&r.ID, &r.InstanceID, &r.Level, &r.Event,
+			&r.StepID, &r.Message, &r.Code, &r.Detail, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		logs = append(logs, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return toLogEntries(logs)
 }
 
 // PruneLogs deletes every log older than the given cutoff (unix millis) and
@@ -129,7 +158,6 @@ func toLogEntry(r dbgen.ProcessLog) (*model.LogEntry, error) {
 	e := &model.LogEntry{
 		ID:         r.ID,
 		InstanceID: r.InstanceID,
-		RootID:     r.RootID,
 		Level:      model.LogLevel(r.Level),
 		Event:      r.Event,
 		StepID:     r.StepID,
