@@ -23,7 +23,7 @@ var (
 
 func TestMain(m *testing.M) {
 	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
-		pg, err := dbpkg.OpenPostgres(dsn)
+		pg, err := dbpkg.OpenPostgres(dsn, 0)
 		if err != nil {
 			log.Fatalf("open postgres for tests: %v", err)
 		}

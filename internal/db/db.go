@@ -56,13 +56,20 @@ func OpenSQLite(path string) (*DB, error) {
 
 // OpenPostgres opens a PostgreSQL connection and runs migrations.
 // DSN format: postgres://user:password@host:port/database?sslmode=disable
-func OpenPostgres(dsn string) (*DB, error) {
+//
+// maxOpenConns caps the connection pool; idle connections are kept at half that.
+// A fleet of workers must be sized so workers*maxOpenConns < the server's
+// max_connections. Values <= 0 fall back to the default of 50.
+func OpenPostgres(dsn string, maxOpenConns int) (*DB, error) {
 	sqldb, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	sqldb.SetMaxOpenConns(50)
-	sqldb.SetMaxIdleConns(25)
+	if maxOpenConns <= 0 {
+		maxOpenConns = 50
+	}
+	sqldb.SetMaxOpenConns(maxOpenConns)
+	sqldb.SetMaxIdleConns(max(maxOpenConns/2, 1))
 	return open(sqldb, "postgres")
 }
 

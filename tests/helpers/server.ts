@@ -35,7 +35,11 @@ function spawnProc(
     ...(process.env.GENT_LEASE_DURATION ? ["--lease-duration", process.env.GENT_LEASE_DURATION] : []),
     ...(process.env.GENT_LEASE_RENEW_INTERVAL ? ["--lease-renew-interval", process.env.GENT_LEASE_RENEW_INTERVAL] : []),
   ];
-  return spawn(bin, [...dbArgs, "--http", `:${port}`, "--log", "error", ...pollArgs, ...concArgs, ...retryArgs, ...leaseArgs], {
+  // Optional pool sizing via env (used by the stress test to keep a fleet within max_connections).
+  const poolArgs = process.env.GENT_PG_MAX_OPEN_CONNS
+    ? ["--pg-max-open-conns", process.env.GENT_PG_MAX_OPEN_CONNS]
+    : [];
+  return spawn(bin, [...dbArgs, "--http", `:${port}`, "--log", "error", ...pollArgs, ...concArgs, ...retryArgs, ...leaseArgs, ...poolArgs], {
     stdio: "ignore",
   });
 }

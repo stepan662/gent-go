@@ -30,6 +30,18 @@ export default defineConfig({
         },
       },
       ...pgProject,
+      {
+        // Stress tests spawn their own worker fleet, so no shared globalSetup
+        // server. Runs the SQLite backend always and Postgres when DSN is set.
+        test: {
+          name: "stress",
+          include: ["stress/**/*_test.ts"],
+          testTimeout: 120_000,
+          env: process.env.POSTGRES_DSN
+            ? { POSTGRES_DSN: process.env.POSTGRES_DSN }
+            : {},
+        },
+      },
     ],
   },
 });

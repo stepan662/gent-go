@@ -20,6 +20,7 @@ import (
 func main() {
 	dbPath := flag.String("db", "gent.db", "SQLite database file path")
 	pgDSN := flag.String("pg", "", "PostgreSQL DSN (e.g. postgres://user:pass@host/db). When set, --db is ignored.")
+	pgMaxOpenConns := flag.Int("pg-max-open-conns", 50, "PostgreSQL connection pool size. Size a worker fleet so workers*pg-max-open-conns stays under the server's max_connections. Ignored for SQLite.")
 	httpAddr := flag.String("http", ":8448", "HTTP listen address (empty to disable)")
 	tcpAddr := flag.String("tcp", "", "TCP listen address, e.g. 127.0.0.1:9090 (empty to disable)")
 	udsPath := flag.String("uds", "", "Unix socket path, e.g. /tmp/gent.sock (empty to disable)")
@@ -43,7 +44,7 @@ func main() {
 	var database *db.DB
 	var dbErr error
 	if *pgDSN != "" {
-		database, dbErr = db.OpenPostgres(*pgDSN)
+		database, dbErr = db.OpenPostgres(*pgDSN, *pgMaxOpenConns)
 		log.Info("database opened", "driver", "postgres")
 	} else {
 		database, dbErr = db.OpenSQLite(*dbPath)
