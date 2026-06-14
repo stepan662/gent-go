@@ -67,7 +67,7 @@ func testBackends(t *testing.T) []backend {
 
 	if sharedPgDB != nil {
 		ctx := context.Background()
-		for _, table := range []string{"process_instances", "process_channels", "process_definitions"} {
+		for _, table := range []string{"process_logs", "process_instances", "process_channels", "process_definitions"} {
 			if _, err := sharedPgRaw.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 				t.Fatalf("reset %s: %v", table, err)
 			}

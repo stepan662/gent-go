@@ -31,6 +31,9 @@ func main() {
 	leaseRenewInterval := flag.Duration("lease-renew-interval", 3*time.Second, "How often a worker re-stamps its leases; must be comfortably shorter than --lease-duration")
 	pprofAddr := flag.String("pprof", "", "pprof listen address, e.g. localhost:6060 (empty to disable)")
 	logLevel := flag.String("log", "debug", "Log level: debug, info, warn, error")
+	logPayloads := flag.Bool("log-payloads", true, "Capture truncated request/response snippets in per-instance audit logs")
+	logPayloadBytes := flag.Int("log-payload-bytes", 2048, "Max bytes per captured request/response snippet in audit logs")
+	logRetention := flag.Duration("log-retention", 168*time.Hour, "Delete per-instance audit logs older than this; 0 = keep forever")
 	flag.Parse()
 
 	log := newLogger(*logLevel)
@@ -56,7 +59,12 @@ func main() {
 	}
 	defer database.Close()
 
-	eng := engine.New(database, time.Duration(*pollMs)*time.Millisecond, *maxConcurrent, *immediateRetries, *leaseDuration, *leaseRenewInterval, log)
+	logCfg := engine.LogConfig{
+		Payloads:     *logPayloads,
+		PayloadBytes: *logPayloadBytes,
+		Retention:    *logRetention,
+	}
+	eng := engine.New(database, time.Duration(*pollMs)*time.Millisecond, *maxConcurrent, *immediateRetries, *leaseDuration, *leaseRenewInterval, logCfg, log)
 	handlers := api.NewHandlers(database, eng)
 	srv := api.NewServer(handlers, log)
 

@@ -284,6 +284,44 @@ var registry = func() []actionDef {
 			},
 		},
 		{
+			Name:    "list_instance_logs",
+			Method:  http.MethodGet,
+			Path:    "/instances/{id}/logs",
+			Summary: "Get the execution audit trail for a process instance (oldest first)",
+			Tags:    []string{"Instances"},
+			PathQuery: struct {
+				ID      string `path:"id" format:"uuid"`
+				Level   string `query:"level" enum:"debug,info,warn,error" description:"Filter by log level"`
+				Since   int64  `query:"since" description:"Only logs at/after this unix-millis timestamp"`
+				Limit   int    `query:"limit" description:"Page size (default 200)"`
+				AfterTs int64  `query:"after_ts" description:"Keyset cursor: created_at of the previous page's last row"`
+				AfterID string `query:"after_id" description:"Keyset cursor: id of the previous page's last row"`
+				Tree    bool   `query:"tree" description:"Include the whole process subtree, keyed on the root instance"`
+			}{},
+			Resp: []LogEntryResp{{
+				Time: "2026-06-14T12:00:00Z", Level: model.LogInfo, Event: model.EventStepSucceeded, Step: "charge",
+			}},
+			fromHTTP: func(r *http.Request) (Envelope, error) {
+				q := r.URL.Query()
+				since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
+				limit, _ := strconv.Atoi(q.Get("limit"))
+				afterTs, _ := strconv.ParseInt(q.Get("after_ts"), 10, 64)
+				tree, _ := strconv.ParseBool(q.Get("tree"))
+				b, _ := json.Marshal(ListLogsReq{
+					Level:   q.Get("level"),
+					Since:   since,
+					Limit:   limit,
+					AfterTs: afterTs,
+					AfterID: q.Get("after_id"),
+					Tree:    tree,
+				})
+				return Envelope{Action: "list_instance_logs", ID: r.PathValue("id"), Payload: b}, nil
+			},
+			handle: func(h *Handlers, env Envelope) Reply {
+				return h.listInstanceLogs(env.ID, env.Payload)
+			},
+		},
+		{
 			Name:    "cancel_instance",
 			Method:  http.MethodPost,
 			Path:    "/instances/{id}/cancel",
@@ -328,7 +366,7 @@ var registry = func() []actionDef {
 			Tags:    []string{"Debug"},
 			Req:     TickReq{AdvanceMs: 12_000},
 			Resp:    map[string]any{"count": 0},
-			handle: func(h *Handlers, env Envelope) Reply { return h.tick(env.Payload) },
+			handle:  func(h *Handlers, env Envelope) Reply { return h.tick(env.Payload) },
 		},
 	}
 }()

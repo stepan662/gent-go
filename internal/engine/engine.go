@@ -21,7 +21,18 @@ import (
 const (
 	defaultLeaseDuration      = 10 * time.Second
 	defaultLeaseRenewInterval = 3 * time.Second
+	defaultPayloadBytes       = 2048
 )
+
+// LogConfig controls how much the engine persists to each instance's audit log
+// and for how long.
+type LogConfig struct {
+	Payloads     bool          // capture truncated request/response snippets on step events
+	PayloadBytes int           // max bytes per captured snippet (<=0 → defaultPayloadBytes)
+	Retention    time.Duration // prune audit logs older than this; 0 = keep forever
+}
+
+const logPruneInterval = time.Minute
 
 // Engine is the main orchestration loop. It polls the database for pending
 // instances and advances each one step at a time.
@@ -31,6 +42,7 @@ type Engine struct {
 	immediateRetries   bool
 	leaseDuration      time.Duration // how long a claimed instance is leased to this worker
 	leaseRenewInterval time.Duration // how often the renewer re-stamps this worker's leases
+	logCfg             LogConfig     // audit-log persistence settings
 	log                *slog.Logger
 	sem                chan struct{}
 	workerID           string
@@ -44,7 +56,7 @@ type Engine struct {
 // lease ownership and renewal cadence; pass 0 for either to use the defaults
 // (10s / 3s). The renew interval must be comfortably shorter than the lease so the
 // renewer can re-stamp leases before they expire.
-func New(database *db.DB, pollEvery time.Duration, maxConcurrent int, immediateRetries bool, leaseDuration, leaseRenewInterval time.Duration, log *slog.Logger) *Engine {
+func New(database *db.DB, pollEvery time.Duration, maxConcurrent int, immediateRetries bool, leaseDuration, leaseRenewInterval time.Duration, logCfg LogConfig, log *slog.Logger) *Engine {
 	hostname, _ := os.Hostname()
 	workerID := fmt.Sprintf("%s-%d", hostname, os.Getpid())
 	if leaseDuration <= 0 {
@@ -59,6 +71,7 @@ func New(database *db.DB, pollEvery time.Duration, maxConcurrent int, immediateR
 		immediateRetries:   immediateRetries,
 		leaseDuration:      leaseDuration,
 		leaseRenewInterval: leaseRenewInterval,
+		logCfg:             logCfg,
 		log:                log,
 		sem:                make(chan struct{}, maxConcurrent),
 		workerID:           workerID,
@@ -78,6 +91,10 @@ func (e *Engine) Run(ctx context.Context) {
 	e.log.Info("engine started", "poll_interval", e.pollEvery, "max_concurrent", cap(e.sem), "worker_id", e.workerID)
 
 	go e.leaseRenewer(ctx)
+
+	if e.logCfg.Retention > 0 {
+		go e.logPruner(ctx)
+	}
 
 	if e.pollEvery == 0 {
 		e.log.Info("engine in manual tick mode")
@@ -204,6 +221,36 @@ func (e *Engine) leaseRenewer(ctx context.Context) {
 	}
 }
 
+// logPruner periodically deletes audit-log rows older than the retention window.
+// Only started when retention > 0. The cutoff uses the DB clock so a clock shift
+// (e.g. via /tick in tests) expires logs without a real wait.
+func (e *Engine) logPruner(ctx context.Context) {
+	ticker := time.NewTicker(logPruneInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.pruneLogs()
+		}
+	}
+}
+
+// pruneLogs deletes audit logs past the retention window. No-op when retention
+// is disabled. Best-effort: a failure is logged and otherwise ignored.
+func (e *Engine) pruneLogs() {
+	if e.logCfg.Retention <= 0 {
+		return
+	}
+	cutoff := db.Now().Add(-e.logCfg.Retention).UnixMilli()
+	if n, err := e.db.PruneLogs(cutoff); err != nil {
+		e.log.Error("prune logs", "err", err)
+	} else if n > 0 {
+		e.log.Debug("pruned audit logs", "count", n, "older_than", e.logCfg.Retention)
+	}
+}
+
 // ManualTick reports whether the engine runs in manual-tick mode (pollEvery == 0),
 // i.e. it does not auto-advance and must be driven by explicit Tick calls. The
 // /tick endpoint is only meaningful in this mode; when the continuous pump is
@@ -215,6 +262,7 @@ func (e *Engine) ManualTick() bool { return e.pollEvery == 0 }
 // instance is never advanced twice concurrently. Returns the number of instances
 // that were claimed and processed.
 func (e *Engine) Tick(ctx context.Context) (int, error) {
+	e.pruneLogs()
 	instances, err := e.db.ClaimInstances(e.workerID, e.leaseDuration, cap(e.sem))
 	if err != nil {
 		e.log.Error("claim instances", "err", err)
@@ -297,6 +345,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 				return e.failInstance(inst, err.Error())
 			}
 			e.log.Info("instance completed", "id", inst.ID, "process", inst.ProcessName)
+			e.audit(inst, model.LogInfo, model.EventInstanceDone, "", "", "", nil)
 			return e.saveAndNotify(inst)
 		}
 
@@ -338,6 +387,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 				return e.failInstance(inst, err.Error())
 			}
 			e.log.Info("instance completed", "id", inst.ID, "step", step.ID)
+			e.audit(inst, model.LogInfo, model.EventInstanceDone, step.ID, "", "", nil)
 			return e.saveAndNotify(inst)
 		}
 
@@ -355,6 +405,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		inst.RetryCount = 0
 		inst.NextRetryAt = nil
 		e.log.Info("step completed", "id", inst.ID, "step", step.ID)
+		e.audit(inst, model.LogInfo, model.EventStepCompleted, step.ID, "", "", map[string]any{"goto": gotoID})
 
 		// A step with a call has just executed a side effect — checkpoint and yield.
 		// A call-less routing step had none, so continue in-memory to the next step
@@ -391,6 +442,11 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	}
 
 	e.log.Debug("executing step", "id", inst.ID, "step", step.ID, "call_type", step.Call.Type)
+	startDetail := map[string]any{"call_type": string(step.Call.Type)}
+	if req := e.snippet(data); req != "" {
+		startDetail["request"] = req
+	}
+	e.audit(inst, model.LogDebug, model.EventStepStarted, step.ID, "", "", startDetail)
 
 	resolvedHeaders, err := e.resolveHeaders(inst, step.Call)
 	if err != nil {
@@ -439,6 +495,12 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		inst.ContextData["output_order"] = append(order, step.ID)
 	}
 	inst.RetryCount = 0
+
+	var okDetail map[string]any
+	if body := e.snippet(resp.Body); body != "" {
+		okDetail = map[string]any{"response": body}
+	}
+	e.audit(inst, model.LogInfo, model.EventStepSucceeded, step.ID, "", "", okDetail)
 
 	return resp.Body, false, nil
 }
@@ -521,6 +583,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 			// Retries remain but we're cancelling — skip the retry and cancel cleanly.
 			e.log.Info("step failed during cancellation, skipping retry",
 				"id", inst.ID, "step", step.ID, "code", errCode)
+			e.audit(inst, model.LogInfo, model.EventCancelSkipRetry, step.ID, errMsg, errCode, nil)
 			return e.cancelInstance(inst)
 		}
 		// No retries available — error takes precedence over cancellation.
@@ -539,6 +602,11 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 			"next_retry", next.Format(time.RFC3339),
 			"code", errCode, "err", errMsg,
 		)
+		e.audit(inst, model.LogWarn, model.EventRetryScheduled, step.ID, errMsg, errCode, map[string]any{
+			"attempt":    inst.RetryCount,
+			"max":        matched.Retries,
+			"next_retry": next.Format(time.RFC3339),
+		})
 		return e.db.UpdateInstance(inst)
 	}
 
@@ -553,6 +621,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 			inst.Status = model.StatusCompleted
 			inst.NextRetryAt = nil
 			e.log.Info("instance completed via error route", "id", inst.ID, "step", step.ID, "code", errCode)
+			e.audit(inst, model.LogInfo, model.EventErrorCompleted, step.ID, errMsg, errCode, nil)
 			return e.saveAndNotify(inst)
 		}
 		newQueue, err := e.queueFromStep(inst, matched.Goto)
@@ -564,6 +633,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 		inst.NextRetryAt = nil
 		e.log.Info("routing to error handler",
 			"id", inst.ID, "step", step.ID, "goto", matched.Goto, "code", errCode)
+		e.audit(inst, model.LogInfo, model.EventErrorRoute, step.ID, errMsg, errCode, map[string]any{"goto": matched.Goto})
 		return e.db.UpdateInstance(inst)
 	}
 
@@ -585,12 +655,56 @@ func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (m
 	return result, nil
 }
 
+// audit appends one event to the instance's persistent execution log. It is
+// best-effort: a write failure is logged and swallowed so audit logging can
+// never abort an advance. The structured slog output at each call site is left
+// intact for operational logging; this is the durable, queryable trail.
+func (e *Engine) audit(inst *model.ProcessInstance, level model.LogLevel, event, step, msg, code string, detail map[string]any) {
+	rootID := inst.ID
+	if len(inst.CallStack) > 0 {
+		rootID = inst.CallStack[0]
+	}
+	if err := e.db.AppendLog(&model.LogEntry{
+		InstanceID: inst.ID,
+		RootID:     rootID,
+		Level:      level,
+		Event:      event,
+		StepID:     step,
+		Message:    msg,
+		Code:       code,
+		Detail:     detail,
+	}); err != nil {
+		e.log.Error("append audit log", "id", inst.ID, "event", event, "err", err)
+	}
+}
+
+// snippet renders v as JSON capped to the configured payload size for inclusion
+// in an audit detail. Returns "" when payload capture is disabled or v is empty.
+func (e *Engine) snippet(v any) string {
+	if !e.logCfg.Payloads || v == nil {
+		return ""
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	max := e.logCfg.PayloadBytes
+	if max <= 0 {
+		max = defaultPayloadBytes
+	}
+	if len(b) > max {
+		return string(b[:max]) + "…(truncated)"
+	}
+	return string(b)
+}
+
 func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error {
 	inst.Status = model.StatusFailed
 	inst.WaitState = model.WaitStateNone
 	inst.Error = reason
 	inst.NextRetryAt = nil
 	e.log.Error("instance failed", "id", inst.ID, "reason", reason)
+	e.audit(inst, model.LogError, model.EventInstanceFailed, "", reason, "", nil)
 	return e.saveAndNotify(inst)
 }
 
@@ -599,6 +713,7 @@ func (e *Engine) cancelInstance(inst *model.ProcessInstance) error {
 	inst.WaitState = model.WaitStateNone
 	inst.NextRetryAt = nil
 	e.log.Info("instance cancelled", "id", inst.ID)
+	e.audit(inst, model.LogInfo, model.EventCancelled, "", "", "", nil)
 	return e.saveAndNotify(inst)
 }
 
@@ -610,6 +725,7 @@ func (e *Engine) settleFailing(inst *model.ProcessInstance) error {
 	inst.WaitState = model.WaitStateNone
 	inst.NextRetryAt = nil
 	e.log.Info("instance settled as failed", "id", inst.ID, "reason", inst.Error)
+	e.audit(inst, model.LogInfo, model.EventInstanceSettled, "", inst.Error, "", nil)
 	return e.saveAndNotify(inst)
 }
 
@@ -645,6 +761,7 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 		inst.WaitState = model.WaitStateNone
 		output := inst.ContextData["outputs"].(map[string]any)[step.ID]
 		e.log.Info("parent collected child outputs", "id", inst.ID, "step", step.ID)
+		e.audit(inst, model.LogInfo, model.EventChildrenCollect, step.ID, "", "", nil)
 		return output, false, nil
 	}
 
@@ -699,6 +816,7 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 	}
 
 	e.log.Info("parent waiting for children", "id", inst.ID, "step", step.ID, "children", len(children))
+	e.audit(inst, model.LogInfo, model.EventChildrenSpawned, step.ID, "", "", map[string]any{"children": len(children)})
 	return nil, true, nil
 }
 
@@ -857,7 +975,6 @@ func (e *Engine) computeOutput(inst *model.ProcessInstance) error {
 	inst.ContextData["output"] = result
 	return nil
 }
-
 
 // resolveHeaders evaluates each header value expression against the instance
 // context and coerces the result to a string. Returns nil for calls without headers.

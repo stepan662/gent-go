@@ -50,7 +50,7 @@ type StartInstanceReq struct {
 
 type PutDefinitionsBatchReq struct {
 	Definitions       []model.ProcessDefinition `json:"definitions"`
-	Channel           string                    `json:"channel"`            // default "latest"
+	Channel           string                    `json:"channel"` // default "latest"
 	AutoUpdateParents bool                      `json:"auto_update_parents"`
 }
 
@@ -112,6 +112,15 @@ type RetryInstanceReq struct {
 	Force bool `json:"force"` // override only_once retry protection
 }
 
+type ListLogsReq struct {
+	Level   string `json:"level"`    // optional filter: debug, info, warn, error
+	Since   int64  `json:"since"`    // optional: only logs at/after this unix-millis timestamp
+	Limit   int    `json:"limit"`    // page size (default 200)
+	AfterTs int64  `json:"after_ts"` // keyset cursor: created_at of the previous page's last row
+	AfterID string `json:"after_id"` // keyset cursor: id of the previous page's last row
+	Tree    bool   `json:"tree"`     // include the whole process subtree, keyed on the root instance
+}
+
 type TickReq struct {
 	AdvanceMs int64 `json:"advance_ms"` // shift the server clock forward (milliseconds) before ticking (testing only)
 }
@@ -128,16 +137,26 @@ type BatchApplyResult struct {
 }
 
 type InstanceStatusResp struct {
-	ID         string           `json:"id"`
-	Process    string           `json:"process"`
-	Version    int              `json:"version"`
-	Status     model.Status     `json:"status"`
-	WaitState  model.WaitState  `json:"wait_state,omitempty"`
-	RetryCount int              `json:"retry_count"`
-	Context    map[string]any   `json:"context"`
-	Error      string           `json:"error,omitempty"`
-	CreatedAt  string           `json:"created_at"`
-	UpdatedAt  string           `json:"updated_at"`
+	ID         string          `json:"id"`
+	Process    string          `json:"process"`
+	Version    int             `json:"version"`
+	Status     model.Status    `json:"status"`
+	WaitState  model.WaitState `json:"wait_state,omitempty"`
+	RetryCount int             `json:"retry_count"`
+	Context    map[string]any  `json:"context"`
+	Error      string          `json:"error,omitempty"`
+	CreatedAt  string          `json:"created_at"`
+	UpdatedAt  string          `json:"updated_at"`
+}
+
+type LogEntryResp struct {
+	Time    string         `json:"time"`
+	Level   model.LogLevel `json:"level"`
+	Event   string         `json:"event"`
+	Step    string         `json:"step,omitempty"`
+	Message string         `json:"message,omitempty"`
+	Code    string         `json:"code,omitempty"`
+	Detail  map[string]any `json:"detail,omitempty"`
 }
 
 // --- Envelope ---
@@ -289,6 +308,48 @@ func (h *Handlers) getInstance(id string) Reply {
 		return errReply(err)
 	}
 	return okReply(instanceToResp(inst))
+}
+
+func (h *Handlers) listInstanceLogs(id string, raw json.RawMessage) Reply {
+	if id == "" {
+		return errReply(fmt.Errorf("id is required"))
+	}
+	var req ListLogsReq
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &req)
+	}
+	opts := db.LogQuery{
+		Level:   req.Level,
+		Since:   req.Since,
+		AfterTs: req.AfterTs,
+		AfterID: req.AfterID,
+		Limit:   req.Limit,
+	}
+	var (
+		logs []*model.LogEntry
+		err  error
+	)
+	if req.Tree {
+		logs, err = h.db.ListTreeLogs(id, opts)
+	} else {
+		logs, err = h.db.ListLogs(id, opts)
+	}
+	if err != nil {
+		return errReply(err)
+	}
+	resp := make([]LogEntryResp, len(logs))
+	for i, l := range logs {
+		resp[i] = LogEntryResp{
+			Time:    l.CreatedAt.Format(time.RFC3339Nano),
+			Level:   l.Level,
+			Event:   l.Event,
+			Step:    l.StepID,
+			Message: l.Message,
+			Code:    l.Code,
+			Detail:  l.Detail,
+		}
+	}
+	return okReply(resp)
 }
 
 func (h *Handlers) cancelInstance(id string) Reply {

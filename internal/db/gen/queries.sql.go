@@ -58,6 +58,18 @@ func (q *Queries) DeleteDependencies(ctx context.Context, arg DeleteDependencies
 	return err
 }
 
+const deleteLogsBefore = `-- name: DeleteLogsBefore :execrows
+DELETE FROM process_logs WHERE created_at < ?1
+`
+
+func (q *Queries) DeleteLogsBefore(ctx context.Context, before int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteLogsBefore, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const failAncestors = `-- name: FailAncestors :exec
 UPDATE process_instances
 SET status = 'failing', error = ?1, updated_at = ?2
@@ -452,6 +464,43 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 	return err
 }
 
+const insertLog = `-- name: InsertLog :exec
+INSERT INTO process_logs
+    (id, instance_id, root_id, level, event, step_id, message, code, detail, created_at)
+VALUES
+    (?1, ?2, ?3, ?4, ?5,
+     ?6, ?7, ?8, ?9, ?10)
+`
+
+type InsertLogParams struct {
+	ID         string
+	InstanceID string
+	RootID     string
+	Level      string
+	Event      string
+	StepID     string
+	Message    string
+	Code       string
+	Detail     string
+	CreatedAt  int64
+}
+
+func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
+	_, err := q.db.ExecContext(ctx, insertLog,
+		arg.ID,
+		arg.InstanceID,
+		arg.RootID,
+		arg.Level,
+		arg.Event,
+		arg.StepID,
+		arg.Message,
+		arg.Code,
+		arg.Detail,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const latestVersion = `-- name: LatestVersion :one
 SELECT MAX(version) FROM process_definitions WHERE name = ?1
 `
@@ -569,6 +618,134 @@ func (q *Queries) ListInstances(ctx context.Context, status interface{}) ([]Proc
 			&i.LeaseExpiresAt,
 			&i.WaitState,
 			&i.SpawnStepID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLogs = `-- name: ListLogs :many
+SELECT id, instance_id, root_id, level, event, step_id, message, code, detail, created_at
+FROM process_logs
+WHERE instance_id = ?1
+  AND (?2 = '' OR level = ?2)
+  AND created_at >= ?3
+  AND (created_at > ?4
+       OR (created_at = ?4 AND id > ?5))
+ORDER BY created_at, id
+LIMIT ?6
+`
+
+type ListLogsParams struct {
+	InstanceID string
+	Level      interface{}
+	Since      int64
+	AfterTs    int64
+	AfterID    string
+	Lim        int64
+}
+
+// Empty level lists every level. since=0 lists from the start. The (after_ts,
+// after_id) pair is a keyset cursor: pass (0, ”) for the first page. The tuple
+// comparison is spelled out (not row-value syntax) so it runs on SQLite too.
+func (q *Queries) ListLogs(ctx context.Context, arg ListLogsParams) ([]ProcessLog, error) {
+	rows, err := q.db.QueryContext(ctx, listLogs,
+		arg.InstanceID,
+		arg.Level,
+		arg.Since,
+		arg.AfterTs,
+		arg.AfterID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProcessLog
+	for rows.Next() {
+		var i ProcessLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.InstanceID,
+			&i.RootID,
+			&i.Level,
+			&i.Event,
+			&i.StepID,
+			&i.Message,
+			&i.Code,
+			&i.Detail,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLogsByRoot = `-- name: ListLogsByRoot :many
+SELECT id, instance_id, root_id, level, event, step_id, message, code, detail, created_at
+FROM process_logs
+WHERE root_id = ?1
+  AND (?2 = '' OR level = ?2)
+  AND created_at >= ?3
+  AND (created_at > ?4
+       OR (created_at = ?4 AND id > ?5))
+ORDER BY created_at, id
+LIMIT ?6
+`
+
+type ListLogsByRootParams struct {
+	RootID  string
+	Level   interface{}
+	Since   int64
+	AfterTs int64
+	AfterID string
+	Lim     int64
+}
+
+// Tree view: all logs for a process subtree, keyed on the root instance id.
+func (q *Queries) ListLogsByRoot(ctx context.Context, arg ListLogsByRootParams) ([]ProcessLog, error) {
+	rows, err := q.db.QueryContext(ctx, listLogsByRoot,
+		arg.RootID,
+		arg.Level,
+		arg.Since,
+		arg.AfterTs,
+		arg.AfterID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProcessLog
+	for rows.Next() {
+		var i ProcessLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.InstanceID,
+			&i.RootID,
+			&i.Level,
+			&i.Event,
+			&i.StepID,
+			&i.Message,
+			&i.Code,
+			&i.Detail,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

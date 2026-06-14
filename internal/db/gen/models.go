@@ -51,3 +51,16 @@ type ProcessInstance struct {
 	WaitState      string
 	SpawnStepID    string
 }
+
+type ProcessLog struct {
+	ID         string
+	InstanceID string
+	RootID     string
+	Level      string
+	Event      string
+	StepID     string
+	Message    string
+	Code       string
+	Detail     string
+	CreatedAt  int64
+}

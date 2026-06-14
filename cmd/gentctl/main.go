@@ -12,6 +12,7 @@
 //	gentctl promote  --from <channel> --to <channel> [--process <name>]
 //	gentctl status   --channel <channel>
 //	gentctl instances [--status <status>]
+//	gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] <instance-id>
 //	gentctl cancel   <instance-id>
 //	gentctl retry    [--force] <instance-id>
 //
@@ -67,6 +68,8 @@ func main() {
 		runStatusCmd(server, args)
 	case "instances":
 		runInstancesCmd(server, args)
+	case "logs":
+		runLogsCmd(server, args)
 	case "cancel":
 		runCancelCmd(server, args)
 	case "retry":
@@ -303,6 +306,63 @@ func runInstancesCmd(server string, args []string) {
 				errMsg = errMsg[:57] + "..."
 			}
 			line += "  " + errMsg
+		}
+		fmt.Println(line)
+	}
+}
+
+func runLogsCmd(server string, args []string) {
+	fs := flag.NewFlagSet("logs", flag.ExitOnError)
+	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	levelFlag := fs.String("level", "", "filter by level (debug, info, warn, error)")
+	sinceFlag := fs.Int64("since", 0, "only logs at/after this unix-millis timestamp")
+	limitFlag := fs.Int("limit", 200, "max entries to return")
+	treeFlag := fs.Bool("tree", false, "include the whole process subtree (root instance id)")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		fatal("usage: gentctl logs [--level L] [--since MS] [--limit N] [--tree] <instance-id>")
+	}
+	id := fs.Arg(0)
+
+	q := url.Values{}
+	if *levelFlag != "" {
+		q.Set("level", *levelFlag)
+	}
+	if *sinceFlag > 0 {
+		q.Set("since", strconv.FormatInt(*sinceFlag, 10))
+	}
+	if *limitFlag > 0 {
+		q.Set("limit", strconv.Itoa(*limitFlag))
+	}
+	if *treeFlag {
+		q.Set("tree", "true")
+	}
+	u := *serverFlag + "/instances/" + url.PathEscape(id) + "/logs"
+	if enc := q.Encode(); enc != "" {
+		u += "?" + enc
+	}
+
+	var resp []struct {
+		Time    string `json:"time"`
+		Level   string `json:"level"`
+		Event   string `json:"event"`
+		Step    string `json:"step"`
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	}
+	if err := callGet(u, &resp); err != nil {
+		fatal("%v", err)
+	}
+	for _, l := range resp {
+		line := fmt.Sprintf("%s  %-5s  %-24s", l.Time, strings.ToUpper(l.Level), l.Event)
+		if l.Step != "" {
+			line += "  step=" + l.Step
+		}
+		if l.Code != "" {
+			line += "  code=" + l.Code
+		}
+		if l.Message != "" {
+			line += "  " + l.Message
 		}
 		fmt.Println(line)
 	}
@@ -566,6 +626,7 @@ func usage() {
   gentctl promote  --from <channel> --to <channel> [--process <name>]
   gentctl status   --channel <channel>
   gentctl instances [--status <status>]
+  gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] <instance-id>
   gentctl cancel   <instance-id>
   gentctl retry    [--force] <instance-id>
   gentctl config   get <key>
