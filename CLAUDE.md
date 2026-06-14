@@ -21,6 +21,14 @@ Exceptions (hand-written in Go, not in `queries.sql`):
 
 The hand-written persistence layer is split across `db_*.go` files by domain (`db_registry.go`, `db_instances.go`, `db_claim.go`, `db_lifecycle.go`); `db.go` holds the `DB` type, connection setup, and time/null helpers.
 
+### PostgreSQL runtime setup
+
+`open()` in `db.go` runs a Postgres-only bootstrap (the `if dialect == "postgres"` block) after migrations: the `call_stack` GIN index, the `json_each` helper function, and **aggressive autovacuum on `process_instances`**.
+
+`process_instances` is a high-churn queue table: every instance passes through `status='running'` and then completes, leaving a dead tuple in the runnable range of `idx_process_instances_status_wait`. `ClaimInstances` runs on every poll by every worker and must skip those dead entries, so a burst of completions outruns the default autovacuum (`scale_factor=0.2`, i.e. 20% dead) and claim latency drifts up until it catches up — visible as the benchmark getting slower as finished instances accumulate, and fast again on a fresh DB. The bootstrap sets `autovacuum_vacuum_scale_factor=0.02` + unthrottled so dead tuples are reclaimed ~10× sooner. This is Postgres-only: SQLite updates rows in place (no MVCC dead tuples), so it has no equivalent bloat. A different index does not help — dead entries follow the rows into whatever index covers the runnable set; only vacuum reclaims them.
+
+Pool size is set by `--pg-max-open-conns` (default 50, idle = half). Size a worker fleet so `workers × pg-max-open-conns` stays under the server's `max_connections`.
+
 ### Adding a query
 
 1. Add to `internal/db/queries.sql` with annotation `-- name: QueryName :one/:many/:exec`

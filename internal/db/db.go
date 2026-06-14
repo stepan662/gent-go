@@ -89,6 +89,23 @@ func open(sqldb *sql.DB, dialect string) (*DB, error) {
 			sqldb.Close()
 			return nil, fmt.Errorf("create json_each function: %w", err)
 		}
+		// process_instances is a high-churn queue table: every instance passes
+		// through status='running' and then completes, leaving a dead tuple in the
+		// runnable range of idx_process_instances_status_wait. The claim query
+		// (run every poll by every worker) must skip those dead entries until they
+		// are vacuumed, so under a burst of completions claims slow down until
+		// autovacuum catches up. Make autovacuum aggressive and unthrottled on this
+		// one table so dead tuples are reclaimed promptly. (SQLite updates in place
+		// and has no MVCC dead tuples, so this is Postgres-only.)
+		if _, err := sqldb.ExecContext(context.Background(),
+			`ALTER TABLE process_instances SET (
+				autovacuum_vacuum_scale_factor = 0.02,
+				autovacuum_vacuum_threshold    = 50,
+				autovacuum_vacuum_cost_delay   = 0
+			)`); err != nil {
+			sqldb.Close()
+			return nil, fmt.Errorf("tune process_instances autovacuum: %w", err)
+		}
 	}
 	var dbtx dbgen.DBTX = sqldb
 	if dialect == "postgres" {
