@@ -103,18 +103,12 @@ FROM process_instances
 WHERE id = sqlc.arg(id);
 
 -- name: ListInstances :many
+-- Empty status lists every instance; a non-empty status filters to it.
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
-ORDER BY created_at DESC;
-
--- name: ListInstancesByStatus :many
-SELECT id, process_name, process_version, step_queue, context_data, parent_id,
-       call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
-FROM process_instances
-WHERE status = sqlc.arg(status)
+WHERE (sqlc.arg(status) = '' OR status = sqlc.arg(status))
 ORDER BY created_at DESC;
 
 -- name: RenewWorkerLeasesChunk :execrows

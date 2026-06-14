@@ -737,14 +737,7 @@ func (db *DB) GetInstance(id string) (*model.ProcessInstance, error) {
 }
 
 func (db *DB) ListInstances(status string) ([]*model.ProcessInstance, error) {
-	ctx := context.Background()
-	var rows []dbgen.ProcessInstance
-	var err error
-	if status == "" {
-		rows, err = db.q.ListInstances(ctx)
-	} else {
-		rows, err = db.q.ListInstancesByStatus(ctx, status)
-	}
+	rows, err := db.q.ListInstances(context.Background(), status)
 	if err != nil {
 		return nil, err
 	}

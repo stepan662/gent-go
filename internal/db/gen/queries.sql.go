@@ -537,61 +537,13 @@ SELECT id, process_name, process_version, step_queue, context_data, parent_id,
        call_stack, retry_count, next_retry_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
+WHERE (?1 = '' OR status = ?1)
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListInstances(ctx context.Context) ([]ProcessInstance, error) {
-	rows, err := q.db.QueryContext(ctx, listInstances)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProcessInstance
-	for rows.Next() {
-		var i ProcessInstance
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProcessName,
-			&i.ProcessVersion,
-			&i.StepQueue,
-			&i.ContextData,
-			&i.ParentID,
-			&i.CallStack,
-			&i.RetryCount,
-			&i.NextRetryAt,
-			&i.Status,
-			&i.Error,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.WorkerID,
-			&i.LeaseExpiresAt,
-			&i.WaitState,
-			&i.SpawnStepID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listInstancesByStatus = `-- name: ListInstancesByStatus :many
-SELECT id, process_name, process_version, step_queue, context_data, parent_id,
-       call_stack, retry_count, next_retry_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
-FROM process_instances
-WHERE status = ?1
-ORDER BY created_at DESC
-`
-
-func (q *Queries) ListInstancesByStatus(ctx context.Context, status string) ([]ProcessInstance, error) {
-	rows, err := q.db.QueryContext(ctx, listInstancesByStatus, status)
+// Empty status lists every instance; a non-empty status filters to it.
+func (q *Queries) ListInstances(ctx context.Context, status interface{}) ([]ProcessInstance, error) {
+	rows, err := q.db.QueryContext(ctx, listInstances, status)
 	if err != nil {
 		return nil, err
 	}
