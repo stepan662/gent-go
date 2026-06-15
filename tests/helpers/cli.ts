@@ -10,12 +10,17 @@ let cachedBin: string | null = null;
 
 export function buildGentctlBinary(): string {
   if (cachedBin) return cachedBin;
-  const result = spawnSync("make", ["build"], {
+  // Build gentctl directly (like buildGentBinary builds gent) rather than `make
+  // build`, which also runs sqlc — and sqlc@v1.31.1 needs Go >= 1.26, triggering a
+  // slow toolchain download on a fresh CI runner that blew the 10s test hook.
+  // gentctl is a pure client (no CGO needed), and gen/ is committed.
+  const bin = join(ROOT, "gentctl");
+  const result = spawnSync("go", ["build", "-o", bin, "./cmd/gentctl"], {
     cwd: ROOT,
     stdio: ["ignore", "ignore", "inherit"],
   });
   if (result.status !== 0) throw new Error("Failed to build gentctl binary");
-  cachedBin = join(ROOT, "gentctl");
+  cachedBin = bin;
   return cachedBin;
 }
 

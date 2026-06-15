@@ -34,6 +34,10 @@ jobs:
     env:
       CGO_ENABLED: "1"
       POSTGRES_DSN: postgres://gent:gent@localhost:5432/gent_test?sslmode=disable
+      # CI-only cap: shared 2-core runners + SQLite's single writer overwhelm the
+      # engine's lease renewal at the default concurrency (it self-exits). Keeps the
+      # local default (200) intact while stabilizing CI.
+      BENCH_MAX_CONCURRENT: "20"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -76,6 +80,20 @@ jobs:
         with:
           name: bench-results-${{ github.sha }}
           path: ${{ runner.temp }}/bench.json
+
+      # github-action-benchmark fetches gh-pages and fails if it doesn't exist yet.
+      # Create it as an empty orphan branch on the first non-PR run, via plumbing so
+      # the working tree / current checkout is untouched.
+      - name: Ensure gh-pages branch exists
+        if: github.event_name != 'pull_request'
+        run: |
+          if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git config user.email "github-action-benchmark@users.noreply.github.com"
+            git config user.name "github-action-benchmark"
+            tree="$(git mktree </dev/null)"
+            commit="$(git commit-tree "$tree" -m 'init gh-pages for benchmark history')"
+            git push origin "$commit:refs/heads/gh-pages"
+          fi
 
       # Store the per-commit time series (charts under the gh-pages branch) so a
       # regression can be traced to a commit. Report-only: never fails the build.
