@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 
 	dbgen "gent/internal/db/gen"
+	"gent/internal/idgen"
 	"gent/internal/model"
-
-	"github.com/google/uuid"
 )
 
 // LogQuery holds the optional filters shared by ListLogs and ListTreeLogs.
@@ -49,11 +48,7 @@ func (db *DB) AppendLog(entry *model.LogEntry) error {
 		// UUIDv7 is time-ordered and monotonic within a millisecond, so the
 		// (created_at, id) sort preserves insertion order even when several
 		// events of one advance() share the same millisecond timestamp.
-		if v7, err := uuid.NewV7(); err == nil {
-			id = v7.String()
-		} else {
-			id = uuid.NewString()
-		}
+		id = idgen.New()
 	}
 	createdAt := nowMillis()
 	if !entry.CreatedAt.IsZero() {

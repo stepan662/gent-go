@@ -12,10 +12,9 @@ import (
 	"time"
 
 	"gent/internal/db"
+	"gent/internal/idgen"
 	"gent/internal/model"
 	"gent/internal/transport"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -858,7 +857,7 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 		}
 	}
 	return &model.ProcessInstance{
-		ID:             uuid.NewString(),
+		ID:             idgen.ChildBase(inst.ID).String(), // sorts after the parent
 		ProcessName:    def.Name,
 		ProcessVersion: version,
 		StepQueue:      def.Steps,
@@ -879,8 +878,13 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 	}
 	sort.Strings(keys)
 
+	// One base id (guaranteed to sort after the parent); siblings are base, base+1,
+	// … in sorted-key order, so the whole batch sorts after the parent and among
+	// itself in spawn order.
+	base := idgen.ChildBase(inst.ID)
+
 	children := make([]*model.ProcessInstance, 0, len(step.Call.Children))
-	for _, key := range keys {
+	for i, key := range keys {
 		entry := step.Call.Children[key]
 		version := entry.Version
 		if version == 0 {
@@ -922,7 +926,7 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 			}
 		}
 		children = append(children, &model.ProcessInstance{
-			ID:             uuid.NewString(),
+			ID:             idgen.Add(base, uint64(i)).String(),
 			ProcessName:    def.Name,
 			ProcessVersion: version,
 			StepQueue:      def.Steps,

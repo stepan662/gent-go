@@ -47,7 +47,7 @@ func (db *DB) FinishChild(child *model.ProcessInstance) error {
 		WITH locked AS (
 			SELECT id, wait_state FROM process_instances
 			WHERE id IN (?, ?)
-			ORDER BY created_at, id`+lock+`
+			ORDER BY id`+lock+`
 		)
 		SELECT wait_state FROM locked WHERE id = ?`,
 		child.ID, child.ParentID, child.ParentID).Scan(&parentWaitState)
@@ -112,7 +112,7 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 			WHERE id = ?
 			   OR id IN (SELECT value FROM json_each(
 			                 (SELECT call_stack FROM process_instances WHERE id = ?)))
-			ORDER BY created_at, id FOR UPDATE`, child.ID, child.ID)
+			ORDER BY id FOR UPDATE`, child.ID, child.ID)
 		if lockErr != nil {
 			return fmt.Errorf("lock rows: %w", lockErr)
 		}
@@ -180,7 +180,7 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 //
 // The CTE is a plain SELECT and takes no row locks, so it can't deadlock. Callers
 // that mutate the tree lock the enumerated rows in a SEPARATE step,
-// ORDER BY created_at, id FOR UPDATE — the global order shared with FinishChild
+// ORDER BY id FOR UPDATE — the global order shared with FinishChild
 // and FailInstanceAndAncestors, which is what prevents deadlocks. (Postgres also
 // forbids FOR UPDATE inside a recursive CTE, so this split is mandatory.)
 const subtreeCTE = `WITH RECURSIVE subtree(id) AS (
@@ -205,7 +205,7 @@ func (db *DB) forUpdate() string {
 // to 'cancelling'.
 //
 // The tree is enumerated with a recursive walk over parent_id (subtreeCTE). The
-// locking CTE then takes every row lock in created_at, id order before the UPDATE
+// locking CTE then takes every row lock in id order before the UPDATE
 // — the same order as FinishChild and FailInstanceAndAncestors, eliminating
 // deadlocks on PostgreSQL (SQLite serialises via its single writer; its lock
 // clause is empty).
@@ -224,14 +224,14 @@ func (db *DB) CancelProcess(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback()
 
-	// The locked CTE pre-locks the subtree in created_at, id order before the UPDATE
+	// The locked CTE pre-locks the subtree in id order before the UPDATE
 	// (Postgres); on SQLite the ORDER BY is a harmless no-op (single writer, no
 	// FOR UPDATE). One query for both engines — only the lock clause differs.
 	if _, err := exec.ExecContext(ctx, subtreeCTE+`,
 		locked AS (
 			SELECT id FROM process_instances
 			WHERE id IN (SELECT id FROM subtree)
-			ORDER BY created_at, id`+db.forUpdate()+`
+			ORDER BY id`+db.forUpdate()+`
 		)
 		UPDATE process_instances SET status = 'cancelling', updated_at = ?
 		WHERE id IN (SELECT id FROM locked) AND status = 'running'`,
@@ -285,7 +285,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 	}
 	defer tx.Rollback()
 
-	// Lock and load the whole tree (root + descendants) in created_at, id order —
+	// Lock and load the whole tree (root + descendants) in id order —
 	// the same lock order as CancelProcess/FinishChild/FailInstanceAndAncestors —
 	// so concurrent cancels and child completions serialize against the revival.
 	// The tree is enumerated with a recursive walk over parent_id (subtreeCTE); the
@@ -293,7 +293,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 	rows, err := exec.QueryContext(ctx, subtreeCTE+`
 		SELECT `+instanceColumns+` FROM process_instances
 		WHERE id IN (SELECT id FROM subtree)
-		ORDER BY created_at, id`+db.forUpdate(), id)
+		ORDER BY id`+db.forUpdate(), id)
 	if err != nil {
 		return fmt.Errorf("lock tree: %w", err)
 	}

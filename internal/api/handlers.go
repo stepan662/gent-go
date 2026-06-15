@@ -12,10 +12,9 @@ import (
 	"time"
 
 	"gent/internal/db"
+	"gent/internal/idgen"
 	"gent/internal/model"
 	"gent/internal/validation"
-
-	"github.com/google/uuid"
 )
 
 const defaultChannel = "latest"
@@ -252,7 +251,7 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 	}
 
 	inst := &model.ProcessInstance{
-		ID:             uuid.NewString(),
+		ID:             idgen.New(),
 		ProcessName:    def.Name,
 		ProcessVersion: version,
 		StepQueue:      def.Steps,
