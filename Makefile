@@ -7,7 +7,7 @@ log     ?= info
 
 # BUILD_FLAGS = CGO_ENABLED=1
 
-.PHONY: run build test test-unit test-int test-stress bench swagger client clean generate
+.PHONY: run build test test-unit test-int test-stress bench bench-drain swagger client clean generate
 
 run:
 	$(BUILD_FLAGS) go run ./cmd/gent \
@@ -48,6 +48,10 @@ test-int: client
 # Set POSTGRES_DSN to also benchmark Postgres and print a comparison.
 bench: client
 	cd tests && ~/.bun/bin/bun run bench
+
+# Postgres-only claim-throughput-under-backlog benchmark (needs POSTGRES_DSN).
+bench-drain:
+	./scripts/bench-drain.sh
 
 sqlc:
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate

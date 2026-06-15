@@ -1,0 +1,92 @@
+name: bench
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * *" # nightly, full size
+  workflow_dispatch:
+
+# github-action-benchmark needs contents:write to push the time series to gh-pages
+# (only on non-PR events; see auto-push below).
+permissions:
+  contents: write
+
+jobs:
+  bench:
+    name: benchmarks (report-only)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gent
+          POSTGRES_PASSWORD: gent
+          POSTGRES_DB: gent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CGO_ENABLED: "1"
+      POSTGRES_DSN: postgres://gent:gent@localhost:5432/gent_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Ensure ~/.bun/bin/bun (Makefile invokes that path)
+        run: mkdir -p "$HOME/.bun/bin" && ln -sf "$(command -v bun)" "$HOME/.bun/bin/bun"
+      - name: psql client (drain bench seeds via psql)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+      - name: Install test dependencies
+        run: cd tests && bun install --frozen-lockfile
+
+      # Smaller workload on PRs (smoke); full size on push/schedule/manual.
+      - name: Size workloads
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "BENCH_TTL=10"       >> "$GITHUB_ENV"   # 2047 nodes
+            echo "BENCH_DRAIN_N=10000" >> "$GITHUB_ENV"
+          else
+            echo "BENCH_TTL=12"       >> "$GITHUB_ENV"   # 8191 nodes
+            echo "BENCH_DRAIN_N=50000" >> "$GITHUB_ENV"
+          fi
+
+      - name: Spawn bench (SQLite + Postgres)
+        run: BENCH_JSON="$RUNNER_TEMP/spawn.json" make bench
+
+      - name: Drain bench (Postgres backlog)
+        run: BENCH_JSON="$RUNNER_TEMP/drain.json" make bench-drain
+
+      - name: Merge results
+        run: jq -s 'add' "$RUNNER_TEMP/spawn.json" "$RUNNER_TEMP/drain.json" > "$RUNNER_TEMP/bench.json"
+
+      - name: Archive results for this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ github.sha }}
+          path: ${{ runner.temp }}/bench.json
+
+      # Store the per-commit time series (charts under the gh-pages branch) so a
+      # regression can be traced to a commit. Report-only: never fails the build.
+      # auto-push only off PRs, so PR runs just publish to the job summary.
+      - name: Track history
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: gent throughput
+          tool: customBiggerIsBetter
+          output-file-path: ${{ runner.temp }}/bench.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench
+          auto-push: ${{ github.event_name != 'pull_request' }}
+          summary-always: true
+          fail-on-alert: false
