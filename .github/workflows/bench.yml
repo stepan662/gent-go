@@ -81,6 +81,18 @@ jobs:
           name: bench-results-${{ github.sha }}
           path: ${{ runner.temp }}/bench.json
 
+      # Always surface this run's numbers in the job summary (the only report on PRs,
+      # where history tracking below is skipped).
+      - name: Results to job summary
+        run: |
+          {
+            echo "### Benchmark results"
+            echo ""
+            echo "| metric | inst/s |"
+            echo "| --- | --- |"
+            jq -r '.[] | "| \(.name) | \(.value) |"' "$RUNNER_TEMP/bench.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # github-action-benchmark fetches gh-pages and fails if it doesn't exist yet.
       # Create it as an empty orphan branch on the first non-PR run, via plumbing so
       # the working tree / current checkout is untouched.
@@ -96,9 +108,11 @@ jobs:
           fi
 
       # Store the per-commit time series (charts under the gh-pages branch) so a
-      # regression can be traced to a commit. Report-only: never fails the build.
-      # auto-push only off PRs, so PR runs just publish to the job summary.
+      # regression can be traced to a commit. Non-PR only: the action always fetches
+      # gh-pages (even with auto-push off), which doesn't exist on PR branches — and
+      # PRs already show their numbers in the summary above. Report-only: never fails.
       - name: Track history
+        if: github.event_name != 'pull_request'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: gent throughput
