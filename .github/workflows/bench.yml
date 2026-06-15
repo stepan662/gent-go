@@ -14,19 +14,16 @@ permissions:
   contents: write
 
 jobs:
-  # One leg per (workload, run), each with its OWN Postgres service, all in parallel.
-  # Separate services keep recursive's leftover rows from biasing deep's claim latency;
-  # the 3 independent runs (separate VMs) capture run-to-run / noisy-neighbor variance,
-  # charted as 3 points per commit. Both workloads run at default size (~8k instances)
-  # so the wide and narrow shapes are directly comparable.
+  # One leg per workload, each with its OWN Postgres service, run in parallel — so
+  # recursive's leftover rows never bias deep's claim latency (and vice versa), and the
+  # suite finishes in roughly one workload's time.
   bench:
-    name: bench (${{ matrix.workload }} #${{ matrix.run }})
+    name: bench (${{ matrix.workload }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         workload: [recursive, deep]
-        run: [1, 2, 3]
     services:
       postgres:
         image: postgres:16
@@ -60,22 +57,22 @@ jobs:
         run: cd tests && bun install --frozen-lockfile
 
       - name: Run bench
-        run: BENCH_JSON="$RUNNER_TEMP/${{ matrix.workload }}-${{ matrix.run }}.json" make bench-${{ matrix.workload }}
+        run: BENCH_JSON="$RUNNER_TEMP/${{ matrix.workload }}.json" make bench-${{ matrix.workload }}
 
       - name: Upload result
         uses: actions/upload-artifact@v4
         with:
-          name: bench-${{ matrix.workload }}-${{ matrix.run }}
-          path: ${{ runner.temp }}/${{ matrix.workload }}-${{ matrix.run }}.json
+          name: bench-${{ matrix.workload }}
+          path: ${{ runner.temp }}/${{ matrix.workload }}.json
 
       # Surface this leg's numbers in its job summary (the only report on PRs, where
       # the chart job below is skipped). The host line records the hardware so a
       # throughput shift can be traced to a runner change rather than a code change.
       - name: Results to job summary
         run: |
-          json="$RUNNER_TEMP/${{ matrix.workload }}-${{ matrix.run }}.json"
+          json="$RUNNER_TEMP/${{ matrix.workload }}.json"
           {
-            echo "### Benchmark: ${{ matrix.workload }} #${{ matrix.run }}"
+            echo "### Benchmark: ${{ matrix.workload }}"
             echo ""
             echo "**host:** $(jq -r '.[0].extra // "n/a"' "$json")"
             echo "**runner image:** ${ImageOS:-?} ${ImageVersion:-?}"
@@ -85,9 +82,8 @@ jobs:
             jq -r '.[] | "| \(.name) | \(.value) |"' "$json"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Merge all leg results (2 workloads × 3 runs) and push the per-commit time series
-  # (charts under the gh-pages branch) so a regression can be traced to a commit — the 3
-  # runs appear as 3 points per metric, showing the spread. Non-PR only: the action
+  # Merge the per-workload results and push the per-commit time series (charts under the
+  # gh-pages branch) so a regression can be traced to a commit. Non-PR only: the action
   # always fetches gh-pages, which doesn't exist on PR branches — and PRs already show
   # their numbers in the per-leg summaries above. Report-only: never fails the build.
   chart:

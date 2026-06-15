@@ -1,4 +1,4 @@
-# Deep spawn workload: a mostly-linear tree that splits every 15 levels (the `c`
+# Deep spawn workload: a mostly-linear tree that splits every 12 levels (the `c`
 # countdown), so depth ≈ ttl with a bounded node count. NARROW and tall — the top of
 # the tree is 1-2 instances wide and concurrency only ramps up near the bottom, so a
 # single ttl-deep critical path gates completion. It probes how nesting DEPTH (not
@@ -6,16 +6,18 @@
 #
 #   make bench-deep   (POSTGRES_DSN=… to also compare Postgres)
 #
-# Each node carries a countdown `c`: it splits (two children, c reset to 15) when c
-# reaches 1, else descends (one child, c-1) — branching every 15 levels. (A countdown,
-# not ttl % 15, because `%` needs integer operands and JSON inputs are floats.)
+# Each node carries a countdown `c`: it splits (two children, c reset to 12) when c
+# reaches 1, else descends (one child, c-1) — branching every 12 levels. (A countdown,
+# not ttl % 12, because `%` needs integer operands and JSON inputs are floats.)
 # count_field: every node sums its branch counts + 1, so the root reports its subtree size.
 
 bench:
-  # ttl 95 with split 15 → ~1329 deep nodes (depth 95, ≤64 wide). Much smaller than
-  # recursive's wide tree on purpose: SQLite's single writer crawls a narrow tree at
-  # ~60 inst/s, so a larger count (split 10 → 8182) overruns the timeout on slow CI.
-  input: { ttl: 95, c: 15 }
+  # ttl 95 with split 12 → ~3060 deep nodes (depth 95, ≤128 wide). The split interval is
+  # tuned so this stays the slower, "harder" bench (~20s local SQLite vs recursive's ~6s)
+  # without overrunning the CI timeout — split 10 → 8182 nodes crawls 137s locally (SQLite's
+  # single writer thrashes the 512-wide bottom) and times out on slow CI; split 12 cuts the
+  # count ~2.7× and the contention enough to land well under it.
+  input: { ttl: 95, c: 12 }
   roots: 1
   count_field: processes
   poll_ms: 10
@@ -48,7 +50,7 @@ process:
         children:
           first:
             name: deep
-            input: { ttl: "{{ input.ttl - 1 }}", c: "{{ 15 }}" }
+            input: { ttl: "{{ input.ttl - 1 }}", c: "{{ 12 }}" }
             output_schema:
               type: object
               properties:
@@ -56,7 +58,7 @@ process:
               required: [processes]
           second:
             name: deep
-            input: { ttl: "{{ input.ttl - 1 }}", c: "{{ 15 }}" }
+            input: { ttl: "{{ input.ttl - 1 }}", c: "{{ 12 }}" }
             output_schema:
               type: object
               properties:
