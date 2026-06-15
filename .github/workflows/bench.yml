@@ -55,10 +55,10 @@ jobs:
       - name: Size workloads
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "BENCH_TTL=10"       >> "$GITHUB_ENV"   # 2047 nodes
+            echo "BENCH_TTL=10"        >> "$GITHUB_ENV"   # 2047 nodes
             echo "BENCH_DRAIN_N=10000" >> "$GITHUB_ENV"
           else
-            echo "BENCH_TTL=12"       >> "$GITHUB_ENV"   # 8191 nodes
+            echo "BENCH_TTL=12"        >> "$GITHUB_ENV"   # 8191 nodes
             echo "BENCH_DRAIN_N=50000" >> "$GITHUB_ENV"
           fi
 
