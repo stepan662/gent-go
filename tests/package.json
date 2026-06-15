@@ -8,13 +8,15 @@
     "playground:generate": "bun run playground/codegen.ts",
     "playground:server": "bun run playground/server.ts",
     "playground:run": "bun run playground/run.ts",
-    "bench": "bun run bench/bench.ts"
+    "bench": "bun run bench/bench.ts",
+    "bench-drain": "bun run bench/drain.ts"
   },
   "dependencies": {
     "ajv": "^8.20.0",
     "openapi-fetch": "^0.17.0"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.14",
     "@types/node": "^25.9.0",
     "json-schema-to-typescript": "^15.0.4",
     "openapi-typescript": "^7.13.0",

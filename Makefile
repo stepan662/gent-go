@@ -50,8 +50,8 @@ bench: client
 	cd tests && ~/.bun/bin/bun run bench
 
 # Postgres-only claim-throughput-under-backlog benchmark (needs POSTGRES_DSN).
-bench-drain:
-	./scripts/bench-drain.sh
+bench-drain: client
+	cd tests && ~/.bun/bin/bun run bench-drain
 
 sqlc:
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
