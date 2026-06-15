@@ -94,8 +94,8 @@ func (db *DB) ListLogs(instanceID string, opts LogQuery) ([]*model.LogEntry, err
 // (the base row covers the node itself), then joins its logs — no denormalised
 // root_id and no closure table, so it adds zero write cost. The walk rides the
 // idx_instances_parent_step index. Hand-written (not sqlc) because sqlc's SQLite
-// grammar can't parse WITH RECURSIVE; both runtime drivers support it, and db.exec
-// rewrites ? → $N on Postgres. The cursor/level predicates mirror ListLogs.
+// grammar can't parse WITH RECURSIVE; both runtime drivers support it. The
+// cursor/level predicates mirror ListLogs.
 // The subtree CTE also carries each instance's depth relative to the queried
 // node (the node itself is depth 0), surfaced per log row so callers can render
 // the tree (e.g. gentctl indents by depth). Joining subtree (rather than

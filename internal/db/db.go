@@ -79,12 +79,6 @@ func open(sqldb *sql.DB, dialect string) (*DB, error) {
 		return nil, err
 	}
 	if dialect == "postgres" {
-		if _, err := sqldb.ExecContext(context.Background(),
-			`CREATE INDEX IF NOT EXISTS idx_instances_call_stack_gin
-			     ON process_instances USING GIN ((call_stack::jsonb))`); err != nil {
-			sqldb.Close()
-			return nil, fmt.Errorf("create call_stack GIN index: %w", err)
-		}
 		if _, err := sqldb.ExecContext(context.Background(), pgFunctionsSQL); err != nil {
 			sqldb.Close()
 			return nil, fmt.Errorf("create json_each function: %w", err)

@@ -15,15 +15,18 @@ Rules:
 - Use `sqlc.arg(name)` for all query parameters — never hardcode `?` or `$1`. sqlc translates this to the correct placeholder per engine.
 - `gen_pg_validate/` is gitignored. Run `sqlc generate` then `go build ./...` locally to validate cross-engine compatibility.
 
+Hand-written SQL (the exceptions below) uses `?` placeholders run through the rewriter-aware executor — `db.exec` (non-transactional) or the `dbtx` returned by `beginTx` (in a transaction), both `pgRewriter`-wrapped, which rewrites `?`→`$N` on Postgres. Never hand-write `$N` or branch a query just for placeholders; the only legitimate dialect branch is a genuine SQL feature gap (e.g. `FOR UPDATE`). A raw `db.sqldb.BeginTx` + `tx.ExecContext` does NOT rewrite — use `beginTx`'s `dbtx`.
+
 Exceptions (hand-written in Go, not in `queries.sql`):
 - `ClaimInstances` (`db_claim.go`) — PostgreSQL uses `FOR UPDATE SKIP LOCKED` for concurrent workers; SQLite's single-writer model does not support this.
 - `FindParentsOf` (`db_registry.go`) — dynamic-length `IN (...)` clause cannot be expressed in sqlc.
+- `CancelProcess` / `RetryProcess` (`db_lifecycle.go`) and subtree log queries (`db_logs.go`) — enumerate a process tree with a `WITH RECURSIVE` walk over `parent_id` (`subtreeCTE`), which sqlc's SQLite grammar can't parse. The recursive CTE takes no row locks; cancel/retry then lock the result `ORDER BY created_at, id FOR UPDATE` in a separate step (Postgres only) — the global order shared with `FinishChild`/`FailInstanceAndAncestors` that prevents deadlocks (Postgres also forbids `FOR UPDATE` inside a recursive CTE, forcing this split).
 
 The hand-written persistence layer is split across `db_*.go` files by domain (`db_registry.go`, `db_instances.go`, `db_claim.go`, `db_lifecycle.go`); `db.go` holds the `DB` type, connection setup, and time/null helpers.
 
 ### PostgreSQL runtime setup
 
-`open()` in `db.go` runs a Postgres-only bootstrap (the `if dialect == "postgres"` block) after migrations: the `call_stack` GIN index, the `json_each` helper function, and **aggressive autovacuum on `process_instances`**.
+`open()` in `db.go` runs a Postgres-only bootstrap (the `if dialect == "postgres"` block) after migrations: the `json_each` helper function and **aggressive autovacuum on `process_instances`**. (Tree enumeration uses a recursive `parent_id` walk, so there is no `call_stack` GIN index.)
 
 `process_instances` is a high-churn queue table: every instance passes through `status='running'` and then completes, leaving a dead tuple in the runnable range of `idx_process_instances_status_wait`. `ClaimInstances` runs on every poll by every worker and must skip those dead entries, so a burst of completions outruns the default autovacuum (`scale_factor=0.2`, i.e. 20% dead) and claim latency drifts up until it catches up — visible as the benchmark getting slower as finished instances accumulate, and fast again on a fresh DB. The bootstrap sets `autovacuum_vacuum_scale_factor=0.02` + unthrottled so dead tuples are reclaimed ~10× sooner. This is Postgres-only: SQLite updates rows in place (no MVCC dead tuples), so it has no equivalent bloat. A different index does not help — dead entries follow the rows into whatever index covers the runnable set; only vacuum reclaims them.
 

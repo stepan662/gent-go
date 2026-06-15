@@ -176,18 +176,42 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 	return tx.Commit()
 }
 
+// subtreeCTE is a `WITH RECURSIVE subtree(id) AS (...)` clause binding the CTE
+// `subtree` to the instance with the bound id and every descendant, by walking
+// process_instances.parent_id down (riding idx_instances_parent_step, indexed on
+// both engines).
+//
+// The CTE is a plain SELECT and takes no row locks, so it can't deadlock. Callers
+// that mutate the tree lock the enumerated rows in a SEPARATE step,
+// ORDER BY created_at, id FOR UPDATE — the global order shared with FinishChild
+// and FailInstanceAndAncestors, which is what prevents deadlocks. (Postgres also
+// forbids FOR UPDATE inside a recursive CTE, so this split is mandatory.)
+const subtreeCTE = `WITH RECURSIVE subtree(id) AS (
+	SELECT id FROM process_instances WHERE id = ?
+	UNION ALL
+	SELECT pi.id FROM process_instances pi JOIN subtree s ON pi.parent_id = s.id
+)`
+
+// forUpdate is the lock clause appended to the subtree-locking SELECT on Postgres;
+// SQLite serialises via its single writer and has no FOR UPDATE syntax.
+func (db *DB) forUpdate() string {
+	if db.dialect == "postgres" {
+		return " FOR UPDATE"
+	}
+	return ""
+}
+
 // CancelProcess atomically marks an entire process tree as cancelling.
 // It only accepts root instances — cancellation is a decision about the whole
 // tree, so cancelling a descendant directly is rejected with the root's ID.
-// All running instances of the tree (the root and every row whose call_stack
-// contains it) transition to 'cancelling'.
+// All running instances of the tree (the root and every descendant) transition
+// to 'cancelling'.
 //
-// The descendant scan is dialect-specific by necessity: PostgreSQL matches via the
-// JSONB `?` operator, backed by the call_stack GIN index (see open()), so it stays a
-// raw query with explicit $N rather than going through the ?→$N rewriter. A locking
-// CTE then takes every row lock in created_at, id order before the UPDATE — the same
-// order as FinishChild and FailInstanceAndAncestors, eliminating deadlocks. SQLite
-// uses json_each and serialises via its single writer.
+// The tree is enumerated with a recursive walk over parent_id (subtreeCTE). The
+// locking CTE then takes every row lock in created_at, id order before the UPDATE
+// — the same order as FinishChild and FailInstanceAndAncestors, eliminating
+// deadlocks on PostgreSQL (SQLite serialises via its single writer; its lock
+// clause is empty).
 func (db *DB) CancelProcess(ctx context.Context, id string) error {
 	row, err := db.q.GetInstance(ctx, id)
 	if err != nil {
@@ -197,35 +221,25 @@ func (db *DB) CancelProcess(ctx context.Context, id string) error {
 		return err
 	}
 
-	tx, err := db.sqldb.BeginTx(ctx, nil)
+	tx, _, exec, err := db.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	now := nowMillis()
-
-	var qErr error
-	if db.dialect == "postgres" {
-		_, qErr = tx.ExecContext(ctx, `
-			WITH locked AS (
-				SELECT id FROM process_instances
-				WHERE id = $1 OR call_stack::jsonb ? $1
-				ORDER BY created_at, id FOR UPDATE
-			)
-			UPDATE process_instances SET status = 'cancelling', updated_at = $2
-			WHERE id IN (SELECT id FROM locked) AND status = 'running'`,
-			id, now)
-	} else {
-		_, qErr = tx.ExecContext(ctx, `
-			UPDATE process_instances SET status = 'cancelling', updated_at = ?
-			WHERE status = 'running'
-			  AND (id = ?
-			       OR EXISTS (SELECT 1 FROM json_each(call_stack) WHERE value = ?))`,
-			now, id, id)
-	}
-	if qErr != nil {
-		return fmt.Errorf("cancel process: %w", qErr)
+	// The locked CTE pre-locks the subtree in created_at, id order before the UPDATE
+	// (Postgres); on SQLite the ORDER BY is a harmless no-op (single writer, no
+	// FOR UPDATE). One query for both engines — only the lock clause differs.
+	if _, err := exec.ExecContext(ctx, subtreeCTE+`,
+		locked AS (
+			SELECT id FROM process_instances
+			WHERE id IN (SELECT id FROM subtree)
+			ORDER BY created_at, id`+db.forUpdate()+`
+		)
+		UPDATE process_instances SET status = 'cancelling', updated_at = ?
+		WHERE id IN (SELECT id FROM locked) AND status = 'running'`,
+		id, nowMillis()); err != nil {
+		return fmt.Errorf("cancel process: %w", err)
 	}
 
 	return tx.Commit()
@@ -268,7 +282,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 		return fmt.Errorf("process is not retryable (status: %s)", status)
 	}
 
-	tx, qtx, _, err := db.beginTx(ctx, nil)
+	tx, qtx, exec, err := db.beginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -277,26 +291,12 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 	// Lock and load the whole tree (root + descendants) in created_at, id order —
 	// the same lock order as CancelProcess/FinishChild/FailInstanceAndAncestors —
 	// so concurrent cancels and child completions serialize against the revival.
-	//
-	// The descendant match is dialect-specific by necessity: PostgreSQL uses the
-	// JSONB `?` operator, which is backed by the call_stack GIN index (see open());
-	// SQLite uses json_each. Because of that literal `?` operator this query bypasses
-	// the placeholder rewriter and runs on the raw tx with explicit $N / ?.
-	var query string
-	if db.dialect == "postgres" {
-		query = `SELECT ` + instanceColumns + ` FROM process_instances
-			WHERE id = $1 OR call_stack::jsonb ? $1
-			ORDER BY created_at, id FOR UPDATE`
-	} else {
-		query = `SELECT ` + instanceColumns + ` FROM process_instances
-			WHERE id = ? OR EXISTS (SELECT 1 FROM json_each(call_stack) WHERE value = ?)
-			ORDER BY created_at, id`
-	}
-	args := []any{id}
-	if db.dialect != "postgres" {
-		args = append(args, id)
-	}
-	rows, err := tx.QueryContext(ctx, query, args...)
+	// The tree is enumerated with a recursive walk over parent_id (subtreeCTE); the
+	// FOR UPDATE on the outer SELECT (Postgres only) locks the rows in that order.
+	rows, err := exec.QueryContext(ctx, subtreeCTE+`
+		SELECT `+instanceColumns+` FROM process_instances
+		WHERE id IN (SELECT id FROM subtree)
+		ORDER BY created_at, id`+db.forUpdate(), id)
 	if err != nil {
 		return fmt.Errorf("lock tree: %w", err)
 	}
