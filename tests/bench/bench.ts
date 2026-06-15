@@ -19,6 +19,7 @@
 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import {
   buildGentBinary,
   startGent,
@@ -28,7 +29,7 @@ import {
 const TTL = num("BENCH_TTL", 12);
 const ROOTS = num("BENCH_ROOTS", 1);
 const POLL_MS = num("BENCH_POLL_MS", 10);
-const MAX_CONCURRENT = num("BENCH_MAX_CONCURRENT", 500);
+const MAX_CONCURRENT = num("BENCH_MAX_CONCURRENT", 200);
 const RUNS = num("BENCH_RUNS", 1);
 const MODE = process.env.BENCH_MODE ?? "simple"; // "simple" (binary) | "deep"
 const DEEP = MODE === "deep";
@@ -325,6 +326,22 @@ function report(results: EngineResult[]) {
   }
 }
 
+// When BENCH_JSON is set, write the results as a github-action-benchmark
+// customBiggerIsBetter array (so CI can chart throughput per commit over time).
+function writeBenchJSON(path: string, results: EngineResult[]) {
+  const entries = results.map((r) => {
+    const avg = Math.round(
+      r.durations.reduce((a, b) => a + b, 0) / r.durations.length,
+    );
+    return {
+      name: `spawn ${MODE} ttl${TTL} ${r.engine}`,
+      unit: "inst/s",
+      value: throughput(avg),
+    };
+  });
+  writeFileSync(path, JSON.stringify(entries, null, 2));
+}
+
 async function main() {
   const results: EngineResult[] = [];
 
@@ -351,6 +368,8 @@ async function main() {
   }
 
   report(results);
+  const jsonPath = process.env.BENCH_JSON;
+  if (jsonPath) writeBenchJSON(jsonPath, results);
 }
 
 main().catch((err) => {

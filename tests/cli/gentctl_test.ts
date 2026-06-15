@@ -6,7 +6,7 @@ let bin: string;
 
 beforeAll(() => {
   bin = buildGentctlBinary();
-});
+}, 60_000); // first build on a cold CI cache can exceed the 10s default
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
