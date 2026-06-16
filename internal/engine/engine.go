@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -374,7 +375,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 	for i := 0; ; i++ {
 		if len(inst.StepQueue) == 0 {
 			inst.Status = model.StatusCompleted
-			inst.NextRetryAt = nil
+			inst.WakeAt = nil
 			if err := e.computeOutput(inst); err != nil {
 				return e.failInstance(inst, err.Error())
 			}
@@ -388,13 +389,26 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		var selfOutput any
 
 		if hasCall {
-			if step.Action.Type == model.ActionTypeChild || step.Action.Type == model.ActionTypeChildParallel {
+			switch step.Action.Type {
+			case model.ActionTypeChild, model.ActionTypeChildParallel:
 				out, done, err := e.runChildProcesses(ctx, inst, step)
 				if done || err != nil {
 					return err
 				}
 				selfOutput = out
-			} else {
+			case model.ActionTypeDelay:
+				done, err := e.runDelay(inst, step)
+				if done || err != nil {
+					return err
+				}
+				// Timer fired: fall through to the switch with no self output.
+			case model.ActionTypeSet:
+				out, done, err := e.runAssign(inst, step)
+				if done || err != nil {
+					return err
+				}
+				selfOutput = out
+			default: // rest, script
 				out, done, err := e.executeAction(ctx, inst, step)
 				if done || err != nil {
 					return err
@@ -416,7 +430,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		if gotoID == model.GotoEnd {
 			inst.Status = model.StatusCompleted
 			inst.RetryCount = 0
-			inst.NextRetryAt = nil
+			inst.WakeAt = nil
 			if err := e.computeOutput(inst); err != nil {
 				return e.failInstance(inst, err.Error())
 			}
@@ -437,7 +451,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		}
 
 		inst.RetryCount = 0
-		inst.NextRetryAt = nil
+		inst.WakeAt = nil
 		e.log.Info("step completed", "id", inst.ID, "step", step.ID)
 		e.audit(inst, model.LogInfo, model.EventStepCompleted, step.ID, "", "", map[string]any{"goto": gotoID})
 
@@ -629,7 +643,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 	if matched != nil && inst.RetryCount < matched.Retries && isRetryAllowed(step, errCode, matched) {
 		inst.RetryCount++
 		next := db.Now().Add(e.retryDelay(inst.RetryCount))
-		inst.NextRetryAt = &next
+		inst.WakeAt = &next
 		e.log.Warn("step failed, scheduling retry",
 			"id", inst.ID, "step", step.ID,
 			"attempt", inst.RetryCount, "max", matched.Retries,
@@ -653,7 +667,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 	if matched != nil && matched.Goto != "" {
 		if matched.Goto == model.GotoEnd {
 			inst.Status = model.StatusCompleted
-			inst.NextRetryAt = nil
+			inst.WakeAt = nil
 			e.log.Info("instance completed via error route", "id", inst.ID, "step", step.ID, "code", errCode)
 			e.audit(inst, model.LogInfo, model.EventErrorCompleted, step.ID, errMsg, errCode, nil)
 			return e.saveAndNotify(inst)
@@ -664,7 +678,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 		}
 		inst.StepQueue = newQueue
 		inst.RetryCount = 0
-		inst.NextRetryAt = nil
+		inst.WakeAt = nil
 		e.log.Info("routing to error handler",
 			"id", inst.ID, "step", step.ID, "goto", matched.Goto, "code", errCode)
 		e.audit(inst, model.LogInfo, model.EventErrorRoute, step.ID, errMsg, errCode, map[string]any{"goto": matched.Goto})
@@ -687,6 +701,102 @@ func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (m
 		result[name] = val
 	}
 	return result, nil
+}
+
+// runDelay implements the delay action. On first entry — WakeAt is nil
+// because every step transition resets it — it evaluates the duration, parks the
+// instance by stamping wake_at, and releases the worker via
+// UpdateInstanceProgress; the normal claim loop re-claims it once the timer
+// elapses. On re-entry (WakeAt set, so the claim guarantees the timer is
+// due) it returns done=false and advance continues to the step's switch.
+// Returns done=true when it parked or failed (the caller returns immediately).
+func (e *Engine) runDelay(inst *model.ProcessInstance, step *model.Step) (bool, error) {
+	if inst.WakeAt == nil {
+		ms, err := evalDurationMs(step.Action.Ms, inst.ContextData)
+		if err != nil {
+			return true, e.failInstance(inst, fmt.Sprintf("step %q delay: %v", step.ID, err))
+		}
+		wake := db.Now().Add(time.Duration(ms) * time.Millisecond)
+		inst.WakeAt = &wake
+		e.log.Info("instance delaying", "id", inst.ID, "step", step.ID, "ms", ms)
+		e.audit(inst, model.LogInfo, model.EventDelayArmed, step.ID, "", "", map[string]any{"ms": ms})
+		return true, e.db.UpdateInstanceProgress(inst)
+	}
+	return false, nil
+}
+
+// runAssign implements the assign action: it evaluates each value expression
+// against the current context and stores the resulting object as this step's
+// output (outputs.<id>), so later steps and this step's switch (as "self") can
+// read it. With no external call it has no remote side effect. Returns
+// (output, done, err); done=true means the instance was already persisted
+// (eval failure or output_schema violation) and the caller should return err.
+func (e *Engine) runAssign(inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
+	obj := make(map[string]any, len(step.Action.Values))
+	for name, expr := range step.Action.Values {
+		val, err := evalAny(expr, inst.ContextData)
+		if err != nil {
+			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q assign %q: %v", step.ID, name, err))
+		}
+		obj[name] = val
+	}
+
+	if err := step.Action.ValidateOutput(obj); err != nil {
+		return nil, true, e.handleCallError(inst, step, err.Error(), "output.invalid")
+	}
+
+	// assign always persists its output (later steps read outputs.<id>), unlike
+	// rest/script which only persist when an output_schema is declared.
+	if inst.ContextData["outputs"] == nil {
+		inst.ContextData["outputs"] = map[string]any{}
+	}
+	inst.ContextData["outputs"].(map[string]any)[step.ID] = obj
+
+	var order []string
+	switch v := inst.ContextData["output_order"].(type) {
+	case []string:
+		order = v
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				order = append(order, s)
+			}
+		}
+	}
+	inst.ContextData["output_order"] = append(order, step.ID)
+
+	return obj, false, nil
+}
+
+// evalDurationMs evaluates a delay expression to a non-negative millisecond
+// count. The expression is a template, so a bare literal ("30000") returns the
+// string "30000" (parsed here) while a "{{ … }}" expression returns a number.
+func evalDurationMs(expr string, ctx map[string]any) (int64, error) {
+	v, err := evalAny(expr, ctx)
+	if err != nil {
+		return 0, err
+	}
+	var ms int64
+	switch n := v.(type) {
+	case int:
+		ms = int64(n)
+	case int64:
+		ms = n
+	case float64:
+		ms = int64(n)
+	case string:
+		parsed, perr := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+		if perr != nil {
+			return 0, fmt.Errorf("ms %q is not a number", expr)
+		}
+		ms = parsed
+	default:
+		return 0, fmt.Errorf("ms must evaluate to a number, got %T", v)
+	}
+	if ms < 0 {
+		return 0, fmt.Errorf("ms must be non-negative, got %d", ms)
+	}
+	return ms, nil
 }
 
 // audit appends one event to the instance's persistent execution log. It is
@@ -731,7 +841,7 @@ func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error 
 	inst.Status = model.StatusFailed
 	inst.WaitState = model.WaitStateNone
 	inst.Error = reason
-	inst.NextRetryAt = nil
+	inst.WakeAt = nil
 	e.log.Error("instance failed", "id", inst.ID, "reason", reason)
 	e.audit(inst, model.LogError, model.EventInstanceFailed, "", reason, "", nil)
 	return e.saveAndNotify(inst)
@@ -740,7 +850,12 @@ func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error 
 func (e *Engine) cancelInstance(inst *model.ProcessInstance) error {
 	inst.Status = model.StatusCancelled
 	inst.WaitState = model.WaitStateNone
-	inst.NextRetryAt = nil
+	// A retry-backoff parks with RetryCount > 0; clear its timer so a later retry
+	// runs immediately. A delay parks with RetryCount == 0; keep wake_at so the
+	// retry resumes toward the delay's original deadline.
+	if inst.RetryCount > 0 {
+		inst.WakeAt = nil
+	}
 	e.log.Info("instance cancelled", "id", inst.ID)
 	e.audit(inst, model.LogInfo, model.EventCancelled, "", "", "", nil)
 	return e.saveAndNotify(inst)
@@ -752,7 +867,7 @@ func (e *Engine) cancelInstance(inst *model.ProcessInstance) error {
 func (e *Engine) settleFailing(inst *model.ProcessInstance) error {
 	inst.Status = model.StatusFailed
 	inst.WaitState = model.WaitStateNone
-	inst.NextRetryAt = nil
+	inst.WakeAt = nil
 	e.log.Info("instance settled as failed", "id", inst.ID, "reason", inst.Error)
 	e.audit(inst, model.LogInfo, model.EventInstanceSettled, "", inst.Error, "", nil)
 	return e.saveAndNotify(inst)
@@ -838,7 +953,7 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 	inst.ContextData["output_order"] = append(order, step.ID)
 
 	inst.RetryCount = 0
-	inst.NextRetryAt = nil
+	inst.WakeAt = nil
 
 	if err := e.db.SpawnChildrenAndWait(ctx, inst, children); err != nil {
 		return nil, true, e.failInstance(inst, fmt.Sprintf("step %q spawn: %v", step.ID, err))

@@ -57,7 +57,7 @@ type ProcessInstance struct {
 	CallStack []string
 
 	RetryCount    int
-	NextRetryAt   *time.Time
+	WakeAt   *time.Time
 	Status        Status
 	WaitState     WaitState
 	Error         string

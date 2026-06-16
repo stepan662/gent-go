@@ -18,10 +18,14 @@ func stepHasOutput(s *model.Step) bool {
 	if s.Action == nil {
 		return false
 	}
-	if s.Action.Type == model.ActionTypeChildParallel {
+	switch s.Action.Type {
+	case model.ActionTypeChildParallel:
 		return len(s.Action.Children) > 0
+	case model.ActionTypeSet:
+		return true // assign always emits outputs.<id> (from its values map)
+	default:
+		return s.Action.OutputSchema != nil
 	}
-	return s.Action.OutputSchema != nil
 }
 
 // outputContextSets returns which step outputs are required/optional at the

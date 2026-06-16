@@ -41,7 +41,7 @@ type ProcessInstance struct {
 	ParentID       string
 	CallStack      string
 	RetryCount     int64
-	NextRetryAt    sql.NullInt64
+	WakeAt         sql.NullInt64
 	Status         string
 	Error          string
 	CreatedAt      int64

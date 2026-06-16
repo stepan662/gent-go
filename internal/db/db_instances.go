@@ -14,7 +14,7 @@ import (
 // scanInstance reads them. Shared by the hand-written ClaimInstances and
 // RetryProcess queries so adding a column touches one place.
 const instanceColumns = `id, process_name, process_version, step_queue, context_data, parent_id,
-	call_stack, retry_count, next_retry_at, status, error,
+	call_stack, retry_count, wake_at, status, error,
 	created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id`
 
 // scanInstance reads one process_instances row (in instanceColumns order) from a
@@ -24,7 +24,7 @@ func scanInstance(s interface{ Scan(...any) error }) (dbgen.ProcessInstance, err
 	err := s.Scan(
 		&r.ID, &r.ProcessName, &r.ProcessVersion,
 		&r.StepQueue, &r.ContextData, &r.ParentID,
-		&r.CallStack, &r.RetryCount, &r.NextRetryAt,
+		&r.CallStack, &r.RetryCount, &r.WakeAt,
 		&r.Status, &r.Error, &r.CreatedAt, &r.UpdatedAt,
 		&r.WorkerID, &r.LeaseExpiresAt, &r.WaitState, &r.SpawnStepID,
 	)
@@ -56,7 +56,7 @@ func updateInstanceParams(inst *model.ProcessInstance, now int64) (dbgen.UpdateI
 		StepQueue:   queue,
 		ContextData: ctx,
 		RetryCount:  int64(inst.RetryCount),
-		NextRetryAt: fromTimePtr(inst.NextRetryAt),
+		WakeAt: fromTimePtr(inst.WakeAt),
 		Status:      string(inst.Status),
 		WaitState:   string(inst.WaitState),
 		Error:       inst.Error,
@@ -86,7 +86,7 @@ func insertInstanceParams(inst *model.ProcessInstance, status string, createdAt,
 		SpawnStepID:    inst.SpawnStepID,
 		CallStack:      string(callStack),
 		RetryCount:     int64(inst.RetryCount),
-		NextRetryAt:    fromTimePtr(inst.NextRetryAt),
+		WakeAt:    fromTimePtr(inst.WakeAt),
 		Status:         status,
 		WaitState:      string(inst.WaitState),
 		Error:          inst.Error,
@@ -130,7 +130,7 @@ func (db *DB) UpdateInstanceProgress(inst *model.ProcessInstance) error {
 		StepQueue:   queue,
 		ContextData: ctx,
 		RetryCount:  int64(inst.RetryCount),
-		NextRetryAt: fromTimePtr(inst.NextRetryAt),
+		WakeAt: fromTimePtr(inst.WakeAt),
 		WaitState:   string(inst.WaitState),
 		UpdatedAt:   nowMillis(),
 	})
@@ -199,7 +199,7 @@ func toInstance(r dbgen.ProcessInstance) (*model.ProcessInstance, error) {
 		Error:          r.Error,
 		CreatedAt:      toTime(r.CreatedAt),
 		UpdatedAt:      toTime(r.UpdatedAt),
-		NextRetryAt:    toTimePtr(r.NextRetryAt),
+		WakeAt:    toTimePtr(r.WakeAt),
 		WorkerID:       nullStringPtr(r.WorkerID),
 		LeaseExpiresAt: toTimePtr(r.LeaseExpiresAt),
 	}

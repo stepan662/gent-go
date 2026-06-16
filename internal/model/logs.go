@@ -28,6 +28,7 @@ const (
 	EventCancelled       = "instance_cancelled"
 	EventChildrenSpawned = "children_spawned"
 	EventChildrenCollect = "children_collected"
+	EventDelayArmed      = "delay_armed"
 )
 
 // LogEntry is one persisted line of an instance's execution audit trail.

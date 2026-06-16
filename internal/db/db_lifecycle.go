@@ -376,8 +376,17 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 		node.Status = model.StatusRunning
 		node.WaitState = newWaitState
 		node.Error = ""
-		node.RetryCount = 0
-		node.NextRetryAt = nil
+		// Keep RetryCount (don't reset): a manual retry is a human-in-the-loop action,
+		// so the failing step — its on_error budget already spent — runs once and
+		// surfaces any failure immediately instead of grinding through more backoffs the
+		// operator can't observe. They diagnose, fix, and retry again.
+		//
+		// RetryCount also tells the two timer kinds apart: a retry-backoff parks with
+		// RetryCount > 0 (clear it so the retry runs now); a delay parks with
+		// RetryCount == 0 (keep wake_at so the delay resumes toward its deadline).
+		if node.RetryCount > 0 {
+			node.WakeAt = nil
+		}
 		dirty = append(dirty, node)
 		return nil
 	}
@@ -392,8 +401,8 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 			ID:          node.ID,
 			StepQueue:   raw.StepQueue,
 			ContextData: raw.ContextData,
-			RetryCount:  0,
-			NextRetryAt: sql.NullInt64{},
+			RetryCount:  int64(node.RetryCount),
+			WakeAt: fromTimePtr(node.WakeAt),
 			Status:      string(node.Status),
 			WaitState:   string(node.WaitState),
 			Error:       "",
@@ -464,7 +473,7 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 		StepQueue:   parentQueue,
 		ContextData: parentCtx,
 		RetryCount:  int64(parent.RetryCount),
-		NextRetryAt: sql.NullInt64{},
+		WakeAt: sql.NullInt64{},
 		Status:      currentStatus,
 		WaitState:   string(model.WaitStateWaiting),
 		Error:       parent.Error,

@@ -70,6 +70,44 @@ func TestEvaluator_EvalBool_WithSelf(t *testing.T) {
 	}
 }
 
+func TestEvalDurationMs(t *testing.T) {
+	ctx := map[string]any{
+		"input":   map[string]any{"interval": 4500},
+		"outputs": map[string]any{"poll": map[string]any{"retry_after": 250}},
+	}
+	tests := []struct {
+		name    string
+		expr    string
+		want    int64
+		wantErr bool
+	}{
+		{"bare literal", "30000", 30000, false},
+		{"template literal", "{{ 5000 }}", 5000, false},
+		{"template arithmetic", "{{ 1000 + 2000 }}", 3000, false},
+		{"template field", "{{ input.interval }}", 4500, false},
+		{"template nested field", "{{ outputs.poll.retry_after }}", 250, false},
+		{"non-numeric string", "abc", 0, true},
+		{"negative", "{{ 0 - 5 }}", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := evalDurationMs(tt.expr, ctx)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("evalDurationMs(%q) = %d, want error", tt.expr, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("evalDurationMs(%q) unexpected error: %v", tt.expr, err)
+			}
+			if got != tt.want {
+				t.Errorf("evalDurationMs(%q) = %d, want %d", tt.expr, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsRetryAllowed(t *testing.T) {
 	bp := func(b bool) *bool { return &b }
 

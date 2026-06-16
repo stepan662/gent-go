@@ -54,9 +54,15 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 	ctx := context.Background()
 
 	// Shared claimable predicate. The two `?` are both `now` (retry timer, lease expiry).
+	//
+	// A doomed instance ('failing'/'cancelling') is drained immediately, ignoring
+	// wake_at: it will never run its pending step again, so there is no point
+	// waiting out a delay or retry-backoff timer before settling it. Only a healthy
+	// 'running' instance honours its timer. This is what lets a cancel take effect
+	// promptly on an instance parked in a delay, without mutating wake_at.
 	const where = `status IN ('running', 'failing', 'cancelling')
 			  AND wait_state <> 'waiting'
-			  AND (next_retry_at IS NULL OR next_retry_at <= ?)
+			  AND (status IN ('failing', 'cancelling') OR wake_at IS NULL OR wake_at <= ?)
 			  AND (worker_id IS NULL OR lease_expires_at <= ?)`
 
 	if db.dialect == "postgres" {
@@ -89,7 +95,7 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 			if err := rows.Scan(
 				&r.ID, &r.ProcessName, &r.ProcessVersion,
 				&r.StepQueue, &r.ContextData, &r.ParentID,
-				&r.CallStack, &r.RetryCount, &r.NextRetryAt,
+				&r.CallStack, &r.RetryCount, &r.WakeAt,
 				&r.Status, &r.Error, &r.CreatedAt, &r.UpdatedAt,
 				&r.WorkerID, &r.LeaseExpiresAt, &r.WaitState, &r.SpawnStepID,
 				&prevWorker,

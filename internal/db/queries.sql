@@ -62,11 +62,11 @@ ORDER BY pc.name;
 -- name: InsertInstance :exec
 INSERT INTO process_instances
     (id, process_name, process_version, step_queue, context_data, parent_id, spawn_step_id,
-     call_stack, retry_count, next_retry_at, status, wait_state, error, created_at, updated_at)
+     call_stack, retry_count, wake_at, status, wait_state, error, created_at, updated_at)
 VALUES
     (sqlc.arg(id), sqlc.arg(process_name), sqlc.arg(process_version),
      sqlc.arg(step_queue), sqlc.arg(context_data), sqlc.arg(parent_id), sqlc.arg(spawn_step_id),
-     sqlc.arg(call_stack), sqlc.arg(retry_count), sqlc.arg(next_retry_at),
+     sqlc.arg(call_stack), sqlc.arg(retry_count), sqlc.arg(wake_at),
      sqlc.arg(status), sqlc.arg(wait_state), sqlc.arg(error), sqlc.arg(created_at), sqlc.arg(updated_at));
 
 -- name: UpdateInstance :exec
@@ -74,7 +74,7 @@ UPDATE process_instances
 SET step_queue       = sqlc.arg(step_queue),
     context_data     = sqlc.arg(context_data),
     retry_count      = sqlc.arg(retry_count),
-    next_retry_at    = sqlc.arg(next_retry_at),
+    wake_at    = sqlc.arg(wake_at),
     status           = sqlc.arg(status),
     wait_state       = sqlc.arg(wait_state),
     error            = sqlc.arg(error),
@@ -88,7 +88,7 @@ UPDATE process_instances
 SET step_queue       = sqlc.arg(step_queue),
     context_data     = sqlc.arg(context_data),
     retry_count      = sqlc.arg(retry_count),
-    next_retry_at    = sqlc.arg(next_retry_at),
+    wake_at    = sqlc.arg(wake_at),
     wait_state       = sqlc.arg(wait_state),
     updated_at       = sqlc.arg(updated_at),
     worker_id        = NULL,
@@ -97,7 +97,7 @@ WHERE id = sqlc.arg(id);
 
 -- name: GetInstance :one
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
-       call_stack, retry_count, next_retry_at, status, error,
+       call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 WHERE id = sqlc.arg(id);
@@ -105,7 +105,7 @@ WHERE id = sqlc.arg(id);
 -- name: ListInstances :many
 -- Empty status lists every instance; a non-empty status filters to it.
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
-       call_stack, retry_count, next_retry_at, status, error,
+       call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 WHERE (sqlc.arg(status) = '' OR status = sqlc.arg(status))
@@ -144,7 +144,7 @@ WHERE id = sqlc.arg(id);
 
 -- name: GetChildrenForStep :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
-       call_stack, retry_count, next_retry_at, status, error,
+       call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 WHERE parent_id = sqlc.arg(parent_id)

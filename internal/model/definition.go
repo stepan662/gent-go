@@ -29,6 +29,8 @@ const (
 	ActionTypeScript        ActionType = "script"
 	ActionTypeChild         ActionType = "child"
 	ActionTypeChildParallel ActionType = "child_parallel"
+	ActionTypeDelay         ActionType = "delay"
+	ActionTypeSet           ActionType = "assign"
 )
 
 // ChildEntry describes a single named child process in a "child_parallel" call.
@@ -44,6 +46,8 @@ type ChildEntry struct {
 //   - "script":         Exec (required), OutputSchema (optional)
 //   - "child":          Name (required), Input (optional), OutputSchema (optional) — single child process
 //   - "child_parallel": Children (required, keyed map) — concurrent named child processes
+//   - "delay":          Ms (required) — pauses the instance for a duration without holding a worker, then routes via switch
+//   - "assign":         Values (required) — computes values from expressions and stores them as this step's output; no external call
 //
 // OutputSchema (rest/script/child): when set, the response body is validated and stored in
 // context as outputs.stepID. Without it the body is available only as "self" in this step's switch.
@@ -60,6 +64,8 @@ type Action struct {
 	Version        int                    `json:"version,omitempty"`         // child
 	Input          map[string]string      `json:"input,omitempty"`           // child
 	Children       map[string]ChildEntry  `json:"children,omitempty"`        // child_parallel
+	Ms             string                 `json:"ms,omitempty"`              // delay: milliseconds to pause, as an expression
+	Values         map[string]string      `json:"values,omitempty"`          // assign: output field name -> expression
 }
 
 // JSONSchemaBytes returns the JSON Schema for Action as a discriminated union
@@ -127,6 +133,27 @@ func (Action) JSONSchemaBytes() ([]byte, error) {
 					}
 				},
 				"required": ["type", "children"],
+				"additionalProperties": false
+			},
+			{
+				"type": "object",
+				"description": "Delay action — pauses the instance for a duration without holding a worker, then routes via switch.",
+				"properties": {
+					"type": {"type": "string", "const": "delay"},
+					"ms":   {"type": "string", "description": "Milliseconds to pause, as an expression: a literal such as 30000 or a template such as {{ outputs.x.retry_after }}."}
+				},
+				"required": ["type", "ms"],
+				"additionalProperties": false
+			},
+			{
+				"type": "object",
+				"description": "Assign action — computes values from expressions and stores them as this step's output (outputs.stepID), readable by later steps. No external call.",
+				"properties": {
+					"type":   {"type": "string", "const": "assign"},
+					"values": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Map of output field name to an expression evaluated against the current context."},
+					"output_schema": {"type": "object", "additionalProperties": true, "description": "Optional JSON Schema to validate the assigned object."}
+				},
+				"required": ["type", "values"],
 				"additionalProperties": false
 			}
 		],
@@ -404,8 +431,16 @@ func validateStep(s *Step, stepIDs map[string]struct{}, stepIdx, lastIdx int) er
 					return fmt.Errorf("step %q: action.children[%q].name is required", s.ID, key)
 				}
 			}
+		case ActionTypeDelay:
+			if s.Action.Ms == "" {
+				return fmt.Errorf("step %q: action.ms is required for type %q", s.ID, s.Action.Type)
+			}
+		case ActionTypeSet:
+			if len(s.Action.Values) == 0 {
+				return fmt.Errorf("step %q: action.values is required for type %q", s.ID, s.Action.Type)
+			}
 		default:
-			return fmt.Errorf("step %q: action.type must be one of: rest, script, child, child_parallel", s.ID)
+			return fmt.Errorf("step %q: action.type must be one of: rest, script, child, child_parallel, delay, assign", s.ID)
 		}
 	}
 

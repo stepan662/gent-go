@@ -230,7 +230,7 @@ func (q *Queries) GetChannel(ctx context.Context, arg GetChannelParams) (int64, 
 
 const getChildrenForStep = `-- name: GetChildrenForStep :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
-       call_stack, retry_count, next_retry_at, status, error,
+       call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 WHERE parent_id = ?1
@@ -260,7 +260,7 @@ func (q *Queries) GetChildrenForStep(ctx context.Context, arg GetChildrenForStep
 			&i.ParentID,
 			&i.CallStack,
 			&i.RetryCount,
-			&i.NextRetryAt,
+			&i.WakeAt,
 			&i.Status,
 			&i.Error,
 			&i.CreatedAt,
@@ -336,7 +336,7 @@ func (q *Queries) GetDependencyVersion(ctx context.Context, arg GetDependencyVer
 
 const getInstance = `-- name: GetInstance :one
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
-       call_stack, retry_count, next_retry_at, status, error,
+       call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 WHERE id = ?1
@@ -354,7 +354,7 @@ func (q *Queries) GetInstance(ctx context.Context, id string) (ProcessInstance, 
 		&i.ParentID,
 		&i.CallStack,
 		&i.RetryCount,
-		&i.NextRetryAt,
+		&i.WakeAt,
 		&i.Status,
 		&i.Error,
 		&i.CreatedAt,
@@ -432,7 +432,7 @@ func (q *Queries) InsertDependency(ctx context.Context, arg InsertDependencyPara
 const insertInstance = `-- name: InsertInstance :exec
 INSERT INTO process_instances
     (id, process_name, process_version, step_queue, context_data, parent_id, spawn_step_id,
-     call_stack, retry_count, next_retry_at, status, wait_state, error, created_at, updated_at)
+     call_stack, retry_count, wake_at, status, wait_state, error, created_at, updated_at)
 VALUES
     (?1, ?2, ?3,
      ?4, ?5, ?6, ?7,
@@ -450,7 +450,7 @@ type InsertInstanceParams struct {
 	SpawnStepID    string
 	CallStack      string
 	RetryCount     int64
-	NextRetryAt    sql.NullInt64
+	WakeAt         sql.NullInt64
 	Status         string
 	WaitState      string
 	Error          string
@@ -469,7 +469,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 		arg.SpawnStepID,
 		arg.CallStack,
 		arg.RetryCount,
-		arg.NextRetryAt,
+		arg.WakeAt,
 		arg.Status,
 		arg.WaitState,
 		arg.Error,
@@ -596,7 +596,7 @@ func (q *Queries) ListDefinitions(ctx context.Context) ([]ProcessDefinition, err
 
 const listInstances = `-- name: ListInstances :many
 SELECT id, process_name, process_version, step_queue, context_data, parent_id,
-       call_stack, retry_count, next_retry_at, status, error,
+       call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
 FROM process_instances
 WHERE (?1 = '' OR status = ?1)
@@ -622,7 +622,7 @@ func (q *Queries) ListInstances(ctx context.Context, status interface{}) ([]Proc
 			&i.ParentID,
 			&i.CallStack,
 			&i.RetryCount,
-			&i.NextRetryAt,
+			&i.WakeAt,
 			&i.Status,
 			&i.Error,
 			&i.CreatedAt,
@@ -781,7 +781,7 @@ UPDATE process_instances
 SET step_queue       = ?1,
     context_data     = ?2,
     retry_count      = ?3,
-    next_retry_at    = ?4,
+    wake_at    = ?4,
     status           = ?5,
     wait_state       = ?6,
     error            = ?7,
@@ -795,7 +795,7 @@ type UpdateInstanceParams struct {
 	StepQueue   string
 	ContextData string
 	RetryCount  int64
-	NextRetryAt sql.NullInt64
+	WakeAt      sql.NullInt64
 	Status      string
 	WaitState   string
 	Error       string
@@ -808,7 +808,7 @@ func (q *Queries) UpdateInstance(ctx context.Context, arg UpdateInstanceParams) 
 		arg.StepQueue,
 		arg.ContextData,
 		arg.RetryCount,
-		arg.NextRetryAt,
+		arg.WakeAt,
 		arg.Status,
 		arg.WaitState,
 		arg.Error,
@@ -823,7 +823,7 @@ UPDATE process_instances
 SET step_queue       = ?1,
     context_data     = ?2,
     retry_count      = ?3,
-    next_retry_at    = ?4,
+    wake_at    = ?4,
     wait_state       = ?5,
     updated_at       = ?6,
     worker_id        = NULL,
@@ -835,7 +835,7 @@ type UpdateInstanceProgressParams struct {
 	StepQueue   string
 	ContextData string
 	RetryCount  int64
-	NextRetryAt sql.NullInt64
+	WakeAt      sql.NullInt64
 	WaitState   string
 	UpdatedAt   int64
 	ID          string
@@ -846,7 +846,7 @@ func (q *Queries) UpdateInstanceProgress(ctx context.Context, arg UpdateInstance
 		arg.StepQueue,
 		arg.ContextData,
 		arg.RetryCount,
-		arg.NextRetryAt,
+		arg.WakeAt,
 		arg.WaitState,
 		arg.UpdatedAt,
 		arg.ID,
