@@ -300,6 +300,83 @@ func TestGenerate_CrossStepMutualRecursion(t *testing.T) {
 	assertJSON(t, out.Defs["start_output"], `{"type":"object","properties":{"num":{"type":["integer","null"]}},"required":["num"]}`)
 }
 
+func TestGenerate_SelfNamespaceScoping(t *testing.T) {
+	// The three `self` sub-namespaces are scoped to their phase: an output map
+	// sees self.result / self.previous; a switch sees only self.output. Crossing
+	// the boundary — or projecting a field from an untyped raw result — is an error.
+	cases := []struct {
+		name string
+		def  string
+	}{
+		{"self.result in a switch", `{"name":"p","steps":[
+			{"id":"s","action":{"type":"rest","endpoint":"http://x","output_schema":{"type":"object","properties":{"x":{"type":"boolean"}},"required":["x"]}},
+			 "switch":[{"case":"self.result.x","goto":"end"},{"goto":"end"}]}]}`},
+		{"self.previous in a switch", `{"name":"p","steps":[
+			{"id":"loop","output":{"n":"{{ (self.previous.n ?? 0) + 1 }}"},
+			 "switch":[{"case":"self.previous.n < 3","goto":"$loop"},{"goto":"end"}]}]}`},
+		{"self.output in an output map", `{"name":"p","steps":[
+			{"id":"s","action":{"type":"rest","endpoint":"http://x","output_schema":{"type":"object","properties":{"x":{"type":"boolean"}},"required":["x"]}},
+			 "output":{"y":"{{ self.output.x }}"},"switch":[{"goto":"end"}]}]}`},
+		{"self.result.field without output_schema", `{"name":"p","steps":[
+			{"id":"s","action":{"type":"rest","endpoint":"http://x"},"output":{"id":"{{ self.result.job_id }}"},"switch":[{"goto":"end"}]}]}`},
+	}
+	for _, c := range cases {
+		if err := runGenerateErr(t, c.def); err == nil {
+			t.Errorf("%s: expected error, got nil", c.name)
+		}
+	}
+}
+
+func TestGenerate_ThreeStepMutualRecursion(t *testing.T) {
+	// A three-node output cycle (a reads c, b reads a, c reads b; closed by a goto
+	// loop a->b->c->a) — exercises the joint SCC fixpoint beyond two members. c is
+	// the base case (?? 0) so resolves to a plain integer; a and b mirror through
+	// the cycle and are nullable (null before the cycle has produced a value).
+	out := runGenerate(t, `{
+		"name": "p",
+		"input_schema": {"type":"object","properties":{"ttl":{"type":"integer"}},"required":["ttl"]},
+		"steps": [
+			{"id":"a","output":{"n":"{{ outputs.c.n }}"},"switch":"next"},
+			{"id":"b","output":{"n":"{{ outputs.a.n }}"},"switch":"next"},
+			{"id":"c","output":{"n":"{{ (outputs.b.n ?? 0) + 1 }}"},
+			 "switch":[{"case":"self.output.n < input.ttl","goto":"$a"},{"goto":"end"}]}
+		]
+	}`)
+	assertJSON(t, out.Defs["c_output"], `{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]}`)
+	assertJSON(t, out.Defs["a_output"], `{"type":"object","properties":{"n":{"type":["integer","null"]}},"required":["n"]}`)
+	assertJSON(t, out.Defs["b_output"], `{"type":"object","properties":{"n":{"type":["integer","null"]}},"required":["n"]}`)
+}
+
+func TestGenerate_ForwardCrossStepRefRequiresCycle(t *testing.T) {
+	// a reads outputs.b, but b runs strictly after a and never loops back — b is not
+	// a predecessor of a, so its output is unavailable. The cross-step analogue of
+	// the self-reference-requires-loop rule.
+	def := `{"name":"p","steps":[
+		{"id":"a","output":{"n":"{{ outputs.b.n }}"},"switch":"next"},
+		{"id":"b","output":{"n":"{{ 1 }}"},"switch":[{"goto":"end"}]}
+	]}`
+	if err := runGenerateErr(t, def); err == nil {
+		t.Error("expected error: a cannot read outputs.b when b is not its predecessor")
+	}
+}
+
+func TestGenerate_AcyclicOutputChain(t *testing.T) {
+	// A linear chain of output-map steps (first -> second -> third), each reading the
+	// previous one's output. No cycle, so Tarjan emits singletons in dependency order
+	// and each finalizes (non-null) before the next reads it.
+	out := runGenerate(t, `{
+		"name": "p",
+		"steps": [
+			{"id":"first","output":{"n":"{{ 1 }}"},"switch":"next"},
+			{"id":"second","output":{"n":"{{ outputs.first.n + 1 }}"},"switch":"next"},
+			{"id":"third","output":{"n":"{{ outputs.second.n + 1 }}"},"switch":[{"goto":"end"}]}
+		]
+	}`)
+	for _, id := range []string{"first_output", "second_output", "third_output"} {
+		assertJSON(t, out.Defs[id], `{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]}`)
+	}
+}
+
 func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
 	// A later step's switch routes on a prior step's output (outputs.<priorStep>),
 	// type-checked against that step's declared output schema.
