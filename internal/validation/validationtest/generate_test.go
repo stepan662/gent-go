@@ -74,7 +74,7 @@ func TestGenerate_FlatStepsWithOutputs(t *testing.T) {
 			{
 				"id": "charge",
 				"action": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "charged": { "type": "boolean" } } }},
-				"switch": [{"case": "self.charged == true", "goto": "$ship"}, {"goto": "$refund"}]
+				"switch": [{"case": "self.output.charged == true", "goto": "$ship"}, {"goto": "$refund"}]
 			},
 			{
 				"id": "ship",

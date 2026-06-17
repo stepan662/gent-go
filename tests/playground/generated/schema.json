@@ -7,13 +7,10 @@
     "$ref": "#/$defs/output"
   },
   "tasks": {
-    "recursion": {
-      "action_type": "child",
-      "input": {
-        "type": "object"
-      },
+    "loop": {
+      "action_type": "",
       "output": {
-        "$ref": "#/$defs/recursion_output"
+        "$ref": "#/$defs/loop_output"
       }
     }
   },
@@ -29,7 +26,7 @@
         "ttl"
       ]
     },
-    "output": {
+    "loop_output": {
       "type": "object",
       "properties": {
         "num": {
@@ -40,7 +37,7 @@
         "num"
       ]
     },
-    "recursion_output": {
+    "output": {
       "type": "object",
       "properties": {
         "num": {

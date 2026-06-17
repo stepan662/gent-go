@@ -29,6 +29,16 @@ func evalAny(expression string, contextData map[string]any) (any, error) {
 	return result, nil
 }
 
+// evalWithSelf evaluates a template expression with a self object exposed (used
+// by output maps, where self = {result, previous}).
+func evalWithSelf(expression string, contextData map[string]any, self any) (any, error) {
+	result, err := tmpl.EvalAny(expression, evalEnv(contextData, self))
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w", expression, err)
+	}
+	return result, nil
+}
+
 func evalBool(expr string, contextData map[string]any, self any) (bool, error) {
 	result, err := expression.Eval(expr, evalEnv(contextData, self))
 	if err != nil {

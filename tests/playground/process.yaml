@@ -7,24 +7,14 @@ input_schema:
       type: integer
   required: [ ttl ]
 steps:
-  - id: switch
+  - id: start
+    switch: next
+
+  - id: loop
+    output:
+      num: "{{ (self.previous.num ?? 0) + 1 }}"
     switch:
-      - case: "input.ttl > 0"
-        goto: $recursion
       - goto: end
 
-  - id: recursion
-    action:
-      type: child
-      name: order-pipeline
-      input:
-        ttl: "{{ input.ttl - 1 }}"
-      output_schema:
-        type: object
-        properties:
-          num:
-            type: integer
-        required: [num]
-    switch: end
 output:
-  num: "{{ (outputs.recursion.num ?? 0) + 1 }}"
+  num: "{{ outputs.loop.num }}"

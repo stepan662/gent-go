@@ -114,9 +114,14 @@ func collectNamedOutputs(steps []*model.Step, named map[string]*schema.SchemaNod
 		if !stepHasOutput(s) {
 			continue
 		}
-		if s.Action.Type == model.ActionTypeChildParallel {
+		switch {
+		case len(s.Output) > 0:
+			// Inferred during the per-step walk (it may be recursive); a permissive
+			// placeholder holds the $defs slot until then.
+			named[s.ID+"_output"] = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
+		case s.Action.Type == model.ActionTypeChildParallel:
 			named[s.ID+"_output"] = childParallelOutputSchema(s)
-		} else {
+		default:
 			named[s.ID+"_output"] = s.Action.OutputSchema
 		}
 	}
@@ -124,9 +129,14 @@ func collectNamedOutputs(steps []*model.Step, named map[string]*schema.SchemaNod
 
 func collectTaskRefs(steps []*model.Step, out map[string]TaskSchemas) {
 	for _, s := range steps {
-		if stepHasOutput(s) {
-			out[s.ID] = TaskSchemas{ActionType: s.Action.Type, Output: schemaRef(s.ID + "_output")}
+		if !stepHasOutput(s) {
+			continue
 		}
+		var at model.ActionType // empty for a no-action step whose output comes from its output map
+		if s.Action != nil {
+			at = s.Action.Type
+		}
+		out[s.ID] = TaskSchemas{ActionType: at, Output: schemaRef(s.ID + "_output")}
 	}
 }
 

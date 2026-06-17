@@ -5,8 +5,6 @@ export interface ProcessInput {
   ttl: number;
 }
 
-export interface RecursionInput {}
-
-export interface RecursionOutput {
+export interface LoopOutput {
   num: number;
 }

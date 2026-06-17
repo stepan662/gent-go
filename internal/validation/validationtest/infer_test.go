@@ -250,8 +250,8 @@ func TestGenerate_Switch_SelfExpressionTypeChecked(t *testing.T) {
 					"required": ["charged"]
 				}},
 				"switch": [
-					{"case": "self.charged == true", "goto": "$ship"},
-					{"case": "self.charged == false", "goto": "$refund"}
+					{"case": "self.output.charged == true", "goto": "$ship"},
+					{"case": "self.output.charged == false", "goto": "$refund"}
 				]
 			},
 			{ "id": "ship",   "action": {"type": "rest", "endpoint": "http://x"} },
@@ -261,7 +261,28 @@ func TestGenerate_Switch_SelfExpressionTypeChecked(t *testing.T) {
 	assertJSON(t, out.Tasks["charge"].Output, `{"$ref": "#/$defs/charge_output"}`)
 }
 
+func TestGenerate_CrossStepMutualRecursion(t *testing.T) {
+	// start and loop reference each other's output through a goto loop — a
+	// cross-step (mutual) recursion. The joint SCC fixpoint resolves both: loop's
+	// output is a plain integer; start mirrors loop and is nullable (null before
+	// loop has run on the first pass).
+	out := runGenerate(t, `{
+		"name": "order-pipeline",
+		"input_schema": {"type":"object","properties":{"ttl":{"type":"integer"}},"required":["ttl"]},
+		"steps": [
+			{"id":"start","output":{"num":"{{ outputs.loop.num }}"},"switch":"next"},
+			{"id":"loop","output":{"num":"{{ (outputs.start.num ?? 0) + 1 }}"},
+			 "switch":[{"case":"self.output.num < input.ttl","goto":"$start"},{"goto":"end"}]}
+		],
+		"output":{"num":"{{ outputs.start.num }}"}
+	}`)
+	assertJSON(t, out.Defs["loop_output"], `{"type":"object","properties":{"num":{"type":"integer"}},"required":["num"]}`)
+	assertJSON(t, out.Defs["start_output"], `{"type":"object","properties":{"num":{"type":["integer","null"]}},"required":["num"]}`)
+}
+
 func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
+	// A later step's switch routes on a prior step's output (outputs.<priorStep>),
+	// type-checked against that step's declared output schema.
 	runGenerate(t, `{
 		"name": "p",
 		"steps": [
@@ -272,7 +293,11 @@ func TestGenerate_Switch_OutputsExpressionTypeChecked(t *testing.T) {
 					"properties": { "charged": { "type": "boolean" } },
 					"required": ["charged"]
 				}},
-				"switch": [{"case": "outputs.charge.charged == true", "goto": "$notify"}]
+				"switch": "next"
+			},
+			{
+				"id": "decide",
+				"switch": [{"case": "outputs.charge.charged == true", "goto": "$notify"}, {"goto": "end"}]
 			},
 			{ "id": "notify", "action": {"type": "rest", "endpoint": "http://x"} }
 		]
@@ -301,7 +326,7 @@ func TestGenerate_RecursiveStep_OwnOutputOptionalInParams(t *testing.T) {
 				"tasks": "{{input.tasks}}",
 				"task_index": "{{outputs.loop.finished_index ? outputs.loop.finished_index : 0}}"
 			},
-			"switch": [{"case": "!self.done", "goto": "$loop"}, {"goto": "end"}]
+			"switch": [{"case": "!self.output.done", "goto": "$loop"}, {"goto": "end"}]
 		}]
 	}`)
 	assertJSON(t, out.Tasks["loop"].Input, `{"$ref": "#/$defs/loop_input"}`)
@@ -324,7 +349,7 @@ func TestGenerate_SwitchStep_NextStepNotReachableViaFallthrough(t *testing.T) {
 			{
 				"id": "decide",
 				"action": {"type": "rest", "endpoint": "http://x", "output_schema": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"] }},
-				"switch": [{"case": "self.ok", "goto": "$work"}, {"goto": "end"}]
+				"switch": [{"case": "self.output.ok", "goto": "$work"}, {"goto": "end"}]
 			},
 			{
 				"id": "work",
@@ -353,7 +378,7 @@ func TestGenerate_Switch_OneOfAllBooleanAccepted(t *testing.T) {
 				},
 				"required": ["ok"]
 			}},
-			"switch": [{"case": "self.ok", "goto": "$next"}, {"goto": "end"}]
+			"switch": [{"case": "self.output.ok", "goto": "$next"}, {"goto": "end"}]
 		},
 		{ "id": "next", "action": {"type": "rest", "endpoint": "http://x"} }]
 	}`)
@@ -413,7 +438,7 @@ func TestGenerate_Switch_StringExpressionRejectsNonBoolean(t *testing.T) {
 					"properties": { "label": { "type": "string" } },
 					"required": ["label"]
 				}},
-				"switch": [{"case": "self.label", "goto": "$next"}, {"goto": "end"}]
+				"switch": [{"case": "self.output.label", "goto": "$next"}, {"goto": "end"}]
 			},
 			{ "id": "next", "action": {"type": "rest", "endpoint": "http://x"} }
 		]

@@ -112,7 +112,7 @@ func TestGenerate_ContextSets_DefaultEndSwitch_SuccessorRequiredNotOptional(t *t
 					"properties": { "ok": { "type": "boolean" } },
 					"required": ["ok"]
 				}},
-				"switch": [{"case": "self.ok", "goto": "$work"}, {"goto": "end"}]
+				"switch": [{"case": "self.output.ok", "goto": "$work"}, {"goto": "end"}]
 			},
 			{
 				"id": "work",

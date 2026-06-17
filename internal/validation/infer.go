@@ -15,14 +15,23 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 		return err
 	}
 	required, optional, mustErr, mayErr := computeContextSets(steps)
+
+	// Phase 1: infer every output-map step's exported type, in dependency order
+	// (mutually-recursive steps resolved jointly), writing each to defs so the
+	// switches and later steps below see the final types.
+	if err := inferOutputs(steps, tasks, processInput, defs, required, optional, mustErr, mayErr); err != nil {
+		return err
+	}
+
+	// Phase 2: action inputs (params) and switch type-checks.
 	for _, s := range steps {
 		if s.Action != nil {
-			ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
-			if len(defs) > 0 {
-				ctx = withDefs(ctx, defs)
-			}
 			ts, inMap := tasks[s.ID]
 			if inMap || len(s.Params) > 0 {
+				ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
+				if len(defs) > 0 {
+					ctx = withDefs(ctx, defs)
+				}
 				input, err := inferInput(s, ctx, defs)
 				if err != nil {
 					return err
@@ -36,20 +45,8 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 		}
 
 		if len(s.Switch) > 0 {
-			req := required[s.ID]
-			opt := optional[s.ID]
-			if stepHasOutput(s) {
-				req = append(req, s.ID)
-				var filtered []string
-				for _, id := range opt {
-					if id != s.ID {
-						filtered = append(filtered, id)
-					}
-				}
-				opt = filtered
-			}
-			switchCtx := contextSchema(req, opt, tasks, processInput, mustErr[s.ID], mayErr[s.ID])
-			if s.Action != nil {
+			switchCtx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
+			if s.Action != nil || len(s.Output) > 0 {
 				switchCtx = addSelfSchema(switchCtx, s)
 			}
 			if len(defs) > 0 {
@@ -155,23 +152,85 @@ func contextSchema(preceding []string, optional []string, tasks map[string]TaskS
 	}
 }
 
+// addSelfSchema gives the switch context self.output — the step's final output
+// (the remapped output map result, the action's output_schema, or a permissive
+// object for an untyped raw result). The switch never sees the intermediate
+// self.result. self.output resolves through $defs[<id>_output], which holds the
+// inferred output-map type (filled earlier in the walk) or the declared schema.
 func addSelfSchema(ctx *schema.SchemaNode, s *model.Step) *schema.SchemaNode {
-	var selfSchema *schema.SchemaNode
-	if s.Action != nil {
-		selfSchema = s.Action.OutputSchema
+	var outputType *schema.SchemaNode
+	if stepHasOutput(s) {
+		outputType = schemaRef(s.ID + "_output")
+	} else {
+		outputType = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
 	}
-	if selfSchema == nil {
-		selfSchema = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
+	self := &schema.SchemaNode{
+		Type:       schema.SchemaType{"object"},
+		Properties: map[string]*schema.SchemaNode{"output": outputType},
+		Required:   []string{"output"},
 	}
-	// Shallow-copy ctx and its Properties map to avoid mutating shared nodes.
 	n := *ctx
 	newProps := make(map[string]*schema.SchemaNode, len(ctx.Properties)+1)
 	for k, v := range ctx.Properties {
 		newProps[k] = v
 	}
-	newProps["self"] = selfSchema
+	newProps["self"] = self
 	n.Properties = newProps
 	n.Required = append(append([]string{}, ctx.Required...), "self")
+	return &n
+}
+
+// actionResultType is the type of a step's raw action result — self.result inside
+// an output map (typed by output_schema when present, else permissive; null for
+// delay or a no-action step).
+func actionResultType(s *model.Step) *schema.SchemaNode {
+	if s.Action == nil {
+		return &schema.SchemaNode{Type: schema.SchemaType{"null"}}
+	}
+	switch s.Action.Type {
+	case model.ActionTypeChildParallel:
+		return childParallelOutputSchema(s)
+	case model.ActionTypeDelay:
+		return &schema.SchemaNode{Type: schema.SchemaType{"null"}}
+	default:
+		if s.Action.OutputSchema != nil {
+			return s.Action.OutputSchema
+		}
+		return &schema.SchemaNode{Type: schema.SchemaType{"object"}}
+	}
+}
+
+// outputMapContext builds the context for inferring a step's output map: the base
+// context plus self.result (the raw action result), self.previous, and
+// outputs.<id> — the latter two both $refs to $defs[<id>_output], the recursive
+// placeholder the fixpoint drives.
+func outputMapContext(base *schema.SchemaNode, resultType *schema.SchemaNode, stepID string) *schema.SchemaNode {
+	selfRef := schemaRef(stepID + "_output")
+
+	outProps := map[string]*schema.SchemaNode{}
+	var outReq []string
+	if outs := base.Properties["outputs"]; outs != nil {
+		for k, v := range outs.Properties {
+			outProps[k] = v
+		}
+		outReq = outs.Required
+	}
+	outProps[stepID] = selfRef // the prior iteration's value (nullable), so not required
+
+	newProps := make(map[string]*schema.SchemaNode, len(base.Properties)+1)
+	for k, v := range base.Properties {
+		newProps[k] = v
+	}
+	newProps["outputs"] = &schema.SchemaNode{Type: schema.SchemaType{"object"}, Properties: outProps, Required: outReq}
+	newProps["self"] = &schema.SchemaNode{
+		Type:       schema.SchemaType{"object"},
+		Properties: map[string]*schema.SchemaNode{"result": resultType, "previous": selfRef},
+		Required:   []string{"result"},
+	}
+
+	n := *base
+	n.Properties = newProps
+	n.Required = append(append([]string{}, base.Required...), "self")
 	return &n
 }
 

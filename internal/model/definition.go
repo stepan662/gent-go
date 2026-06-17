@@ -316,6 +316,7 @@ type Step struct {
 	OnlyOnce  *bool             `json:"only_once,omitempty"                   description:"When true, the engine guarantees at-most-once execution: retries are only allowed for pre.* errors (remote never reached) or on_error rules with not_reached:true. Defaults to false (retryable)."`
 	OnError   []ErrorCase       `json:"on_error,omitempty"                    description:"Ordered error-routing rules evaluated when the call fails. First match wins."`
 	Params    map[string]string `json:"params,omitempty"                      description:"Expression map evaluated against the current context to build the call's input. Keys become input field names."`
+	Output    map[string]string `json:"output,omitempty"                      description:"Expression map that remaps this step's output. Evaluated against the context plus self.result (the action's raw result) and self.previous (this step's prior output). When set, only this remapped object is stored as outputs.stepID and seen by the switch as self.output; the raw result is not exported."`
 	Switch    SwitchMap         `json:"switch"                                description:"Required. Routing declaration: scalar shorthand (\"next\", \"end\", \"$step-id\") or an ordered list of conditional cases. The last case must be a catch-all (omit 'case')."`
 }
 

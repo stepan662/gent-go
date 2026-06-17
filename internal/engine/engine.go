@@ -386,7 +386,16 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 
 		step := inst.StepQueue[0]
 		hasCall := step.Action != nil
-		var selfOutput any
+		var actionResult any
+
+		// Capture this step's prior output before the action can overwrite it, so an
+		// output map may reference self.previous (the value from the last loop iteration).
+		var priorOutput any
+		if len(step.Output) > 0 {
+			if outs, ok := inst.ContextData["outputs"].(map[string]any); ok {
+				priorOutput = outs[step.ID]
+			}
+		}
 
 		if hasCall {
 			switch step.Action.Type {
@@ -395,23 +404,36 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 				if done || err != nil {
 					return err
 				}
-				selfOutput = out
+				actionResult = out
 			case model.ActionTypeDelay:
 				done, err := e.runDelay(inst, step)
 				if done || err != nil {
 					return err
 				}
-				// Timer fired: fall through to the switch with no self output.
+				// Timer fired: fall through to the switch with no action result.
 			default: // rest, script
 				out, done, err := e.executeAction(ctx, inst, step)
 				if done || err != nil {
 					return err
 				}
-				selfOutput = out
+				actionResult = out
 			}
 		}
 
-		gotoID, err := e.evalSwitch(inst, step, selfOutput)
+		// The step's output is the raw action result unless an output map remaps it.
+		// A remapped output is always exported (replaces outputs.stepID); the switch
+		// only ever sees the final output, as self.output.
+		stepOutput := actionResult
+		if len(step.Output) > 0 {
+			remapped, err := e.evalStepOutput(inst, step, actionResult, priorOutput)
+			if err != nil {
+				return e.failInstance(inst, fmt.Sprintf("step %q output: %v", step.ID, err))
+			}
+			e.setStepOutput(inst, step.ID, remapped)
+			stepOutput = remapped
+		}
+
+		gotoID, err := e.evalSwitch(inst, step, map[string]any{"output": stepOutput})
 		if err != nil {
 			return e.failInstance(inst, fmt.Sprintf("step %q switch: %v", step.ID, err))
 		}
@@ -545,6 +567,49 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	e.audit(inst, model.LogInfo, model.EventStepSucceeded, step.ID, "", "", okDetail)
 
 	return resp.Body, false, nil
+}
+
+// evalStepOutput evaluates a step's output map against the context plus self,
+// where self.result is the raw action result and self.previous is this step's
+// prior output (its value from the last loop iteration, or nil on the first run).
+func (e *Engine) evalStepOutput(inst *model.ProcessInstance, step *model.Step, result, previous any) (map[string]any, error) {
+	self := map[string]any{"result": result, "previous": previous}
+	obj := make(map[string]any, len(step.Output))
+	for name, expr := range step.Output {
+		val, err := evalWithSelf(expr, inst.ContextData, self)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", name, err)
+		}
+		obj[name] = val
+	}
+	return obj, nil
+}
+
+// setStepOutput stores value as the step's exported output (outputs.stepID),
+// recording the step in output_order the first time it produces output (a loop
+// re-execution overwrites the value without re-appending).
+func (e *Engine) setStepOutput(inst *model.ProcessInstance, stepID string, value any) {
+	if inst.ContextData["outputs"] == nil {
+		inst.ContextData["outputs"] = map[string]any{}
+	}
+	outs := inst.ContextData["outputs"].(map[string]any)
+	_, existed := outs[stepID]
+	outs[stepID] = value
+	if existed {
+		return
+	}
+	var order []string
+	switch v := inst.ContextData["output_order"].(type) {
+	case []string:
+		order = v
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				order = append(order, s)
+			}
+		}
+	}
+	inst.ContextData["output_order"] = append(order, stepID)
 }
 
 // evalSwitch walks the step's switch cases in order and returns the Goto target
