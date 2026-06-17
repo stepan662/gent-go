@@ -27,7 +27,7 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 	for _, s := range steps {
 		if s.Action != nil {
 			ts, inMap := tasks[s.ID]
-			if inMap || len(s.Params) > 0 {
+			if inMap || s.Params.Present() {
 				ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
 				if len(defs) > 0 {
 					ctx = withDefs(ctx, defs)
@@ -46,7 +46,7 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 
 		if len(s.Switch) > 0 {
 			switchCtx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
-			if s.Action != nil || len(s.Output) > 0 {
+			if s.Action != nil || s.Output.Present() {
 				switchCtx = addSelfSchema(switchCtx, s)
 			}
 			if len(defs) > 0 {
@@ -70,33 +70,46 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 }
 
 func inferInput(s *model.Step, ctx *schema.SchemaNode, defs map[string]*schema.SchemaNode) (*schema.SchemaNode, error) {
-	if len(s.Params) == 0 {
+	if !s.Params.Present() {
 		return &schema.SchemaNode{Type: schema.SchemaType{"object"}}, nil
 	}
 	if len(defs) > 0 {
 		ctx = withDefs(ctx, defs)
 	}
-	return inferObjectSchema(s.Params, ctx, func(name string) string {
-		return fmt.Sprintf("task %q param %q", s.ID, name)
-	})
+	return inferShape(s.Params.Raw, ctx, fmt.Sprintf("task %q params", s.ID))
 }
 
-func inferObjectSchema(exprs map[string]string, ctx *schema.SchemaNode, errFmt func(string) string) (*schema.SchemaNode, error) {
-	props := make(map[string]*schema.SchemaNode, len(exprs))
-	required := make([]string, 0, len(exprs))
-	for name, expr := range exprs {
-		inferred, err := template.InferType(expr, schema.FromNode(ctx))
+// inferShape infers the JSON Schema of a model.Shape value: a string leaf yields
+// its template's inferred type (which may be any shape), and an object yields an
+// object schema whose values are inferred recursively (all keys required). label
+// prefixes errors. The string|object grammar is enforced at unmarshal.
+func inferShape(node any, ctx *schema.SchemaNode, label string) (*schema.SchemaNode, error) {
+	switch n := node.(type) {
+	case string:
+		inferred, err := template.InferType(n, schema.FromNode(ctx))
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", errFmt(name), err)
+			return nil, fmt.Errorf("%s: %w", label, err)
 		}
-		props[name] = inferred.Node()
-		required = append(required, name)
+		return inferred.Node(), nil
+	case map[string]any:
+		props := make(map[string]*schema.SchemaNode, len(n))
+		required := make([]string, 0, len(n))
+		for name, child := range n {
+			p, err := inferShape(child, ctx, fmt.Sprintf("%s.%s", label, name))
+			if err != nil {
+				return nil, err
+			}
+			props[name] = p
+			required = append(required, name)
+		}
+		return &schema.SchemaNode{
+			Type:       schema.SchemaType{"object"},
+			Properties: props,
+			Required:   required,
+		}, nil
+	default:
+		return nil, fmt.Errorf("%s: invalid shape node %T", label, node)
 	}
-	return &schema.SchemaNode{
-		Type:       schema.SchemaType{"object"},
-		Properties: props,
-		Required:   required,
-	}, nil
 }
 
 func contextSchema(preceding []string, optional []string, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, errRequired, errOptional bool) *schema.SchemaNode {

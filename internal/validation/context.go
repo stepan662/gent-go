@@ -15,8 +15,8 @@ type predEdge struct {
 }
 
 func stepHasOutput(s *model.Step) bool {
-	if len(s.Output) > 0 {
-		return true // an output map always produces output, even with no action
+	if s.Output.Present() {
+		return true // an output shape always produces output, even with no action
 	}
 	if s.Action == nil {
 		return false

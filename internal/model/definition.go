@@ -36,7 +36,7 @@ const (
 type ChildEntry struct {
 	Name         string             `json:"name"                    description:"Name of the child process to invoke."`
 	Version      int                `json:"version,omitempty"       description:"Version to run; 0 means latest published version."`
-	Input        map[string]string  `json:"input,omitempty"         description:"Expression map evaluated against the current context to build the child's input payload."`
+	Input        *Shape             `json:"input,omitempty"         description:"Templated value (a string expression or nested object of expressions) evaluated against the current context to build the child's input payload."`
 	OutputSchema *schema.SchemaNode `json:"output_schema,omitempty" description:"JSON Schema to validate and expose this child's output."`
 }
 
@@ -60,7 +60,7 @@ type Action struct {
 	OutputSchema   *schema.SchemaNode     `json:"output_schema,omitempty"`   // rest/script/child: validate & persist output
 	Name           string                 `json:"name,omitempty"`            // child
 	Version        int                    `json:"version,omitempty"`         // child
-	Input          map[string]string      `json:"input,omitempty"`           // child
+	Input          *Shape                 `json:"input,omitempty"`           // child
 	Children       map[string]ChildEntry  `json:"children,omitempty"`        // child_parallel
 	Ms             string                 `json:"ms,omitempty"`              // delay: milliseconds to pause, as an expression
 }
@@ -101,7 +101,7 @@ func (Action) JSONSchemaBytes() ([]byte, error) {
 					"type":          {"type": "string", "const": "child"},
 					"name":          {"type": "string", "description": "Name of the child process to invoke."},
 					"version":       {"type": "integer", "description": "Version to run; 0 means latest published version."},
-					"input":         {"type": "object", "additionalProperties": {"type": "string"}, "description": "Expression map evaluated against the current context to build the child's input payload."},
+					"input":         {"$ref": "#/$defs/ModelShape", "description": "Templated value (string expression or nested object) evaluated against the current context to build the child's input payload."},
 					"output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist the child's output. Without it the output is not stored in context."}
 				},
 				"required": ["type", "name"],
@@ -120,7 +120,7 @@ func (Action) JSONSchemaBytes() ([]byte, error) {
 							"properties": {
 								"name":          {"type": "string", "description": "Name of the child process to invoke."},
 								"version":       {"type": "integer", "description": "Version to run; 0 means latest published version."},
-								"input":         {"type": "object", "additionalProperties": {"type": "string"}, "description": "Expression map evaluated against the current context to build the child's input payload."},
+								"input":         {"$ref": "#/$defs/ModelShape", "description": "Templated value (string expression or nested object) evaluated against the current context to build the child's input payload."},
 								"output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and expose this child's output."}
 							},
 							"required": ["name"],
@@ -243,6 +243,101 @@ func (SwitchMap) JSONSchemaBytes() ([]byte, error) {
 	}`), nil
 }
 
+// Shape is a templated value used by the data-shaping fields (params, output,
+// process output, child input). It is recursively either a string expression
+// (a {{ }} template — literal text, a single expression preserving type, or a
+// mixed string) or an object whose values are themselves Shapes:
+//
+//	type Shape = string | Record<string, Shape>
+//
+// Arrays and non-string literals are not allowed structurally — produce them
+// from an expression at a string leaf instead (e.g. "{{ 5 }}", "{{ [a, b] }}").
+// The authoring structure is string|object, but the evaluated/inferred value can
+// be any shape, because a string leaf may evaluate to any type.
+type Shape struct {
+	Raw any // string | map[string]any (recursively)
+}
+
+func (s *Shape) UnmarshalJSON(b []byte) error {
+	var raw any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if err := checkShape(raw); err != nil {
+		return fmt.Errorf("shape: %w", err)
+	}
+	s.Raw = raw
+	return nil
+}
+
+func (s Shape) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.Raw)
+}
+
+// Present reports whether the shape carries a value. Nil-safe so callers can
+// write step.Output.Present() without a separate nil check.
+func (s *Shape) Present() bool {
+	return s != nil && s.Raw != nil
+}
+
+// Strings returns every string leaf in the shape, used to collect outputs.<id>
+// references for the output-dependency graph.
+func (s *Shape) Strings() []string {
+	if s == nil {
+		return nil
+	}
+	var out []string
+	var walk func(any)
+	walk = func(n any) {
+		switch v := n.(type) {
+		case string:
+			out = append(out, v)
+		case map[string]any:
+			for _, c := range v {
+				walk(c)
+			}
+		}
+	}
+	walk(s.Raw)
+	return out
+}
+
+// JSONSchemaBytes exposes the recursive Shape schema (string | object of Shape)
+// so OpenAPI reflection produces the correct wire format. The self-reference uses
+// the JSON-Pointer to swaggest's generated def name (model.Shape -> "ModelShape").
+// This is correct for the process schema (defs under #/$defs/); the OpenAPI spec
+// builder rewrites #/$defs/ModelShape -> #/components/schemas/ModelShape.
+func (Shape) JSONSchemaBytes() ([]byte, error) {
+	return []byte(`{
+		"oneOf": [
+			{"type": "string", "description": "An expression / template ({{ ... }}) or a literal string."},
+			{
+				"type": "object",
+				"description": "Nested object; each value is recursively a Shape.",
+				"additionalProperties": {"$ref": "#/$defs/ModelShape"}
+			}
+		]
+	}`), nil
+}
+
+// checkShape enforces the string | Record<string, Shape> grammar recursively,
+// rejecting arrays and non-string scalar literals with a clear error.
+func checkShape(n any) error {
+	switch v := n.(type) {
+	case string:
+		return nil
+	case map[string]any:
+		for k, c := range v {
+			if err := checkShape(c); err != nil {
+				return fmt.Errorf("%q: %w", k, err)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("must be a string expression or a nested object, got %T", n)
+	}
+}
+
 // ErrorCase is a single error-routing rule evaluated when a step's call fails.
 // Rules are evaluated in order; the first match applies.
 // An empty Code list is a catch-all matching any error.
@@ -315,8 +410,8 @@ type Step struct {
 	TimeoutMs int               `json:"timeout_ms,omitempty"                  description:"Maximum execution time in milliseconds. 0 means no timeout."`
 	OnlyOnce  *bool             `json:"only_once,omitempty"                   description:"When true, the engine guarantees at-most-once execution: retries are only allowed for pre.* errors (remote never reached) or on_error rules with not_reached:true. Defaults to false (retryable)."`
 	OnError   []ErrorCase       `json:"on_error,omitempty"                    description:"Ordered error-routing rules evaluated when the call fails. First match wins."`
-	Params    map[string]string `json:"params,omitempty"                      description:"Expression map evaluated against the current context to build the call's input. Keys become input field names."`
-	Output    map[string]string `json:"output,omitempty"                      description:"Expression map that remaps this step's output. Evaluated against the context plus self.result (the action's raw result) and self.previous (this step's prior output). When set, only this remapped object is stored as outputs.stepID and seen by the switch as self.output; the raw result is not exported."`
+	Params    *Shape            `json:"params,omitempty"                      description:"Templated value (a string expression or nested object of expressions) evaluated against the current context to build the call's input."`
+	Output    *Shape            `json:"output,omitempty"                      description:"Templated value that remaps this step's output. Evaluated against the context plus self.result (the action's raw result) and self.previous (this step's prior output). When set, this value is stored as outputs.stepID and seen by the switch as self.output; the raw result is not exported."`
 	Switch    SwitchMap         `json:"switch"                                description:"Required. Routing declaration: scalar shorthand (\"next\", \"end\", \"$step-id\") or an ordered list of conditional cases. The last case must be a catch-all (omit 'case')."`
 }
 
@@ -326,7 +421,7 @@ type ProcessDefinition struct {
 	Name        string             `json:"name"         validate:"required" description:"Unique process identifier."`
 	Steps       []*Step            `json:"steps"        validate:"required,min=1,dive" description:"Ordered list of execution steps. Control advances linearly unless a switch case redirects."`
 	InputSchema *schema.SchemaNode `json:"input_schema,omitempty"          description:"JSON Schema used to validate the input payload when starting a new instance."`
-	Output      map[string]string  `json:"output,omitempty"                description:"Expression map evaluated at completion to produce the process output. Keys become output field names."`
+	Output      *Shape             `json:"output,omitempty"                description:"Templated value (a string expression or nested object of expressions) evaluated at completion to produce the process output."`
 }
 
 // Normalize normalizes InputSchema and all step OutputSchemas in-place using the

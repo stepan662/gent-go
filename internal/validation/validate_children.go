@@ -81,17 +81,21 @@ func validateChildEntry(stepID string, label string, p model.ChildEntry, ctx *sc
 		return nil
 	}
 
-	inferred, err := inferObjectSchema(p.Input, ctx, func(name string) string {
-		return fmt.Sprintf("%s input %q", prefix, name)
-	})
-	if err != nil {
-		return err
+	var inferred *schema.SchemaNode
+	if p.Input.Present() {
+		var err error
+		inferred, err = inferShape(p.Input.Raw, ctx, fmt.Sprintf("%s input", prefix))
+		if err != nil {
+			return err
+		}
+	} else {
+		inferred = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
 	}
 
 	if len(defs) > 0 {
 		inferred = withDefs(inferred, defs)
 	}
-	inferred, err = schema.Normalize(inferred)
+	inferred, err := schema.Normalize(inferred)
 	if err != nil {
 		return fmt.Errorf("%s: normalize inferred input: %w", prefix, err)
 	}

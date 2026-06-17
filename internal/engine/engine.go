@@ -391,7 +391,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		// Capture this step's prior output before the action can overwrite it, so an
 		// output map may reference self.previous (the value from the last loop iteration).
 		var priorOutput any
-		if len(step.Output) > 0 {
+		if step.Output.Present() {
 			if outs, ok := inst.ContextData["outputs"].(map[string]any); ok {
 				priorOutput = outs[step.ID]
 			}
@@ -424,7 +424,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		// A remapped output is always exported (replaces outputs.stepID); the switch
 		// only ever sees the final output, as self.output.
 		stepOutput := actionResult
-		if len(step.Output) > 0 {
+		if step.Output.Present() {
 			remapped, err := e.evalStepOutput(inst, step, actionResult, priorOutput)
 			if err != nil {
 				return e.failInstance(inst, fmt.Sprintf("step %q output: %v", step.ID, err))
@@ -572,17 +572,9 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 // evalStepOutput evaluates a step's output map against the context plus self,
 // where self.result is the raw action result and self.previous is this step's
 // prior output (its value from the last loop iteration, or nil on the first run).
-func (e *Engine) evalStepOutput(inst *model.ProcessInstance, step *model.Step, result, previous any) (map[string]any, error) {
+func (e *Engine) evalStepOutput(inst *model.ProcessInstance, step *model.Step, result, previous any) (any, error) {
 	self := map[string]any{"result": result, "previous": previous}
-	obj := make(map[string]any, len(step.Output))
-	for name, expr := range step.Output {
-		val, err := evalWithSelf(expr, inst.ContextData, self)
-		if err != nil {
-			return nil, fmt.Errorf("%q: %w", name, err)
-		}
-		obj[name] = val
-	}
-	return obj, nil
+	return evalShape(step.Output.Raw, evalEnv(inst.ContextData, self))
 }
 
 // setStepOutput stores value as the step's exported output (outputs.stepID),
@@ -747,19 +739,11 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 	return e.failInstance(inst, fmt.Sprintf("step %q: %s: %s", step.ID, errCode, errMsg))
 }
 
-func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (map[string]any, error) {
-	if len(step.Params) == 0 {
+func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (any, error) {
+	if !step.Params.Present() {
 		return map[string]any{}, nil
 	}
-	result := make(map[string]any, len(step.Params))
-	for name, expression := range step.Params {
-		val, err := evalAny(expression, inst.ContextData)
-		if err != nil {
-			return nil, fmt.Errorf("param %q: %w", name, err)
-		}
-		result[name] = val
-	}
-	return result, nil
+	return evalShape(step.Params.Raw, evalEnv(inst.ContextData, nil))
 }
 
 // runDelay implements the delay action. On first entry — WakeAt is nil
@@ -1106,16 +1090,15 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 	return children, nil
 }
 
-func (e *Engine) evalChildInput(inst *model.ProcessInstance, stepID, label string, inputExprs map[string]string) (map[string]any, error) {
-	result := make(map[string]any, len(inputExprs))
-	for k, expr := range inputExprs {
-		val, err := evalAny(expr, inst.ContextData)
-		if err != nil {
-			return nil, fmt.Errorf("step %q %s input %q: %v", stepID, label, k, err)
-		}
-		result[k] = val
+func (e *Engine) evalChildInput(inst *model.ProcessInstance, stepID, label string, input *model.Shape) (any, error) {
+	if !input.Present() {
+		return map[string]any{}, nil
 	}
-	return result, nil
+	val, err := evalShape(input.Raw, evalEnv(inst.ContextData, nil))
+	if err != nil {
+		return nil, fmt.Errorf("step %q %s input: %v", stepID, label, err)
+	}
+	return val, nil
 }
 
 // computeOutput evaluates the process definition's Output expression map against
@@ -1126,18 +1109,14 @@ func (e *Engine) computeOutput(inst *model.ProcessInstance) error {
 	if err != nil {
 		return fmt.Errorf("load definition for output: %w", err)
 	}
-	if len(def.Output) == 0 {
+	if !def.Output.Present() {
 		return nil
 	}
-	result := make(map[string]any, len(def.Output))
-	for k, expr := range def.Output {
-		val, err := evalAny(expr, inst.ContextData)
-		if err != nil {
-			return fmt.Errorf("output %q: %w", k, err)
-		}
-		result[k] = val
+	out, err := evalShape(def.Output.Raw, evalEnv(inst.ContextData, nil))
+	if err != nil {
+		return fmt.Errorf("output: %w", err)
 	}
-	inst.ContextData["output"] = result
+	inst.ContextData["output"] = out
 	return nil
 }
 

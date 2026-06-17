@@ -19,9 +19,9 @@ import (
 
 // Request is the message the engine sends to a service.
 type Request struct {
-	InstanceID string                 `json:"instance_id"`
-	StepID     string                 `json:"step_id"`
-	Data       map[string]interface{} `json:"data"`
+	InstanceID string `json:"instance_id"`
+	StepID     string `json:"step_id"`
+	Data       any    `json:"data"`
 }
 
 // Response carries the result of a Send call.

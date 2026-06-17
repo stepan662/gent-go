@@ -11,6 +11,16 @@ import (
 	"gent/internal/validation"
 )
 
+// inputShape wraps a flat expression map as a model.Shape (object form), the way
+// a child Input is authored in these tests.
+func inputShape(m map[string]string) *model.Shape {
+	raw := make(map[string]any, len(m))
+	for k, v := range m {
+		raw[k] = v
+	}
+	return &model.Shape{Raw: raw}
+}
+
 type stubGetter map[string]*model.ProcessDefinition
 
 func (s stubGetter) GetDefinition(name string, version int) (*model.ProcessDefinition, error) {
@@ -174,7 +184,7 @@ func TestValidateChildProcessRefs_compatibleInput(t *testing.T) {
 		}`),
 	}
 	def := parentDef(t, parentInputSchema, []model.ChildEntry{
-		{Name: "worker", Version: 1, Input: map[string]string{"amount": "{{input.amount}}"}},
+		{Name: "worker", Version: 1, Input: inputShape(map[string]string{"amount": "{{input.amount}}"})},
 	})
 	assertValidateOK(t, def, getter)
 }
@@ -188,7 +198,7 @@ func TestValidateChildProcessRefs_integerSubsetOfNumber(t *testing.T) {
 		}`),
 	}
 	def := parentDef(t, parentInputSchema, []model.ChildEntry{
-		{Name: "worker", Version: 1, Input: map[string]string{"amount": "{{input.amount}}"}},
+		{Name: "worker", Version: 1, Input: inputShape(map[string]string{"amount": "{{input.amount}}"})},
 	})
 	assertValidateOK(t, def, getter)
 }
@@ -206,7 +216,7 @@ func TestValidateChildProcessRefs_missingRequiredField(t *testing.T) {
 	}
 	// parent only passes "amount", but child also requires "label"
 	def := parentDef(t, parentInputSchema, []model.ChildEntry{
-		{Name: "worker", Version: 1, Input: map[string]string{"amount": "{{input.amount}}"}},
+		{Name: "worker", Version: 1, Input: inputShape(map[string]string{"amount": "{{input.amount}}"})},
 	})
 	assertValidateErr(t, def, getter, "not compatible")
 }
@@ -221,7 +231,7 @@ func TestValidateChildProcessRefs_wrongFieldType(t *testing.T) {
 	}
 	// input.amount is integer, child expects string
 	def := parentDef(t, parentInputSchema, []model.ChildEntry{
-		{Name: "worker", Version: 1, Input: map[string]string{"amount": "{{input.amount}}"}},
+		{Name: "worker", Version: 1, Input: inputShape(map[string]string{"amount": "{{input.amount}}"})},
 	})
 	assertValidateErr(t, def, getter, "not compatible")
 }
@@ -252,7 +262,7 @@ func TestValidateChildProcessRefs_badExpression(t *testing.T) {
 	}
 	// parent has no InputSchema, so "{{input.amount}}" cannot be resolved
 	def := parentDef(t, "", []model.ChildEntry{
-		{Name: "worker", Version: 1, Input: map[string]string{"x": "{{input.amount}}"}},
+		{Name: "worker", Version: 1, Input: inputShape(map[string]string{"x": "{{input.amount}}"})},
 	})
 	if err := validation.ValidateChildProcessRefs(def, 1, getter); err == nil {
 		t.Error("expected error for unresolvable expression, got nil")
@@ -281,7 +291,7 @@ func TestValidateChildProcessRefs_multipleProcessEntries(t *testing.T) {
 	}
 	def := parentDef(t, parentInputSchema, []model.ChildEntry{
 		{Name: "ok", Version: 1},
-		{Name: "bad", Version: 1, Input: map[string]string{"x": "{{input.name}}"}}, // string passed for integer
+		{Name: "bad", Version: 1, Input: inputShape(map[string]string{"x": "{{input.name}}"})}, // string passed for integer
 	})
 	assertValidateErr(t, def, getter, "not compatible")
 }
@@ -291,10 +301,10 @@ func TestValidateChildProcessRefs_selfReference(t *testing.T) {
 	// The process does not exist in the DB yet, so the getter must not be called.
 	// Both required fields (amount + name) are forwarded so the input is compatible.
 	def := parentDef(t, parentInputSchema, []model.ChildEntry{
-		{Name: "parent", Version: 0, Input: map[string]string{
+		{Name: "parent", Version: 0, Input: inputShape(map[string]string{
 			"amount": "{{input.amount}}",
 			"name":   "{{input.name}}",
-		}},
+		})},
 	})
 	// getter is empty — any DB call would return "not found"
 	assertValidateOK(t, def, stubGetter{})
@@ -305,7 +315,7 @@ func TestValidateChildProcessRefs_selfReferenceIncompatibleInput(t *testing.T) {
 	// Parent requires {amount: integer, name: string}; child entry only passes "amount"
 	// as a string (via input.name), which is the wrong type.
 	def := parentDef(t, parentInputSchema, []model.ChildEntry{
-		{Name: "parent", Version: 0, Input: map[string]string{"amount": "{{input.name}}"}},
+		{Name: "parent", Version: 0, Input: inputShape(map[string]string{"amount": "{{input.name}}"})},
 	})
 	assertValidateErr(t, def, stubGetter{}, "not compatible")
 }
@@ -338,10 +348,10 @@ func TestValidateChildProcessRefs_inputWithNestedRef(t *testing.T) {
 		}`),
 	}
 	def := parentDef(t, parentSchema, []model.ChildEntry{
-		{Name: "billing", Version: 1, Input: map[string]string{
+		{Name: "billing", Version: 1, Input: inputShape(map[string]string{
 			"amount":   "{{input.order.amount}}",
 			"currency": "{{input.order.currency}}",
-		}},
+		})},
 	})
 	assertValidateOK(t, def, getter)
 }
@@ -397,7 +407,7 @@ func TestValidateChildProcessRefs_Child_CompatibleInput(t *testing.T) {
 	def := singleChildDef(t, parentInputSchema, model.ChildEntry{
 		Name:    "worker",
 		Version: 1,
-		Input:   map[string]string{"amount": "{{input.amount}}"},
+		Input:   inputShape(map[string]string{"amount": "{{input.amount}}"}),
 	})
 	assertValidateOK(t, def, getter)
 }
@@ -414,7 +424,7 @@ func TestValidateChildProcessRefs_Child_IncompatibleInput(t *testing.T) {
 	def := singleChildDef(t, parentInputSchema, model.ChildEntry{
 		Name:    "worker",
 		Version: 1,
-		Input:   map[string]string{"amount": "{{input.amount}}"},
+		Input:   inputShape(map[string]string{"amount": "{{input.amount}}"}),
 	})
 	assertValidateErr(t, def, getter, "not compatible")
 }
@@ -422,7 +432,7 @@ func TestValidateChildProcessRefs_Child_IncompatibleInput(t *testing.T) {
 func TestValidateChildProcessRefs_Child_SelfReference(t *testing.T) {
 	def := singleChildDef(t, parentInputSchema, model.ChildEntry{
 		Name:  "parent",
-		Input: map[string]string{"amount": "{{input.amount}}", "name": "{{input.name}}"},
+		Input: inputShape(map[string]string{"amount": "{{input.amount}}", "name": "{{input.name}}"}),
 	})
 	assertValidateOK(t, def, stubGetter{})
 }

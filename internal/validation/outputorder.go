@@ -23,7 +23,7 @@ func inferOutputs(steps []*model.Step, tasks map[string]TaskSchemas, processInpu
 	var omIDs []string
 	for _, s := range steps {
 		stepByID[s.ID] = s
-		if len(s.Output) > 0 {
+		if s.Output.Present() {
 			isOutputMap[s.ID] = true
 			omIDs = append(omIDs, s.ID)
 		}
@@ -38,7 +38,7 @@ func inferOutputs(steps []*model.Step, tasks map[string]TaskSchemas, processInpu
 	graph := make(map[string][]string, len(omIDs))
 	for _, id := range omIDs {
 		refSet := map[string]bool{}
-		for _, expr := range stepByID[id].Output {
+		for _, expr := range stepByID[id].Output.Strings() {
 			refs, err := template.OutputRefs(expr)
 			if err != nil {
 				return fmt.Errorf("step %q output: %w", id, err)
@@ -69,7 +69,7 @@ func inferOutputs(steps []*model.Step, tasks map[string]TaskSchemas, processInpu
 			// lists its own output among its available (optional) outputs.
 			loops := slices.Contains(optional[id], id) || slices.Contains(required[id], id)
 			ctx := outputMapContext(base, actionResultType(stepByID[id]), id, loops)
-			members = append(members, sccMember{defName: id + "_output", exprs: stepByID[id].Output, ctx: ctx})
+			members = append(members, sccMember{defName: id + "_output", node: stepByID[id].Output.Raw, ctx: ctx})
 		}
 		if err := inferOutputFixpoint(members, defs); err != nil {
 			return err
@@ -83,7 +83,7 @@ func inferOutputs(steps []*model.Step, tasks map[string]TaskSchemas, processInpu
 // are observed as the fixpoint iterates).
 type sccMember struct {
 	defName string
-	exprs   map[string]string
+	node    any // the model.Shape.Raw for this output
 	ctx     *schema.SchemaNode
 }
 
@@ -101,9 +101,7 @@ func inferOutputFixpoint(members []sccMember, defs map[string]*schema.SchemaNode
 	for pass := 0; pass < maxRecursivePasses; pass++ {
 		stable := true
 		for _, m := range members {
-			cur, err := inferObjectSchema(m.exprs, m.ctx, func(name string) string {
-				return fmt.Sprintf("output %q", name)
-			})
+			cur, err := inferShape(m.node, m.ctx, "output")
 			if err != nil {
 				return err
 			}

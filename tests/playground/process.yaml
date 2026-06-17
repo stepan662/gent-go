@@ -29,5 +29,4 @@ steps:
         goto: $start
       - goto: end
 
-output:
-  num: "{{ outputs.loop }}"
+output: "{{ outputs.loop }}"

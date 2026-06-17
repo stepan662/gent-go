@@ -54,31 +54,23 @@
     "output": {
       "type": "object",
       "properties": {
-        "num": {
+        "result": {
           "type": "object",
           "properties": {
-            "result": {
-              "type": "object",
-              "properties": {
-                "rec": {
-                  "$ref": "#/$defs/recursive"
-                },
-                "ttl": {
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "ttl"
-              ]
+            "rec": {
+              "$ref": "#/$defs/recursive"
+            },
+            "ttl": {
+              "type": "integer"
             }
           },
           "required": [
-            "result"
+            "ttl"
           ]
         }
       },
       "required": [
-        "num"
+        "result"
       ]
     },
     "recursive": {

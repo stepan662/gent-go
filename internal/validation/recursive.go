@@ -28,7 +28,11 @@ func InferRecursiveOutput(exprs map[string]string, ctx *schema.SchemaNode, selfD
 		defs = map[string]*schema.SchemaNode{}
 		ctx = withDefs(ctx, defs)
 	}
-	if err := inferOutputFixpoint([]sccMember{{defName: selfDef, exprs: exprs, ctx: ctx}}, defs); err != nil {
+	node := make(map[string]any, len(exprs))
+	for k, v := range exprs {
+		node[k] = v
+	}
+	if err := inferOutputFixpoint([]sccMember{{defName: selfDef, node: node, ctx: ctx}}, defs); err != nil {
 		return nil, err
 	}
 	return defs[selfDef], nil

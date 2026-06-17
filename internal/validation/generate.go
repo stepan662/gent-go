@@ -79,7 +79,7 @@ func Generate(def *model.ProcessDefinition) (SchemaFile, error) {
 		}
 	}
 
-	if len(def.Output) > 0 {
+	if def.Output.Present() {
 		outputSchema, err := inferProcessOutput(def, tasks, result.ProcessInput, defs)
 		if err != nil {
 			return SchemaFile{}, err
@@ -104,9 +104,7 @@ func inferProcessOutput(def *model.ProcessDefinition, tasks map[string]TaskSchem
 	if len(defs) > 0 {
 		ctx = withDefs(ctx, defs)
 	}
-	return inferObjectSchema(def.Output, ctx, func(name string) string {
-		return fmt.Sprintf("output %q", name)
-	})
+	return inferShape(def.Output.Raw, ctx, "output")
 }
 
 func collectNamedOutputs(steps []*model.Step, named map[string]*schema.SchemaNode) {
@@ -115,7 +113,7 @@ func collectNamedOutputs(steps []*model.Step, named map[string]*schema.SchemaNod
 			continue
 		}
 		switch {
-		case len(s.Output) > 0:
+		case s.Output.Present():
 			// Inferred during the per-step walk (it may be recursive); a permissive
 			// placeholder holds the $defs slot until then.
 			named[s.ID+"_output"] = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
