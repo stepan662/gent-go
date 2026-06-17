@@ -114,16 +114,10 @@ func collectNamedOutputs(steps []*model.Step, named map[string]*schema.SchemaNod
 		if !stepHasOutput(s) {
 			continue
 		}
-		switch {
-		case s.Action.Type == model.ActionTypeChildParallel:
+		if s.Action.Type == model.ActionTypeChildParallel {
 			named[s.ID+"_output"] = childParallelOutputSchema(s)
-		case s.Action.OutputSchema != nil:
+		} else {
 			named[s.ID+"_output"] = s.Action.OutputSchema
-		default:
-			// assign with no explicit schema: its shape is computed at runtime from
-			// `values`, so expose a permissive object — downstream refs are allowed
-			// but untyped. Provide output_schema for strict typing of the result.
-			named[s.ID+"_output"] = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
 		}
 	}
 }

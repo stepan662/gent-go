@@ -402,12 +402,6 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 					return err
 				}
 				// Timer fired: fall through to the switch with no self output.
-			case model.ActionTypeSet:
-				out, done, err := e.runAssign(inst, step)
-				if done || err != nil {
-					return err
-				}
-				selfOutput = out
 			default: // rest, script
 				out, done, err := e.executeAction(ctx, inst, step)
 				if done || err != nil {
@@ -723,49 +717,6 @@ func (e *Engine) runDelay(inst *model.ProcessInstance, step *model.Step) (bool, 
 		return true, e.db.UpdateInstanceProgress(inst)
 	}
 	return false, nil
-}
-
-// runAssign implements the assign action: it evaluates each value expression
-// against the current context and stores the resulting object as this step's
-// output (outputs.<id>), so later steps and this step's switch (as "self") can
-// read it. With no external call it has no remote side effect. Returns
-// (output, done, err); done=true means the instance was already persisted
-// (eval failure or output_schema violation) and the caller should return err.
-func (e *Engine) runAssign(inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
-	obj := make(map[string]any, len(step.Action.Values))
-	for name, expr := range step.Action.Values {
-		val, err := evalAny(expr, inst.ContextData)
-		if err != nil {
-			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q assign %q: %v", step.ID, name, err))
-		}
-		obj[name] = val
-	}
-
-	if err := step.Action.ValidateOutput(obj); err != nil {
-		return nil, true, e.handleCallError(inst, step, err.Error(), "output.invalid")
-	}
-
-	// assign always persists its output (later steps read outputs.<id>), unlike
-	// rest/script which only persist when an output_schema is declared.
-	if inst.ContextData["outputs"] == nil {
-		inst.ContextData["outputs"] = map[string]any{}
-	}
-	inst.ContextData["outputs"].(map[string]any)[step.ID] = obj
-
-	var order []string
-	switch v := inst.ContextData["output_order"].(type) {
-	case []string:
-		order = v
-	case []any:
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				order = append(order, s)
-			}
-		}
-	}
-	inst.ContextData["output_order"] = append(order, step.ID)
-
-	return obj, false, nil
 }
 
 // evalDurationMs evaluates a delay expression to a non-negative millisecond
