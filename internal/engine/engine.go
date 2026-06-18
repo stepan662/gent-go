@@ -216,9 +216,11 @@ func (e *Engine) dispatch(ctx context.Context, wg *sync.WaitGroup, inst *model.P
 	// double-executed the instance. There is no reliable way to recover, so we
 	// stop the pump and surface the error rather than silently corrupting state.
 	// The operator should lower --max-concurrent or increase the lease duration.
-	// (The pre-acquire pump makes this detection sound: a claim only returns
-	// non-'waiting' rows, so an instance claimed while in-flight is still in the
-	// inflight set here.)
+	//
+	// This detection is exact: runAdvance drops the marker only just before the
+	// write that frees the instance, so an in-flight instance is claimable only once
+	// its lease has actually expired. A re-claim that still finds the marker is
+	// therefore a genuine overwhelm, never an advance that already finished.
 	if _, busy := e.inflight.LoadOrStore(inst.ID, struct{}{}); busy {
 		return &OverwhelmError{
 			InstanceID:    inst.ID,
@@ -230,8 +232,9 @@ func (e *Engine) dispatch(ctx context.Context, wg *sync.WaitGroup, inst *model.P
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer func() { e.inflight.Delete(inst.ID); <-e.sem }()
-		if err := e.advance(ctx, inst); err != nil {
+		defer func() { <-e.sem }()
+		// runAdvance drops the inflight marker (stored above) before persisting.
+		if err := e.runAdvance(ctx, inst); err != nil {
 			e.log.Error("advance instance", "id", inst.ID, "err", err)
 		}
 	}()
@@ -315,7 +318,7 @@ func (e *Engine) Tick(ctx context.Context) (int, error) {
 		go func(inst *model.ProcessInstance) {
 			defer wg.Done()
 			defer func() { <-e.sem }()
-			if err := e.advance(ctx, inst); err != nil {
+			if err := e.runAdvance(ctx, inst); err != nil {
 				e.log.Error("advance instance", "id", inst.ID, "err", err)
 			}
 		}(inst)
@@ -324,12 +327,66 @@ func (e *Engine) Tick(ctx context.Context) (int, error) {
 	return len(instances), nil
 }
 
-// advance executes the next task in the instance's queue.
+// advanceOutcome is the next persisted state that advance() computes without
+// writing it to the DB. runAdvance drops the in-flight marker first, then persist
+// applies the outcome — so the lease-releasing write always happens after the
+// marker is gone, in one place, and an instance is never simultaneously free in the
+// DB and still marked in memory (which dispatch would misread as re-claiming live
+// work). advance() is a pure state machine over the instance's own row; the one
+// exception is a child spawn, which is a multi-row transaction that parks the parent
+// (non-runnable, so the marker order is irrelevant) — it persists itself and returns
+// outcomeNoop.
+type advanceOutcome struct {
+	kind outcomeKind
+}
+
+type outcomeKind uint8
+
+const (
+	outcomeProgress outcomeKind = iota // running checkpoint        → UpdateInstanceProgress
+	outcomeUpdate                      // running, status/error set → UpdateInstance
+	outcomeTerminal                    // completed/failed/cancelled → saveAndNotify
+	outcomeNoop                        // advance already persisted (child spawn parked the parent)
+)
+
+// stop wraps an outcome as a non-nil pointer, the signal call helpers use to tell
+// advance to stop the task loop and return this outcome (nil means "continue").
+func stop(o advanceOutcome) *advanceOutcome { return &o }
+
+// persist applies an advance outcome to the DB. It is the single place an in-flight
+// advance releases its lease; runAdvance calls it after dropping the marker.
+func (e *Engine) persist(inst *model.ProcessInstance, o advanceOutcome) error {
+	switch o.kind {
+	case outcomeTerminal:
+		return e.saveAndNotify(inst)
+	case outcomeProgress:
+		return e.db.UpdateInstanceProgress(inst)
+	case outcomeUpdate:
+		return e.db.UpdateInstance(inst)
+	case outcomeNoop:
+		return nil
+	default:
+		return fmt.Errorf("unknown advance outcome %d", o.kind)
+	}
+}
+
+// runAdvance advances one instance, then drops its in-flight marker before
+// persisting the resulting state. Doing the delete before the store closes the
+// window where the instance is free in the DB but still marked in memory. (For Tick,
+// which keeps no marker, the delete is a harmless no-op.)
+func (e *Engine) runAdvance(ctx context.Context, inst *model.ProcessInstance) error {
+	outcome := e.advance(ctx, inst)
+	e.inflight.Delete(inst.ID)
+	return e.persist(inst, outcome)
+}
+
+// advance executes the next task in the instance's queue, returning the outcome to
+// persist (it performs no lease-releasing write itself — runAdvance does).
 // Each task may have a call, a switch, or both.
 // The call runs first; then the switch is evaluated with the call's output
 // available as "self". A matching switch case jumps to the named task; no match
 // advances to the next task in the queue.
-func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error {
+func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advanceOutcome {
 	if inst.Status == model.StatusFailing {
 		return e.settleFailing(inst)
 	}
@@ -381,7 +438,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 			}
 			e.log.Info("instance completed", "id", inst.ID, "process", inst.ProcessName)
 			e.audit(inst, model.LogInfo, model.EventInstanceDone, "", "", "", nil)
-			return e.saveAndNotify(inst)
+			return advanceOutcome{kind: outcomeTerminal}
 		}
 
 		task := inst.TaskQueue[0]
@@ -400,21 +457,20 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		if hasCall {
 			switch task.Action.Type {
 			case model.ActionTypeChild, model.ActionTypeChildParallel:
-				out, done, err := e.runChildProcesses(ctx, inst, task)
-				if done || err != nil {
-					return err
+				out, done := e.runChildProcesses(ctx, inst, task)
+				if done != nil {
+					return *done
 				}
 				actionResult = out
 			case model.ActionTypeDelay:
-				done, err := e.runDelay(inst, task)
-				if done || err != nil {
-					return err
+				if done := e.runDelay(inst, task); done != nil {
+					return *done
 				}
 				// Timer fired: fall through to the switch with no action result.
 			default: // rest, script
-				out, done, err := e.executeAction(ctx, inst, task)
-				if done || err != nil {
-					return err
+				out, done := e.executeAction(ctx, inst, task)
+				if done != nil {
+					return *done
 				}
 				actionResult = out
 			}
@@ -460,7 +516,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 			}
 			e.log.Info("instance completed", "id", inst.ID, "task", task.ID)
 			e.audit(inst, model.LogInfo, model.EventInstanceDone, task.ID, "", "", nil)
-			return e.saveAndNotify(inst)
+			return advanceOutcome{kind: outcomeTerminal}
 		}
 
 		if gotoID == model.GotoNext {
@@ -483,17 +539,16 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 		// A call-less routing task had none, so continue in-memory to the next task
 		// unless we've hit the inline-task guard.
 		if hasCall || i >= maxInlineTasks {
-			return e.db.UpdateInstanceProgress(inst)
+			return advanceOutcome{kind: outcomeProgress}
 		}
 	}
 }
 
-// executeAction sends a request to the task's endpoint and stores the output in
-// the instance context. Returns (output, done, err):
-//   - done=false, err=nil: action succeeded; output is the task result.
-//   - done=true: instance already persisted (retry scheduled or permanent fail);
-//     caller should return err directly.
-func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance, task *model.Task) (any, bool, error) {
+// executeAction sends a request to the task's endpoint and returns (output, done):
+//   - done=nil: action succeeded; output is the task result.
+//   - done!=nil: the task loop should stop and persist this outcome (retry, error
+//     route, or permanent fail).
+func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance, task *model.Task) (any, *advanceOutcome) {
 	timeout := time.Duration(task.TimeoutMs) * time.Millisecond
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -504,7 +559,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 
 	data, err := e.buildTaskData(inst, task)
 	if err != nil {
-		return nil, true, e.failInstance(inst, fmt.Sprintf("task %q params: %v", task.ID, err))
+		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q params: %v", task.ID, err)))
 	}
 
 	req := transport.Request{
@@ -522,7 +577,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 
 	resolvedHeaders, err := e.resolveHeaders(inst, task.Action)
 	if err != nil {
-		return nil, true, e.failInstance(inst, fmt.Sprintf("task %q headers: %v", task.ID, err))
+		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q headers: %v", task.ID, err)))
 	}
 
 	resp, err := transport.Send(taskCtx, task.Action, resolvedHeaders, req)
@@ -531,21 +586,21 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		if task.Action.Type == model.ActionTypeScript {
 			code = transport.ClassifyScriptError(err)
 		}
-		return nil, true, e.handleCallError(inst, task, err.Error(), code)
+		return nil, stop(e.handleCallError(inst, task, err.Error(), code))
 	}
 	if resp.ErrorCode != "" {
 		msg := resp.ErrorMessage
 		if msg == "" {
 			msg = resp.ErrorCode
 		}
-		return nil, true, e.handleCallError(inst, task, msg, resp.ErrorCode)
+		return nil, stop(e.handleCallError(inst, task, msg, resp.ErrorCode))
 	}
 
 	// result_schema validates the raw result; it does not export it. The result is
 	// transient — available to this task's own output/switch as self.result. Only an
 	// `output` projection adds anything to outputs.<id>.
 	if err := task.Action.ValidateOutput(resp.Body); err != nil {
-		return nil, true, e.handleCallError(inst, task, err.Error(), "output.invalid")
+		return nil, stop(e.handleCallError(inst, task, err.Error(), "output.invalid"))
 	}
 	inst.RetryCount = 0
 
@@ -555,7 +610,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	}
 	e.audit(inst, model.LogInfo, model.EventTaskSucceeded, task.ID, "", "", okDetail)
 
-	return resp.Body, false, nil
+	return resp.Body, nil
 }
 
 // evalTaskOutput evaluates a task's output map against the context plus self,
@@ -661,8 +716,9 @@ func matchOnError(task *model.Task, errCode string) *model.ErrorCase {
 }
 
 // handleCallError evaluates on_error rules, retries if allowed, injects $error
-// context, and routes to the matching goto or fails the instance.
-func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, errMsg, errCode string) error {
+// context, and routes to the matching goto or fails the instance. It returns the
+// outcome to persist (runAdvance writes it).
+func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, errMsg, errCode string) advanceOutcome {
 	// If the process is being cancelled, suppress retries and honour the cancellation
 	// unless retries are exhausted / not configured — in that case error takes precedence.
 	if inst.Status == model.StatusCancelling {
@@ -695,7 +751,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, 
 			"max":        matched.Retries,
 			"next_retry": next.Format(time.RFC3339),
 		})
-		return e.db.UpdateInstance(inst)
+		return advanceOutcome{kind: outcomeUpdate}
 	}
 
 	inst.ContextData["error"] = map[string]any{
@@ -710,7 +766,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, 
 			inst.WakeAt = nil
 			e.log.Info("instance completed via error route", "id", inst.ID, "task", task.ID, "code", errCode)
 			e.audit(inst, model.LogInfo, model.EventErrorCompleted, task.ID, errMsg, errCode, nil)
-			return e.saveAndNotify(inst)
+			return advanceOutcome{kind: outcomeTerminal}
 		}
 		newQueue, err := e.queueFromTask(inst, matched.Goto)
 		if err != nil {
@@ -722,7 +778,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, 
 		e.log.Info("routing to error handler",
 			"id", inst.ID, "task", task.ID, "goto", matched.Goto, "code", errCode)
 		e.audit(inst, model.LogInfo, model.EventErrorRoute, task.ID, errMsg, errCode, map[string]any{"goto": matched.Goto})
-		return e.db.UpdateInstance(inst)
+		return advanceOutcome{kind: outcomeUpdate}
 	}
 
 	return e.failInstance(inst, fmt.Sprintf("task %q: %s: %s", task.ID, errCode, errMsg))
@@ -736,25 +792,25 @@ func (e *Engine) buildTaskData(inst *model.ProcessInstance, task *model.Task) (a
 }
 
 // runDelay implements the delay action. On first entry — WakeAt is nil
-// because every task transition resets it — it evaluates the duration, parks the
-// instance by stamping wake_at, and releases the worker via
-// UpdateInstanceProgress; the normal claim loop re-claims it once the timer
-// elapses. On re-entry (WakeAt set, so the claim guarantees the timer is
-// due) it returns done=false and advance continues to the task's switch.
-// Returns done=true when it parked or failed (the caller returns immediately).
-func (e *Engine) runDelay(inst *model.ProcessInstance, task *model.Task) (bool, error) {
+// because every task transition resets it — it evaluates the duration and parks the
+// instance by stamping wake_at (persisted via the progress outcome, which releases
+// the worker); the normal claim loop re-claims it once the timer elapses. On
+// re-entry (WakeAt set, so the claim guarantees the timer is due) it returns nil and
+// advance continues to the task's switch. Returns a non-nil outcome when it parked
+// or failed (the caller stops and persists it).
+func (e *Engine) runDelay(inst *model.ProcessInstance, task *model.Task) *advanceOutcome {
 	if inst.WakeAt == nil {
 		ms, err := evalDurationMs(task.Action.Ms, inst.ContextData)
 		if err != nil {
-			return true, e.failInstance(inst, fmt.Sprintf("task %q delay: %v", task.ID, err))
+			return stop(e.failInstance(inst, fmt.Sprintf("task %q delay: %v", task.ID, err)))
 		}
 		wake := db.Now().Add(time.Duration(ms) * time.Millisecond)
 		inst.WakeAt = &wake
 		e.log.Info("instance delaying", "id", inst.ID, "task", task.ID, "ms", ms)
 		e.audit(inst, model.LogInfo, model.EventDelayArmed, task.ID, "", "", map[string]any{"ms": ms})
-		return true, e.db.UpdateInstanceProgress(inst)
+		return stop(advanceOutcome{kind: outcomeProgress})
 	}
-	return false, nil
+	return nil
 }
 
 // evalDurationMs evaluates a delay expression to a non-negative millisecond
@@ -826,17 +882,21 @@ func (e *Engine) snippet(v any) string {
 	return string(b)
 }
 
-func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) error {
+// failInstance moves the instance to its failed state and returns the terminal
+// outcome (persisted by runAdvance via saveAndNotify).
+func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) advanceOutcome {
 	inst.Status = model.StatusFailed
 	inst.WaitState = model.WaitStateNone
 	inst.Error = reason
 	inst.WakeAt = nil
 	e.log.Error("instance failed", "id", inst.ID, "reason", reason)
 	e.audit(inst, model.LogError, model.EventInstanceFailed, "", reason, "", nil)
-	return e.saveAndNotify(inst)
+	return advanceOutcome{kind: outcomeTerminal}
 }
 
-func (e *Engine) cancelInstance(inst *model.ProcessInstance) error {
+// cancelInstance moves the instance to its cancelled state and returns the terminal
+// outcome (persisted by runAdvance via saveAndNotify).
+func (e *Engine) cancelInstance(inst *model.ProcessInstance) advanceOutcome {
 	inst.Status = model.StatusCancelled
 	inst.WaitState = model.WaitStateNone
 	// A retry-backoff parks with RetryCount > 0; clear its timer so a later retry
@@ -847,19 +907,20 @@ func (e *Engine) cancelInstance(inst *model.ProcessInstance) error {
 	}
 	e.log.Info("instance cancelled", "id", inst.ID)
 	e.audit(inst, model.LogInfo, model.EventCancelled, "", "", "", nil)
-	return e.saveAndNotify(inst)
+	return advanceOutcome{kind: outcomeTerminal}
 }
 
 // settleFailing finalises a draining 'failing' instance once its children have
 // settled (it only becomes claimable then). The error was already recorded when
-// the failure propagated up; saveAndNotify cascades the settlement one level up.
-func (e *Engine) settleFailing(inst *model.ProcessInstance) error {
+// the failure propagated up; saveAndNotify (via the terminal outcome) cascades the
+// settlement one level up.
+func (e *Engine) settleFailing(inst *model.ProcessInstance) advanceOutcome {
 	inst.Status = model.StatusFailed
 	inst.WaitState = model.WaitStateNone
 	inst.WakeAt = nil
 	e.log.Info("instance settled as failed", "id", inst.ID, "reason", inst.Error)
 	e.audit(inst, model.LogInfo, model.EventInstanceSettled, "", inst.Error, "", nil)
-	return e.saveAndNotify(inst)
+	return advanceOutcome{kind: outcomeTerminal}
 }
 
 // saveAndNotify is the single exit point for all terminal instance states.
@@ -884,19 +945,19 @@ func (e *Engine) saveAndNotify(inst *model.ProcessInstance) error {
 //
 // A cancelling parent spawns cancelling children: they self-cancel and call
 // FinishChild, which transitions the parent to WaitStateCollecting normally.
-func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInstance, task *model.Task) (any, bool, error) {
+func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInstance, task *model.Task) (any, *advanceOutcome) {
 	// Phase 2: parent woke up with children done — collect their outputs into the
 	// action result (self.result). It is exported only if the task projects it.
 	if inst.WaitState == model.WaitStateCollecting {
 		output, err := e.collectChildOutputs(ctx, inst, task)
 		if err != nil {
 			inst.WaitState = model.WaitStateNone
-			return nil, true, e.failInstance(inst, fmt.Sprintf("task %q collect: %v", task.ID, err))
+			return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q collect: %v", task.ID, err)))
 		}
 		inst.WaitState = model.WaitStateNone
 		e.log.Info("parent collected child outputs", "id", inst.ID, "task", task.ID)
 		e.audit(inst, model.LogInfo, model.EventChildrenCollect, task.ID, "", "", nil)
-		return output, false, nil
+		return output, nil
 	}
 
 	// Phase 1: spawn children. Record the spawned child IDs under the internal
@@ -912,16 +973,16 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 	var children []*model.ProcessInstance
 	switch task.Action.Type {
 	case model.ActionTypeChild:
-		child, err := e.buildSingleChild(ctx, inst, task, childCallStack)
-		if err != nil {
-			return nil, true, err
+		child, fail := e.buildSingleChild(ctx, inst, task, childCallStack)
+		if fail != nil {
+			return nil, fail
 		}
 		spawned[task.ID] = child.ID
 		children = []*model.ProcessInstance{child}
 	case model.ActionTypeChildParallel:
-		parallel, err := e.buildParallelChildren(ctx, inst, task, childCallStack)
-		if err != nil {
-			return nil, true, err
+		parallel, fail := e.buildParallelChildren(ctx, inst, task, childCallStack)
+		if fail != nil {
+			return nil, fail
 		}
 		ids := make(map[string]any, len(parallel))
 		for _, c := range parallel {
@@ -948,18 +1009,24 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 	inst.RetryCount = 0
 	inst.WakeAt = nil
 
+	// A child spawn is a multi-row transaction that parks the parent atomically, so
+	// it persists itself here rather than through runAdvance. The parent ends
+	// 'waiting' (non-runnable), so dropping the marker after this write is harmless;
+	// it reports outcomeNoop so runAdvance does no further write. On failure it
+	// transitions to the terminal outcome instead.
 	if err := e.db.SpawnChildrenAndWait(ctx, inst, children); err != nil {
-		return nil, true, e.failInstance(inst, fmt.Sprintf("task %q spawn: %v", task.ID, err))
+		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q spawn: %v", task.ID, err)))
 	}
 
 	e.log.Info("parent waiting for children", "id", inst.ID, "task", task.ID, "children", len(children))
 	e.audit(inst, model.LogInfo, model.EventChildrenSpawned, task.ID, "", "", map[string]any{"children": len(children)})
-	return nil, true, nil
+	return nil, stop(advanceOutcome{kind: outcomeNoop})
 }
 
 // buildSingleChild resolves the child definition, evaluates input, and constructs
-// a ProcessInstance ready to be saved. It does not persist anything.
-func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstance, task *model.Task, callStack []string) (*model.ProcessInstance, error) {
+// a ProcessInstance ready to be saved. It does not persist anything; a non-nil
+// outcome means the parent failed and the caller should stop and persist it.
+func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstance, task *model.Task, callStack []string) (*model.ProcessInstance, *advanceOutcome) {
 	name := task.Action.Name
 	version := task.Action.Version
 	if version == 0 {
@@ -971,21 +1038,21 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 			if err != nil {
 				version, err = e.db.LatestVersion(name)
 				if err != nil {
-					return nil, e.failInstance(inst, fmt.Sprintf("task %q child: %v", task.ID, err))
+					return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q child: %v", task.ID, err)))
 				}
 			}
 		}
 	}
 	def, err := e.db.GetDefinition(name, version)
 	if err != nil {
-		return nil, e.failInstance(inst, fmt.Sprintf("task %q child: %v", task.ID, err))
+		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q child: %v", task.ID, err)))
 	}
 	input, err := e.evalChildInput(inst, task.ID, "child", task.Action.Input)
 	if err != nil {
-		return nil, e.failInstance(inst, err.Error())
+		return nil, stop(e.failInstance(inst, err.Error()))
 	}
 	if err := def.ValidateInput(input); err != nil {
-		return nil, e.failInstance(inst, fmt.Sprintf("task %q child input validation: %v", task.ID, err))
+		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q child input validation: %v", task.ID, err)))
 	}
 	childCtx := map[string]any{
 		"input":            input,
@@ -1013,8 +1080,9 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 }
 
 // buildParallelChildren resolves definitions, evaluates inputs, and constructs
-// ProcessInstances for all parallel children. Does not persist anything.
-func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessInstance, task *model.Task, callStack []string) ([]*model.ProcessInstance, error) {
+// ProcessInstances for all parallel children. Does not persist anything; a non-nil
+// outcome means the parent failed and the caller should stop and persist it.
+func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessInstance, task *model.Task, callStack []string) ([]*model.ProcessInstance, *advanceOutcome) {
 	keys := make([]string, 0, len(task.Action.Children))
 	for key := range task.Action.Children {
 		keys = append(keys, key)
@@ -1039,21 +1107,21 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 				if err != nil {
 					version, err = e.db.LatestVersion(entry.Name)
 					if err != nil {
-						return nil, e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q]: %v", task.ID, key, err))
+						return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q]: %v", task.ID, key, err)))
 					}
 				}
 			}
 		}
 		def, err := e.db.GetDefinition(entry.Name, version)
 		if err != nil {
-			return nil, e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q]: %v", task.ID, key, err))
+			return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q]: %v", task.ID, key, err)))
 		}
 		input, err := e.evalChildInput(inst, task.ID, fmt.Sprintf("child_parallel[%q]", key), entry.Input)
 		if err != nil {
-			return nil, e.failInstance(inst, err.Error())
+			return nil, stop(e.failInstance(inst, err.Error()))
 		}
 		if err := def.ValidateInput(input); err != nil {
-			return nil, e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q] input validation: %v", task.ID, key, err))
+			return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q] input validation: %v", task.ID, key, err)))
 		}
 		childCtx := map[string]any{
 			"input":            input,
