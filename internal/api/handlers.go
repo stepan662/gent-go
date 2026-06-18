@@ -84,7 +84,7 @@ type ChannelStatusReq struct {
 }
 
 type StaleRef struct {
-	StepID         string `json:"step_id"`
+	TaskID         string `json:"task_id"`
 	ChildName      string `json:"child_name"`
 	BakedVersion   int    `json:"baked_version"`
 	ChannelVersion int    `json:"channel_version"`
@@ -154,7 +154,7 @@ type LogEntryResp struct {
 	Depth    int            `json:"depth"` // distance from the queried subtree root (0 = the queried node)
 	Level    model.LogLevel `json:"level"`
 	Event    string         `json:"event"`
-	Step     string         `json:"step,omitempty"`
+	Task     string         `json:"task,omitempty"`
 	Message  string         `json:"message,omitempty"`
 	Code     string         `json:"code,omitempty"`
 	Detail   map[string]any `json:"detail,omitempty"`
@@ -254,7 +254,7 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 		ID:             idgen.New(),
 		ProcessName:    def.Name,
 		ProcessVersion: version,
-		StepQueue:      def.Steps,
+		TaskQueue:      def.Tasks,
 		ContextData:    map[string]any{"input": input, "outputs": map[string]any{}, "error": nil},
 		Status:         model.StatusRunning,
 		CreatedAt:      time.Now(),
@@ -346,7 +346,7 @@ func (h *Handlers) listInstanceLogs(id string, raw json.RawMessage) Reply {
 			Depth:    l.Depth,
 			Level:    l.Level,
 			Event:    l.Event,
-			Step:     l.StepID,
+			Task:     l.TaskID,
 			Message:  l.Message,
 			Code:     l.Code,
 			Detail:   l.Detail,
@@ -418,7 +418,7 @@ func instanceToResp(inst *model.ProcessInstance) InstanceStatusResp {
 	}
 }
 
-// orderedContext returns a copy of contextData with outputs serialized in step
+// orderedContext returns a copy of contextData with outputs serialized in task
 // completion order (tracked by "output_order"), hiding the order key itself.
 func orderedContext(ctxData map[string]any) map[string]any {
 	result := make(map[string]any, len(ctxData))
@@ -668,47 +668,47 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 	return results, nil
 }
 
-// buildResolvedDeps returns dependency rows for all child/child_parallel steps in def,
+// buildResolvedDeps returns dependency rows for all child/child_parallel tasks in def,
 // resolving version=0 refs via batchVersions or the channel.
 // Self-references are excluded — the engine always runs them at the caller's own version.
 // It does not mutate def — the raw definition is stored as-is.
 func (h *Handlers) buildResolvedDeps(def *model.ProcessDefinition, selfVersion int, channel string, batchVersions map[string]int) ([]db.DependencyRow, error) {
 	var deps []db.DependencyRow
-	for _, step := range def.Steps {
-		if step.Action == nil {
+	for _, task := range def.Tasks {
+		if task.Action == nil {
 			continue
 		}
-		switch step.Action.Type {
+		switch task.Action.Type {
 		case model.ActionTypeChild:
-			entry := model.ChildEntry{Name: step.Action.Name, Version: step.Action.Version}
+			entry := model.ChildEntry{Name: task.Action.Name, Version: task.Action.Version}
 			if entry.Name == def.Name && (entry.Version == 0 || entry.Version == selfVersion) {
 				continue
 			}
-			version, err := h.resolveChildVersion(entry.Name, entry.Version, step.ID, "", channel, batchVersions)
+			version, err := h.resolveChildVersion(entry.Name, entry.Version, task.ID, "", channel, batchVersions)
 			if err != nil {
 				return nil, err
 			}
 			deps = append(deps, db.DependencyRow{
 				ParentName:    def.Name,
 				ParentVersion: selfVersion,
-				StepID:        step.ID,
+				TaskID:        task.ID,
 				ChildKey:      "",
 				ChildName:     entry.Name,
 				ChildVersion:  version,
 			})
 		case model.ActionTypeChildParallel:
-			for key, entry := range step.Action.Children {
+			for key, entry := range task.Action.Children {
 				if entry.Name == def.Name && (entry.Version == 0 || entry.Version == selfVersion) {
 					continue
 				}
-				version, err := h.resolveChildVersion(entry.Name, entry.Version, step.ID, key, channel, batchVersions)
+				version, err := h.resolveChildVersion(entry.Name, entry.Version, task.ID, key, channel, batchVersions)
 				if err != nil {
 					return nil, err
 				}
 				deps = append(deps, db.DependencyRow{
 					ParentName:    def.Name,
 					ParentVersion: selfVersion,
-					StepID:        step.ID,
+					TaskID:        task.ID,
 					ChildKey:      key,
 					ChildName:     entry.Name,
 					ChildVersion:  version,
@@ -719,7 +719,7 @@ func (h *Handlers) buildResolvedDeps(def *model.ProcessDefinition, selfVersion i
 	return deps, nil
 }
 
-func (h *Handlers) resolveChildVersion(childName string, childVersion int, stepID, childKey, channel string, batchVersions map[string]int) (int, error) {
+func (h *Handlers) resolveChildVersion(childName string, childVersion int, taskID, childKey, channel string, batchVersions map[string]int) (int, error) {
 	if childVersion != 0 {
 		return childVersion, nil
 	}
@@ -732,7 +732,7 @@ func (h *Handlers) resolveChildVersion(childName string, childVersion int, stepI
 		if childKey != "" {
 			label = fmt.Sprintf("%s[%q]", childName, childKey)
 		}
-		return 0, fmt.Errorf("step %q child %s: not on channel %q (%w)", stepID, label, channel, err)
+		return 0, fmt.Errorf("task %q child %s: not on channel %q (%w)", taskID, label, channel, err)
 	}
 	return v, nil
 }
@@ -930,7 +930,7 @@ func (h *Handlers) channelStatus(raw json.RawMessage) Reply {
 	for _, r := range staleRows {
 		k := parentKey{r.ParentName, r.ParentVersion}
 		staleByParent[k] = append(staleByParent[k], StaleRef{
-			StepID:         r.StepID,
+			TaskID:         r.TaskID,
 			ChildName:      r.ChildName,
 			BakedVersion:   r.BakedVersion,
 			ChannelVersion: r.ChannelVersion,
@@ -977,16 +977,16 @@ func topoSort(defs []*model.ProcessDefinition) ([]*model.ProcessDefinition, erro
 		}
 		state[name] = visiting
 		d := byName[name]
-		for _, step := range d.Steps {
-			if step.Action == nil {
+		for _, task := range d.Tasks {
+			if task.Action == nil {
 				continue
 			}
 			var childNames []string
-			switch step.Action.Type {
+			switch task.Action.Type {
 			case model.ActionTypeChild:
-				childNames = []string{step.Action.Name}
+				childNames = []string{task.Action.Name}
 			case model.ActionTypeChildParallel:
-				for _, entry := range step.Action.Children {
+				for _, entry := range task.Action.Children {
 					childNames = append(childNames, entry.Name)
 				}
 			}
@@ -1014,8 +1014,8 @@ func topoSort(defs []*model.ProcessDefinition) ([]*model.ProcessDefinition, erro
 	return sorted, nil
 }
 
-type stepChildKey struct {
-	stepID   string
+type taskChildKey struct {
+	taskID   string
 	childKey string
 }
 
@@ -1027,25 +1027,25 @@ func applyDepsToDefCopy(def *model.ProcessDefinition, deps []db.DependencyRow) *
 	data, _ := json.Marshal(def)
 	var copy model.ProcessDefinition
 	_ = json.Unmarshal(data, &copy)
-	lookup := make(map[stepChildKey]int, len(deps))
+	lookup := make(map[taskChildKey]int, len(deps))
 	for _, d := range deps {
-		lookup[stepChildKey{d.StepID, d.ChildKey}] = d.ChildVersion
+		lookup[taskChildKey{d.TaskID, d.ChildKey}] = d.ChildVersion
 	}
-	for _, step := range copy.Steps {
-		if step.Action == nil {
+	for _, task := range copy.Tasks {
+		if task.Action == nil {
 			continue
 		}
-		switch step.Action.Type {
+		switch task.Action.Type {
 		case model.ActionTypeChild:
-			if v, ok := lookup[stepChildKey{step.ID, ""}]; ok {
-				step.Action.Version = v
+			if v, ok := lookup[taskChildKey{task.ID, ""}]; ok {
+				task.Action.Version = v
 			}
 		case model.ActionTypeChildParallel:
-			for key := range step.Action.Children {
-				if v, ok := lookup[stepChildKey{step.ID, key}]; ok {
-					entry := step.Action.Children[key]
+			for key := range task.Action.Children {
+				if v, ok := lookup[taskChildKey{task.ID, key}]; ok {
+					entry := task.Action.Children[key]
 					entry.Version = v
-					step.Action.Children[key] = entry
+					task.Action.Children[key] = entry
 				}
 			}
 		}
@@ -1060,13 +1060,13 @@ func contentHash(rawJSON []byte, deps []db.DependencyRow) string {
 	h.Write(rawJSON)
 	sorted := append([]db.DependencyRow(nil), deps...)
 	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].StepID != sorted[j].StepID {
-			return sorted[i].StepID < sorted[j].StepID
+		if sorted[i].TaskID != sorted[j].TaskID {
+			return sorted[i].TaskID < sorted[j].TaskID
 		}
 		return sorted[i].ChildKey < sorted[j].ChildKey
 	})
 	for _, d := range sorted {
-		fmt.Fprintf(h, "\x00%s\x00%s\x00%s\x00%d", d.StepID, d.ChildKey, d.ChildName, d.ChildVersion)
+		fmt.Fprintf(h, "\x00%s\x00%s\x00%s\x00%d", d.TaskID, d.ChildKey, d.ChildName, d.ChildVersion)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -1090,17 +1090,17 @@ func subtree(defs []db.VersionedDef, rootName string) ([]db.VersionedDef, error)
 			return nil // dependency not on this channel, skip
 		}
 		visited[name] = true
-		for _, step := range d.Steps {
-			if step.Action == nil {
+		for _, task := range d.Tasks {
+			if task.Action == nil {
 				continue
 			}
-			switch step.Action.Type {
+			switch task.Action.Type {
 			case model.ActionTypeChild:
-				if err := collect(step.Action.Name); err != nil {
+				if err := collect(task.Action.Name); err != nil {
 					return err
 				}
 			case model.ActionTypeChildParallel:
-				for _, entry := range step.Action.Children {
+				for _, entry := range task.Action.Children {
 					if err := collect(entry.Name); err != nil {
 						return err
 					}

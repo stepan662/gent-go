@@ -69,7 +69,7 @@ func (db *DB) FinishChild(child *model.ProcessInstance) error {
 	if parentFound && model.WaitState(parentWaitState) == model.WaitStateWaiting {
 		active, err := qtx.CountActiveSiblings(ctx, dbgen.CountActiveSiblingsParams{
 			ParentID:    child.ParentID,
-			SpawnStepID: child.SpawnStepID,
+			SpawnTaskID: child.SpawnTaskID,
 		})
 		if err != nil {
 			return fmt.Errorf("count siblings: %w", err)
@@ -103,7 +103,7 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 	now := nowMillis()
 
 	// Lock child and all ancestors oldest-first — consistent with FinishChild and
-	// CancelProcess. This step exists only to take FOR UPDATE locks, so it runs on
+	// CancelProcess. This task exists only to take FOR UPDATE locks, so it runs on
 	// PostgreSQL alone; SQLite serialises via its single writer. Ancestors are read
 	// from the child's call_stack in the DB; no Go-side ID list needed.
 	if db.dialect == "postgres" {
@@ -154,7 +154,7 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 		if err == nil && model.WaitState(parentWaitState) == model.WaitStateWaiting {
 			active, err := qtx.CountActiveSiblings(ctx, dbgen.CountActiveSiblingsParams{
 				ParentID:    child.ParentID,
-				SpawnStepID: child.SpawnStepID,
+				SpawnTaskID: child.SpawnTaskID,
 			})
 			if err != nil {
 				return fmt.Errorf("count siblings: %w", err)
@@ -175,11 +175,11 @@ func (db *DB) FailInstanceAndAncestors(child *model.ProcessInstance) error {
 
 // subtreeCTE is a `WITH RECURSIVE subtree(id) AS (...)` clause binding the CTE
 // `subtree` to the instance with the bound id and every descendant, by walking
-// process_instances.parent_id down (riding idx_instances_parent_step, indexed on
+// process_instances.parent_id down (riding idx_instances_parent_task, indexed on
 // both engines).
 //
 // The CTE is a plain SELECT and takes no row locks, so it can't deadlock. Callers
-// that mutate the tree lock the enumerated rows in a SEPARATE step,
+// that mutate the tree lock the enumerated rows in a SEPARATE task,
 // ORDER BY id FOR UPDATE — the global order shared with FinishChild
 // and FailInstanceAndAncestors, which is what prevents deadlocks. (Postgres also
 // forbids FOR UPDATE inside a recursive CTE, so this split is mandatory.)
@@ -257,9 +257,9 @@ func requireRoot(row dbgen.ProcessInstance, op string) error {
 
 // RetryProcess resumes a failed or cancelled root process from where its tree
 // was interrupted. Failed/cancelled instances on the current execution path are
-// revived in place: leaves re-run their pending step, parents are reconstructed
+// revived in place: leaves re-run their pending task, parents are reconstructed
 // as waiting (live children) or collecting (all children done). Completed work
-// is never redone. force overrides the only_once protection on pending steps.
+// is never redone. force overrides the only_once protection on pending tasks.
 //
 // Only root instances are accepted — like cancellation, retry is a decision
 // about the whole tree. A root that is failed/cancelled implies the tree has
@@ -301,7 +301,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 
 	nodes := make(map[string]*model.ProcessInstance)
 	rawRows := make(map[string]dbgen.ProcessInstance)
-	children := make(map[string]map[string][]*model.ProcessInstance) // parentID → spawnStepID → batch
+	children := make(map[string]map[string][]*model.ProcessInstance) // parentID → spawnTaskID → batch
 	for rows.Next() {
 		r, err := scanInstance(rows)
 		if err != nil {
@@ -317,7 +317,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 			if children[inst.ParentID] == nil {
 				children[inst.ParentID] = make(map[string][]*model.ProcessInstance)
 			}
-			children[inst.ParentID][inst.SpawnStepID] = append(children[inst.ParentID][inst.SpawnStepID], inst)
+			children[inst.ParentID][inst.SpawnTaskID] = append(children[inst.ParentID][inst.SpawnTaskID], inst)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -330,7 +330,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 	}
 
 	// Walk the tree top-down, reviving the interrupted path. Only the root and
-	// the front-step children of revived nodes are visited, so completed steps
+	// the front-task children of revived nodes are visited, so completed tasks
 	// and finished side branches are never touched.
 	var dirty []*model.ProcessInstance
 	var revive func(node *model.ProcessInstance) error
@@ -345,13 +345,13 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 		}
 		// node is failed or cancelled
 		newWaitState := model.WaitStateNone
-		if len(node.StepQueue) > 0 {
-			front := node.StepQueue[0]
+		if len(node.TaskQueue) > 0 {
+			front := node.TaskQueue[0]
 			kids := children[node.ID][front.ID]
 			if len(kids) > 0 {
-				// Interrupted inside this spawn step's wait/collect cycle —
+				// Interrupted inside this spawn task's wait/collect cycle —
 				// revive the batch and reconstruct the wait state. (Kids exist
-				// only for spawn steps: SpawnChildrenAndWait is atomic.)
+				// only for spawn tasks: SpawnChildrenAndWait is atomic.)
 				anyActive := false
 				for _, k := range kids {
 					if err := revive(k); err != nil {
@@ -367,17 +367,17 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 					newWaitState = model.WaitStateCollecting // re-run the lost collect
 				}
 			} else if front.OnlyOnce != nil && *front.OnlyOnce && !force {
-				// Reviving with wait_state none re-executes the front step.
-				return fmt.Errorf("instance %q step %q is marked only_once and may have already been attempted; use force to override", node.ID, front.ID)
+				// Reviving with wait_state none re-executes the front task.
+				return fmt.Errorf("instance %q task %q is marked only_once and may have already been attempted; use force to override", node.ID, front.ID)
 			}
 		}
-		// Empty queue: interrupted between the last step and the completed
+		// Empty queue: interrupted between the last task and the completed
 		// write — advance() completes it on the next claim.
 		node.Status = model.StatusRunning
 		node.WaitState = newWaitState
 		node.Error = ""
 		// Keep RetryCount (don't reset): a manual retry is a human-in-the-loop action,
-		// so the failing step — its on_error budget already spent — runs once and
+		// so the failing task — its on_error budget already spent — runs once and
 		// surfaces any failure immediately instead of grinding through more backoffs the
 		// operator can't observe. They diagnose, fix, and retry again.
 		//
@@ -399,7 +399,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 		raw := rawRows[node.ID]
 		if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
 			ID:          node.ID,
-			StepQueue:   raw.StepQueue,
+			TaskQueue:   raw.TaskQueue,
 			ContextData: raw.ContextData,
 			RetryCount:  int64(node.RetryCount),
 			WakeAt: fromTimePtr(node.WakeAt),
@@ -470,7 +470,7 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 	}
 	if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
 		ID:          parent.ID,
-		StepQueue:   parentQueue,
+		TaskQueue:   parentQueue,
 		ContextData: parentCtx,
 		RetryCount:  int64(parent.RetryCount),
 		WakeAt: sql.NullInt64{},

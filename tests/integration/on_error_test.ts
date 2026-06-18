@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { client, startMockService, waitForInstance } from "../helpers/client.ts";
 
-test("on_error — HTTP failure routes to recovery step", async () => {
+test("on_error — HTTP failure routes to recovery task", async () => {
   const failMock = await startMockService(0, { statusCode: 500 });
   const recoveryMock = await startMockService(0, {
     response: { recovered: true },
@@ -11,7 +11,7 @@ test("on_error — HTTP failure routes to recovery step", async () => {
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "call",
           action: {
@@ -27,12 +27,13 @@ test("on_error — HTTP failure routes to recovery step", async () => {
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${recoveryMock.port}/action`,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { recovered: { type: "boolean" } },
               required: ["recovered"],
             },
           },
+          output: "{{ self.result }}",
           timeout_ms: 2000,
           switch: [{ goto: "end" }],
         },
@@ -56,7 +57,7 @@ test("on_error — HTTP failure routes to recovery step", async () => {
   recoveryMock.stop();
 });
 
-test("on_error — error context available in recovery step params", async () => {
+test("on_error — error context available in recovery task params", async () => {
   const failMock = await startMockService(0, { statusCode: 503 });
   const recoveryMock = await startMockService(0, {
     response: { done: true },
@@ -66,7 +67,7 @@ test("on_error — error context available in recovery step params", async () =>
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "call",
           action: {
@@ -83,12 +84,13 @@ test("on_error — error context available in recovery step params", async () =>
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${recoveryMock.port}/action`,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { done: { type: "boolean" } },
               required: ["done"],
             },
           },
+          output: "{{ self.result }}",
           timeout_ms: 2000,
           switch: [{ goto: "end" }],
         },
@@ -120,7 +122,7 @@ test("on_error — unmatched code fails instance", async () => {
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "call",
           action: {

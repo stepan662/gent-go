@@ -29,7 +29,7 @@ test("cancel drains a delayed instance immediately, without waiting out the dela
   await ctx.env.client.PUT("/definitions", {
     body: {
       name: "delay_cancel",
-      steps: [{ id: "wait", action: { type: "delay", ms: "3600000" }, switch: "end" }],
+      tasks: [{ id: "wait", action: { type: "delay", ms: "3600000" }, switch: "end" }],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
   });
@@ -65,7 +65,7 @@ test("retry after cancel resumes a delay toward its original deadline", async ()
   await ctx.env.client.PUT("/definitions", {
     body: {
       name: "delay_resume",
-      steps: [{ id: "wait", action: { type: "delay", ms: "60000" }, switch: "end" }],
+      tasks: [{ id: "wait", action: { type: "delay", ms: "60000" }, switch: "end" }],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
   });
@@ -92,7 +92,7 @@ test("retry after cancel runs immediately if the delay's deadline already passed
   await ctx.env.client.PUT("/definitions", {
     body: {
       name: "delay_passed",
-      steps: [{ id: "wait", action: { type: "delay", ms: "5000" }, switch: "end" }],
+      tasks: [{ id: "wait", action: { type: "delay", ms: "5000" }, switch: "end" }],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
   });

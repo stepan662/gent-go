@@ -36,7 +36,7 @@ process:
       ttl: { type: integer }
       c: { type: integer }
     required: [ttl, c]
-  steps:
+  tasks:
     - id: recursion_condition
       switch:
         - case: "input.ttl <= 0"
@@ -51,7 +51,7 @@ process:
           first:
             name: deep
             input: { ttl: "{{ input.ttl - 1 }}", c: "{{ 12 }}" }
-            output_schema:
+            result_schema:
               type: object
               properties:
                 processes: { type: number }
@@ -59,11 +59,12 @@ process:
           second:
             name: deep
             input: { ttl: "{{ input.ttl - 1 }}", c: "{{ 12 }}" }
-            output_schema:
+            result_schema:
               type: object
               properties:
                 processes: { type: number }
               required: [processes]
+      output: "{{ self.result }}"
       switch:
         - goto: end
     - id: descend
@@ -71,11 +72,12 @@ process:
         type: child
         name: deep
         input: { ttl: "{{ input.ttl - 1 }}", c: "{{ input.c - 1 }}" }
-        output_schema:
+        result_schema:
           type: object
           properties:
             processes: { type: number }
           required: [processes]
+      output: "{{ self.result }}"
       switch:
         - goto: end
   output:

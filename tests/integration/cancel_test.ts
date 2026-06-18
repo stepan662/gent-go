@@ -19,10 +19,10 @@ async function getStatus(gent: GentProcess, id: string) {
   return data!;
 }
 
-// Verifies that cancelling between two steps stops execution cleanly.
+// Verifies that cancelling between two tasks stops execution cleanly.
 // Uses manual tick mode (-poll 0) so each engine cycle is explicit, making
 // every intermediate DB state directly observable.
-test("cancel between steps — status transitions and step2 never executed", async () => {
+test("cancel between tasks — status transitions and step2 never executed", async () => {
   const processName = `cancel_tick_${crypto.randomUUID()}`;
   const db = join(tmpdir(), `gent_cancel_${Date.now()}.db`);
   const gent = await startGent(gentBin, TICK_PORT, db, undefined, 0);
@@ -34,7 +34,7 @@ test("cancel between steps — status transitions and step2 never executed", asy
     await gent.client.PUT("/definitions", {
       body: {
         name: processName,
-        steps: [
+        tasks: [
           {
             id: "step1",
             action: {
@@ -62,7 +62,7 @@ test("cancel between steps — status transitions and step2 never executed", asy
     });
     const id = startData!.id;
 
-    // Before any tick: instance exists but no steps have run yet.
+    // Before any tick: instance exists but no tasks have run yet.
     const s0 = await getStatus(gent, id);
     expect(s0.status).toBe("running");
     expect(step1Mock.requestCount()).toBe(0);
@@ -76,7 +76,7 @@ test("cancel between steps — status transitions and step2 never executed", asy
     const s1 = await getStatus(gent, id);
     expect(s1.status).toBe("running"); // still running, waiting for next tick
 
-    // Cancel between steps — DB transitions to 'cancelling' immediately.
+    // Cancel between tasks — DB transitions to 'cancelling' immediately.
     await gent.client.POST("/instances/{id}/cancel", {
       params: { path: { id } },
     });

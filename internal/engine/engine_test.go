@@ -13,10 +13,10 @@ func TestEvaluator(t *testing.T) {
 		want    bool
 		wantErr bool
 	}{
-		{"outputs.step.ok == true", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"ok": true}}}, true, false},
-		{"outputs.step.ok == true", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"ok": false}}}, false, false},
-		{"outputs.step.amount > 100", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"amount": 200}}}, true, false},
-		{"outputs.step.amount > 100", map[string]interface{}{"outputs": map[string]any{"step": map[string]any{"amount": 50}}}, false, false},
+		{"outputs.task.ok == true", map[string]interface{}{"outputs": map[string]any{"task": map[string]any{"ok": true}}}, true, false},
+		{"outputs.task.ok == true", map[string]interface{}{"outputs": map[string]any{"task": map[string]any{"ok": false}}}, false, false},
+		{"outputs.task.amount > 100", map[string]interface{}{"outputs": map[string]any{"task": map[string]any{"amount": 200}}}, true, false},
+		{"outputs.task.amount > 100", map[string]interface{}{"outputs": map[string]any{"task": map[string]any{"amount": 50}}}, false, false},
 		{"input.a == true && input.b == true", map[string]interface{}{"input": map[string]any{"a": true, "b": true}}, true, false},
 		{"input.a == true && input.b == true", map[string]interface{}{"input": map[string]any{"a": true, "b": false}}, false, false},
 		{"invalid %%% expr", nil, false, true},
@@ -154,9 +154,9 @@ func TestIsRetryAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			step := &model.Step{ID: "s", OnlyOnce: tt.onlyOnce,
+			task := &model.Task{ID: "s", OnlyOnce: tt.onlyOnce,
 				Action: &model.Action{Type: model.ActionTypeREST, Endpoint: "http://x"}}
-			got := isRetryAllowed(step, tt.errCode, tt.matched)
+			got := isRetryAllowed(task, tt.errCode, tt.matched)
 			if got != tt.want {
 				t.Errorf("isRetryAllowed(%q) = %v, want %v", tt.errCode, got, tt.want)
 			}

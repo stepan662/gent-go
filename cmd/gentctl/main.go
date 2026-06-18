@@ -250,7 +250,7 @@ func runStatusCmd(server string, args []string) {
 		Name      string `json:"name"`
 		Version   int    `json:"version"`
 		StaleRefs []struct {
-			StepID         string `json:"step_id"`
+			TaskID         string `json:"task_id"`
 			ChildName      string `json:"child_name"`
 			BakedVersion   int    `json:"baked_version"`
 			ChannelVersion int    `json:"channel_version"`
@@ -269,8 +269,8 @@ func runStatusCmd(server string, args []string) {
 		allClean = false
 		fmt.Printf("STALE  %s@v%d\n", item.Name, item.Version)
 		for _, ref := range item.StaleRefs {
-			fmt.Printf("  step %q: %s baked@v%d, channel@v%d\n",
-				ref.StepID, ref.ChildName, ref.BakedVersion, ref.ChannelVersion)
+			fmt.Printf("  task %q: %s baked@v%d, channel@v%d\n",
+				ref.TaskID, ref.ChildName, ref.BakedVersion, ref.ChannelVersion)
 		}
 	}
 	if allClean {
@@ -348,7 +348,7 @@ func runLogsCmd(server string, args []string) {
 		Depth    int    `json:"depth"`
 		Level    string `json:"level"`
 		Event    string `json:"event"`
-		Step     string `json:"step"`
+		Task     string `json:"task"`
 		Message  string `json:"message"`
 		Code     string `json:"code"`
 	}
@@ -368,8 +368,8 @@ func runLogsCmd(server string, args []string) {
 			indent = strings.Repeat("  ", depth)
 		}
 		line := fmt.Sprintf("%s%s  %-5s  %-24s", indent, l.Time, strings.ToUpper(l.Level), l.Event)
-		if l.Step != "" {
-			line += "  step=" + l.Step
+		if l.Task != "" {
+			line += "  task=" + l.Task
 		}
 		if l.Code != "" {
 			line += "  code=" + l.Code

@@ -3,21 +3,27 @@
   "process_input": {
     "$ref": "#/$defs/input"
   },
-  "process_output": {
-    "$ref": "#/$defs/output"
-  },
   "tasks": {
-    "recursion": {
-      "action_type": "child",
+    "finish": {
+      "action_type": "",
+      "output": {
+        "$ref": "#/$defs/finish_output"
+      }
+    },
+    "start": {
+      "action_type": "rest",
       "input": {
         "type": "object"
       },
       "output": {
-        "$ref": "#/$defs/recursion_output"
+        "$ref": "#/$defs/start_output"
       }
     }
   },
   "$defs": {
+    "finish_output": {
+      "type": "number"
+    },
     "input": {
       "type": "object",
       "properties": {
@@ -29,26 +35,19 @@
         "ttl"
       ]
     },
-    "output": {
+    "start_output": {
       "type": "object",
       "properties": {
         "num": {
-          "type": "integer"
+          "type": "number"
+        },
+        "str": {
+          "type": "string"
         }
       },
       "required": [
-        "num"
-      ]
-    },
-    "recursion_output": {
-      "type": "object",
-      "properties": {
-        "num": {
-          "type": "integer"
-        }
-      },
-      "required": [
-        "num"
+        "num",
+        "str"
       ]
     }
   }

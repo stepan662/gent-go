@@ -29,6 +29,29 @@ func evalAny(expression string, contextData map[string]any) (any, error) {
 	return result, nil
 }
 
+// evalShape recursively evaluates a model.Shape value against env: a string leaf
+// is evaluated as a template (preserving type), an object recurses into each
+// value. The string|object grammar is enforced at unmarshal (model.checkShape),
+// so any other node type is an internal error.
+func evalShape(node any, env map[string]any) (any, error) {
+	switch n := node.(type) {
+	case string:
+		return tmpl.EvalAny(n, env)
+	case map[string]any:
+		out := make(map[string]any, len(n))
+		for k, v := range n {
+			ev, err := evalShape(v, env)
+			if err != nil {
+				return nil, fmt.Errorf("%q: %w", k, err)
+			}
+			out[k] = ev
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("invalid shape node %T", node)
+	}
+}
+
 func evalBool(expr string, contextData map[string]any, self any) (bool, error) {
 	result, err := expression.Eval(expr, evalEnv(contextData, self))
 	if err != nil {

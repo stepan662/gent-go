@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -137,6 +138,11 @@ func buildSpec() []byte {
 		}
 
 		b, _ := r.Spec.MarshalJSON()
+		// The hand-written Action schema and the Shape recursion reference the Shape
+		// def by its process-schema JSON-Pointer (#/$defs/ModelShape). In an OpenAPI
+		// 3.1 document, component schemas live under #/components/schemas, so rewrite
+		// those refs to resolve here too.
+		b = bytes.ReplaceAll(b, []byte("#/$defs/ModelShape"), []byte("#/components/schemas/ModelShape"))
 		specBytes = b
 	})
 	return specBytes

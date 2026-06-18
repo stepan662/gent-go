@@ -16,7 +16,7 @@ func appendLog(t *testing.T, db *dbpkg.DB, instanceID string, level model.LogLev
 		InstanceID: instanceID,
 		Level:      level,
 		Event:      event,
-		StepID:     "s1",
+		TaskID:     "s1",
 		Message:    event + " message",
 		Detail:     map[string]any{"event": event},
 		CreatedAt:  time.UnixMilli(atMillis),
@@ -34,7 +34,7 @@ func spawnInstance(t *testing.T, db *dbpkg.DB, id, parentID string) {
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		StepQueue:      []*model.Step{},
+		TaskQueue:      []*model.Task{},
 		ContextData:    map[string]any{},
 		ParentID:       parentID,
 		Status:         model.StatusRunning,
@@ -46,12 +46,12 @@ func spawnInstance(t *testing.T, db *dbpkg.DB, id, parentID string) {
 func TestListLogs_OrderAndFilters(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
-			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepStarted, 1000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventTaskStarted, 1000)
 			appendLog(t, b.db, "inst-1", model.LogWarn, model.EventRetryScheduled, 2000)
-			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepSucceeded, 3000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventTaskSucceeded, 3000)
 			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventInstanceDone, 4000)
 			// A different instance must not leak into inst-1's logs.
-			appendLog(t, b.db, "inst-2", model.LogInfo, model.EventStepStarted, 1500)
+			appendLog(t, b.db, "inst-2", model.LogInfo, model.EventTaskStarted, 1500)
 
 			all, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{})
 			if err != nil {
@@ -61,8 +61,8 @@ func TestListLogs_OrderAndFilters(t *testing.T) {
 				t.Fatalf("expected 4 logs for inst-1, got %d", len(all))
 			}
 			wantOrder := []string{
-				model.EventStepStarted, model.EventRetryScheduled,
-				model.EventStepSucceeded, model.EventInstanceDone,
+				model.EventTaskStarted, model.EventRetryScheduled,
+				model.EventTaskSucceeded, model.EventInstanceDone,
 			}
 			for i, w := range wantOrder {
 				if all[i].Event != w {
@@ -70,7 +70,7 @@ func TestListLogs_OrderAndFilters(t *testing.T) {
 				}
 			}
 			// Detail round-trips through JSON.
-			if all[0].Detail["event"] != model.EventStepStarted {
+			if all[0].Detail["event"] != model.EventTaskStarted {
 				t.Errorf("detail not preserved: %v", all[0].Detail)
 			}
 
@@ -99,7 +99,7 @@ func TestListLogs_CursorPagination(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			for i := int64(1); i <= 5; i++ {
-				appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepCompleted, i*1000)
+				appendLog(t, b.db, "inst-1", model.LogInfo, model.EventTaskCompleted, i*1000)
 			}
 
 			page1, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{Limit: 2})
@@ -145,9 +145,9 @@ func TestListTreeLogs_AggregatesSubtree(t *testing.T) {
 
 			appendLog(t, b.db, "root", model.LogInfo, model.EventChildrenSpawned, 1000)
 			appendLog(t, b.db, "child-a", model.LogInfo, model.EventChildrenSpawned, 2000)
-			appendLog(t, b.db, "child-b", model.LogInfo, model.EventStepSucceeded, 3000)
-			appendLog(t, b.db, "grandchild", model.LogInfo, model.EventStepSucceeded, 4000)
-			appendLog(t, b.db, "other", model.LogInfo, model.EventStepStarted, 2500)
+			appendLog(t, b.db, "child-b", model.LogInfo, model.EventTaskSucceeded, 3000)
+			appendLog(t, b.db, "grandchild", model.LogInfo, model.EventTaskSucceeded, 4000)
+			appendLog(t, b.db, "other", model.LogInfo, model.EventTaskStarted, 2500)
 
 			// Subtree from the root: root + a + b + grandchild = 4 (not "other").
 			fromRoot, err := b.db.ListTreeLogs("root", dbpkg.LogQuery{})
@@ -197,8 +197,8 @@ func TestListTreeLogs_AggregatesSubtree(t *testing.T) {
 func TestPruneLogs_DeletesOlderThanCutoff(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
-			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepStarted, 1000)
-			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventStepSucceeded, 2000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventTaskStarted, 1000)
+			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventTaskSucceeded, 2000)
 			appendLog(t, b.db, "inst-1", model.LogInfo, model.EventInstanceDone, 3000)
 
 			n, err := b.db.PruneLogs(2500)

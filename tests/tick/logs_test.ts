@@ -6,9 +6,9 @@
  * are claimable on the very next tick with no backoff wait.
  *
  * Covers:
- *   1. A successful run records step_started → step_succeeded → step_completed
- *      → instance_completed, and step_succeeded carries a (capped) response snippet.
- *   2. A failing step with one retry records retry_scheduled (warn) then
+ *   1. A successful run records task_started → task_succeeded → task_completed
+ *      → instance_completed, and task_succeeded carries a (capped) response snippet.
+ *   2. A failing task with one retry records retry_scheduled (warn) then
  *      instance_failed; the level filter narrows to just the warn entry.
  *   3. Time-based pruning: advancing the clock past the retention window drops
  *      old log rows on the next tick.
@@ -40,14 +40,14 @@ beforeAll(async () => {
   failMockPort = failMock.port;
   stopFail = failMock.stop;
 
-  // Two-step happy path so step_completed (mid-process routing) also appears.
+  // Two-task happy path so task_completed (mid-process routing) also appears.
   await ctx.env.define(okProc, [
     {
       id: "first",
       action: {
         type: "rest" as const,
         endpoint: `http://localhost:${okMockPort}/action`,
-        output_schema: {
+        result_schema: {
           type: "object",
           properties: { ok: { type: "boolean" } },
         },
@@ -97,7 +97,7 @@ async function getLogs(
   return data!;
 }
 
-test("successful run records step and completion events with response snippet", async () => {
+test("successful run records task and completion events with response snippet", async () => {
   const id = await ctx.env.start(okProc);
   await ctx.env.tickUntilIdle();
   expect(await ctx.env.status(id)).toBe("completed");
@@ -105,27 +105,27 @@ test("successful run records step and completion events with response snippet", 
   const logs = await getLogs(id);
   const events = logs.map((l) => l.event);
 
-  // Oldest-first ordering, full lifecycle of a two-step run.
+  // Oldest-first ordering, full lifecycle of a two-task run.
   expect(events).toEqual([
-    "step_started",
-    "step_succeeded",
-    "step_completed",
-    "step_started",
-    "step_succeeded",
+    "task_started",
+    "task_succeeded",
+    "task_completed",
+    "task_started",
+    "task_succeeded",
     "instance_completed",
   ]);
 
-  // step_succeeded for the first step carries a truncated response snippet.
-  const firstSucceeded = logs.find((l) => l.event === "step_succeeded");
-  expect(firstSucceeded?.step).toBe("first");
+  // task_succeeded for the first task carries a truncated response snippet.
+  const firstSucceeded = logs.find((l) => l.event === "task_succeeded");
+  expect(firstSucceeded?.task).toBe("first");
   expect(JSON.stringify(firstSucceeded?.detail)).toContain("ok");
 
-  // step_started captures the call type.
-  const firstStarted = logs.find((l) => l.event === "step_started");
+  // task_started captures the call type.
+  const firstStarted = logs.find((l) => l.event === "task_started");
   expect(JSON.stringify(firstStarted?.detail)).toContain("rest");
 });
 
-test("failing step records retry_scheduled then instance_failed; level filter narrows", async () => {
+test("failing task records retry_scheduled then instance_failed; level filter narrows", async () => {
   const id = await ctx.env.start(failProc);
   await ctx.env.tickUntilIdle();
   expect(await ctx.env.status(id)).toBe("failed");

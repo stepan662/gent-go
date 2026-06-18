@@ -68,9 +68,9 @@ export class TickEnv {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async define(name: string, steps: object[]): Promise<void> {
+  async define(name: string, tasks: object[]): Promise<void> {
     const { error } = await this.gent.client.PUT("/definitions", {
-      body: { name, steps } as any,
+      body: { name, tasks } as any,
     });
     if (error)
       throw new Error(`define(${name}) failed: ${JSON.stringify(error)}`);
@@ -93,38 +93,38 @@ export class TickEnv {
       throw new Error(`cancel(${id}) failed: ${JSON.stringify(error)}`);
   }
 
-  // Returns the child instance ID stored as placeholder in the parent's context
+  // Returns the child instance ID recorded under the parent's "_children" key
   // after SpawnChildrenAndWait. Valid between spawn and child completion.
-  async childOf(parentId: string, stepId: string): Promise<string> {
+  async childOf(parentId: string, taskId: string): Promise<string> {
     const { data } = await this.gent.client.GET("/instances/{id}", {
       params: { path: { id: parentId } },
     });
-    const placeholder = (data!.context as Record<string, unknown> | null)
-      ?.outputs as Record<string, unknown> | null;
-    const val = placeholder?.[stepId];
+    const spawned = (data!.context as Record<string, unknown> | null)
+      ?._children as Record<string, unknown> | null;
+    const val = spawned?.[taskId];
     if (typeof val !== "string") {
       throw new Error(
-        `childOf(${parentId}, ${stepId}): expected string placeholder, got ${JSON.stringify(val)}`,
+        `childOf(${parentId}, ${taskId}): expected string placeholder, got ${JSON.stringify(val)}`,
       );
     }
     return val;
   }
 
-  // Returns the parallel child IDs keyed by child key, stored as placeholder
-  // in the parent's context after SpawnChildrenAndWait.
+  // Returns the parallel child IDs keyed by child key, recorded under the
+  // parent's "_children" key after SpawnChildrenAndWait.
   async childrenOf(
     parentId: string,
-    stepId: string,
+    taskId: string,
   ): Promise<Record<string, string>> {
     const { data } = await this.gent.client.GET("/instances/{id}", {
       params: { path: { id: parentId } },
     });
-    const outputs = (data!.context as Record<string, unknown> | null)
-      ?.outputs as Record<string, unknown> | null;
-    const val = outputs?.[stepId];
+    const spawned = (data!.context as Record<string, unknown> | null)
+      ?._children as Record<string, unknown> | null;
+    const val = spawned?.[taskId];
     if (typeof val !== "object" || val === null) {
       throw new Error(
-        `childrenOf(${parentId}, ${stepId}): expected object placeholder, got ${JSON.stringify(val)}`,
+        `childrenOf(${parentId}, ${taskId}): expected object placeholder, got ${JSON.stringify(val)}`,
       );
     }
     return val as Record<string, string>;

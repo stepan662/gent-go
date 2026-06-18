@@ -16,7 +16,7 @@ func insertInst(t *testing.T, db *dbpkg.DB, id string, status model.Status, pare
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		StepQueue:      []*model.Step{{ID: "step1"}},
+		TaskQueue:      []*model.Task{{ID: "step1"}},
 		ContextData:    map[string]any{},
 		Status:         status,
 		ParentID:       parentID,
@@ -62,7 +62,7 @@ func insertInstW(t *testing.T, db *dbpkg.DB, id string, status model.Status, wai
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		StepQueue:      []*model.Step{{ID: "step1"}},
+		TaskQueue:      []*model.Task{{ID: "step1"}},
 		ContextData:    map[string]any{},
 		Status:         status,
 		WaitState:      waitState,
@@ -241,7 +241,7 @@ func TestSpawnChildrenAndWait_RunningParent(t *testing.T) {
 			child := &model.ProcessInstance{
 				ID:          "child",
 				ProcessName: "test",
-				StepQueue:   []*model.Step{{ID: "step1"}},
+				TaskQueue:   []*model.Task{{ID: "step1"}},
 				ContextData: map[string]any{},
 				ParentID:    "parent",
 				CallStack:   []string{"parent"},
@@ -279,7 +279,7 @@ func TestSpawnChildrenAndWait_CancellingParent(t *testing.T) {
 			child := &model.ProcessInstance{
 				ID:          "child",
 				ProcessName: "test",
-				StepQueue:   []*model.Step{{ID: "step1"}},
+				TaskQueue:   []*model.Task{{ID: "step1"}},
 				ContextData: map[string]any{},
 				ParentID:    "parent",
 				CallStack:   []string{"parent"},
@@ -305,18 +305,18 @@ func TestSpawnChildrenAndWait_CancellingParent(t *testing.T) {
 	}
 }
 
-// insertChild inserts a child instance spawned by the given parent step.
-func insertChild(t *testing.T, db *dbpkg.DB, id string, status model.Status, parentID, spawnStepID string, callStack []string, errMsg string) {
+// insertChild inserts a child instance spawned by the given parent task.
+func insertChild(t *testing.T, db *dbpkg.DB, id string, status model.Status, parentID, spawnTaskID string, callStack []string, errMsg string) {
 	t.Helper()
 	inst := &model.ProcessInstance{
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		StepQueue:      []*model.Step{{ID: "step1"}},
+		TaskQueue:      []*model.Task{{ID: "step1"}},
 		ContextData:    map[string]any{},
 		Status:         status,
 		ParentID:       parentID,
-		SpawnStepID:    spawnStepID,
+		SpawnTaskID:    spawnTaskID,
 		CallStack:      callStack,
 		Error:          errMsg,
 	}
@@ -414,7 +414,7 @@ func TestRetryProcess_FailedTree_RevivesOnlyFailedLeaf(t *testing.T) {
 }
 
 // TestRetryProcess_FailedTree_RevivesAllFailedChildren verifies that a root
-// retry revives every failed child of the pending spawn step in one pass.
+// retry revives every failed child of the pending spawn task in one pass.
 func TestRetryProcess_FailedTree_RevivesAllFailedChildren(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
@@ -477,7 +477,7 @@ func TestRetryProcess_FailedTree_DeepChain(t *testing.T) {
 }
 
 // TestRetryProcess_CancelledTree_ReconstructsWaiting verifies that retrying a
-// cancelled root whose spawn step has an unfinished child revives the child and
+// cancelled root whose spawn task has an unfinished child revives the child and
 // reconstructs the root as waiting.
 func TestRetryProcess_CancelledTree_ReconstructsWaiting(t *testing.T) {
 	for _, b := range testBackends(t) {
@@ -507,7 +507,7 @@ func TestRetryProcess_CancelledTree_ReconstructsWaiting(t *testing.T) {
 }
 
 // TestRetryProcess_CancelledTree_ReconstructsCollecting verifies that retrying a
-// cancelled root whose spawn-step children all completed revives it straight to
+// cancelled root whose spawn-task children all completed revives it straight to
 // collecting, so the engine re-runs the lost collect.
 func TestRetryProcess_CancelledTree_ReconstructsCollecting(t *testing.T) {
 	for _, b := range testBackends(t) {
@@ -536,7 +536,7 @@ func TestRetryProcess_CancelledTree_ReconstructsCollecting(t *testing.T) {
 }
 
 // TestRetryProcess_Cancelled_RerunsPendingStep verifies that a cancelled
-// instance whose pending step spawned nothing simply re-runs it (wait_state none).
+// instance whose pending task spawned nothing simply re-runs it (wait_state none).
 func TestRetryProcess_Cancelled_RerunsPendingStep(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
@@ -557,14 +557,14 @@ func TestRetryProcess_Cancelled_RerunsPendingStep(t *testing.T) {
 }
 
 // TestRetryProcess_EmptyQueue verifies that an instance interrupted between its
-// last step and the completed write revives cleanly; advance() finishes it.
+// last task and the completed write revives cleanly; advance() finishes it.
 func TestRetryProcess_EmptyQueue(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			inst := &model.ProcessInstance{
 				ID:          "root",
 				ProcessName: "test",
-				StepQueue:   []*model.Step{},
+				TaskQueue:   []*model.Task{},
 				ContextData: map[string]any{},
 				Status:      model.StatusCancelled,
 			}
@@ -661,7 +661,7 @@ func TestFailInstanceAndAncestors_SiblingStillRunning(t *testing.T) {
 
 // TestRetryProcess_MixedFailUnderCancel verifies a tree where a child failure
 // overrode the root's cancellation: both the failed and the cancelled child of
-// the pending spawn step are revived.
+// the pending spawn task are revived.
 func TestRetryProcess_MixedFailUnderCancel(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
@@ -686,7 +686,7 @@ func TestRetryProcess_MixedFailUnderCancel(t *testing.T) {
 }
 
 // TestRetryProcess_OnlyOnce_RejectedUnlessForced verifies that retrying a
-// process whose pending step is marked only_once is rejected, and that force
+// process whose pending task is marked only_once is rejected, and that force
 // overrides the protection.
 func TestRetryProcess_OnlyOnce_RejectedUnlessForced(t *testing.T) {
 	for _, b := range testBackends(t) {
@@ -695,10 +695,10 @@ func TestRetryProcess_OnlyOnce_RejectedUnlessForced(t *testing.T) {
 			inst := &model.ProcessInstance{
 				ID:          "locked",
 				ProcessName: "test",
-				StepQueue:   []*model.Step{{ID: "step1", OnlyOnce: &trueVal}},
+				TaskQueue:   []*model.Task{{ID: "step1", OnlyOnce: &trueVal}},
 				ContextData: map[string]any{},
 				Status:      model.StatusFailed,
-				Error:       "failed on only_once step",
+				Error:       "failed on only_once task",
 			}
 			if err := b.db.SaveInstance(inst); err != nil {
 				t.Fatalf("SaveInstance: %v", err)
@@ -706,7 +706,7 @@ func TestRetryProcess_OnlyOnce_RejectedUnlessForced(t *testing.T) {
 
 			err := b.db.RetryProcess(context.Background(), "locked", false)
 			if err == nil {
-				t.Fatal("expected error for only_once step, got nil")
+				t.Fatal("expected error for only_once task, got nil")
 			}
 			if mustStatus(t, b.db, "locked") != model.StatusFailed {
 				t.Error("status should remain failed after rejected retry")
@@ -733,11 +733,11 @@ func TestRetryProcess_OnlyOnceDeep_RollsBack(t *testing.T) {
 			leaf := &model.ProcessInstance{
 				ID:          "leaf",
 				ProcessName: "test",
-				StepQueue:   []*model.Step{{ID: "step1", OnlyOnce: &trueVal}},
+				TaskQueue:   []*model.Task{{ID: "step1", OnlyOnce: &trueVal}},
 				ContextData: map[string]any{},
 				Status:      model.StatusFailed,
 				ParentID:    "root",
-				SpawnStepID: "step1",
+				SpawnTaskID: "step1",
 				CallStack:   []string{"root"},
 				Error:       "boom",
 			}
@@ -774,15 +774,15 @@ func TestRetryProcess_OnlyOnceDeep_RollsBack(t *testing.T) {
 }
 
 // TestFinishChild_StepScoped verifies that sibling counting is scoped to the
-// spawn step: a straggler from another batch must not keep the parent waiting.
+// spawn task: a straggler from another batch must not keep the parent waiting.
 func TestFinishChild_StepScoped(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			insertInstW(t, b.db, "parent", model.StatusRunning, model.WaitStateWaiting, "", nil, "")
-			// Leftover running child from an earlier spawn step.
-			insertChild(t, b.db, "old-straggler", model.StatusRunning, "parent", "stepA", []string{"parent"}, "")
-			// Current batch: a single child of stepB.
-			insertChild(t, b.db, "current", model.StatusRunning, "parent", "stepB", []string{"parent"}, "")
+			// Leftover running child from an earlier spawn task.
+			insertChild(t, b.db, "old-straggler", model.StatusRunning, "parent", "taskA", []string{"parent"}, "")
+			// Current batch: a single child of taskB.
+			insertChild(t, b.db, "current", model.StatusRunning, "parent", "taskB", []string{"parent"}, "")
 
 			child, err := b.db.GetInstance("current")
 			if err != nil {
@@ -793,7 +793,7 @@ func TestFinishChild_StepScoped(t *testing.T) {
 				t.Fatalf("FinishChild: %v", err)
 			}
 
-			// The stepB batch is done — parent must wake even though a stepA
+			// The taskB batch is done — parent must wake even though a taskA
 			// child is still running.
 			if got := mustWaitState(t, b.db, "parent"); got != model.WaitStateCollecting {
 				t.Errorf("parent: expected wait_state=collecting, got %q", got)
@@ -802,23 +802,23 @@ func TestFinishChild_StepScoped(t *testing.T) {
 	}
 }
 
-// TestChildrenForStep_StepScoped verifies that reading a step's children returns
-// only that step's batch, not earlier batches spawned by the same parent.
+// TestChildrenForStep_StepScoped verifies that reading a task's children returns
+// only that task's batch, not earlier batches spawned by the same parent.
 func TestChildrenForStep_StepScoped(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			insertInst(t, b.db, "parent", model.StatusRunning, "", nil, "")
 			oldChild := &model.ProcessInstance{
-				ID: "old", ProcessName: "test", StepQueue: []*model.Step{},
+				ID: "old", ProcessName: "test", TaskQueue: []*model.Task{},
 				ContextData: map[string]any{"output": "stale"},
 				Status:      model.StatusCompleted,
-				ParentID:    "parent", SpawnStepID: "stepA", CallStack: []string{"parent"},
+				ParentID:    "parent", SpawnTaskID: "taskA", CallStack: []string{"parent"},
 			}
 			newChild := &model.ProcessInstance{
-				ID: "new", ProcessName: "test", StepQueue: []*model.Step{},
+				ID: "new", ProcessName: "test", TaskQueue: []*model.Task{},
 				ContextData: map[string]any{"output": "fresh"},
 				Status:      model.StatusCompleted,
-				ParentID:    "parent", SpawnStepID: "stepB", CallStack: []string{"parent"},
+				ParentID:    "parent", SpawnTaskID: "taskB", CallStack: []string{"parent"},
 			}
 			for _, c := range []*model.ProcessInstance{oldChild, newChild} {
 				if err := b.db.SaveInstance(c); err != nil {
@@ -826,12 +826,12 @@ func TestChildrenForStep_StepScoped(t *testing.T) {
 				}
 			}
 
-			kids, err := b.db.ChildrenForStep(context.Background(), "parent", "stepB")
+			kids, err := b.db.ChildrenForTask(context.Background(), "parent", "taskB")
 			if err != nil {
-				t.Fatalf("ChildrenForStep: %v", err)
+				t.Fatalf("ChildrenForTask: %v", err)
 			}
 			if len(kids) != 1 {
-				t.Fatalf("expected 1 child for stepB, got %d", len(kids))
+				t.Fatalf("expected 1 child for taskB, got %d", len(kids))
 			}
 			if kids[0].ID != "new" {
 				t.Errorf("expected child %q, got %q", "new", kids[0].ID)

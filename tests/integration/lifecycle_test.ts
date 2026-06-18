@@ -5,7 +5,7 @@ import {
   waitForInstance,
 } from "../helpers/client.ts";
 
-test("lifecycle — task step completes when service returns ok", async () => {
+test("lifecycle — task task completes when service returns ok", async () => {
   const mock = await startMockService(0, {
     response: { done: true },
   });
@@ -14,14 +14,15 @@ test("lifecycle — task step completes when service returns ok", async () => {
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "call",
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${mock.port}/action`,
-            output_schema: { type: "object", properties: { done: { type: "boolean" } } },
+            result_schema: { type: "object", properties: { done: { type: "boolean" } } },
           },
+          output: "{{ self.result }}",
           timeout_ms: 2000,
           switch: [{ goto: "end" }],
         },
@@ -44,14 +45,14 @@ test("lifecycle — task step completes when service returns ok", async () => {
   mock.stop();
 });
 
-test("lifecycle — task step fails and marks failed", async () => {
+test("lifecycle — task task fails and marks failed", async () => {
   const mock = await startMockService(0, { statusCode: 500 });
 
   const name = `lifecycle_fail_${crypto.randomUUID()}`;
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "call",
           action: { type: "rest" as const, endpoint: `http://localhost:${mock.port}/action` },
@@ -89,29 +90,31 @@ test("lifecycle — conditional routes to correct branch", async () => {
         },
         required: ["go_then"],
       },
-      steps: [
+      tasks: [
         {
           id: "start",
           action: { type: "rest" as const, endpoint: `http://localhost:${thenMock.port}/action` },
-          switch: [{ case: "input.go_then", goto: "$then_step" }, { goto: "$else_step" }],
+          switch: [{ case: "input.go_then", goto: "$then_task" }, { goto: "$else_task" }],
         },
         {
-          id: "then_step",
+          id: "then_task",
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${thenMock.port}/action`,
-            output_schema: { type: "object", properties: { branch: { type: "string" } } },
+            result_schema: { type: "object", properties: { branch: { type: "string" } } },
           },
+          output: "{{ self.result }}",
           timeout_ms: 1000,
           switch: [{ goto: "end" }],
         },
         {
-          id: "else_step",
+          id: "else_task",
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${elseMock.port}/action`,
-            output_schema: { type: "object", properties: { branch: { type: "string" } } },
+            result_schema: { type: "object", properties: { branch: { type: "string" } } },
           },
+          output: "{{ self.result }}",
           timeout_ms: 1000,
           switch: [{ goto: "end" }],
         },
@@ -133,8 +136,8 @@ test("lifecycle — conditional routes to correct branch", async () => {
 
   expect(i1.error).toBeUndefined();
 
-  expect((i1.data?.context?.outputs as any)?.then_step?.branch).toBe("then");
-  expect((i1.data?.context?.outputs as any)?.else_step?.branch).toBe(undefined);
+  expect((i1.data?.context?.outputs as any)?.then_task?.branch).toBe("then");
+  expect((i1.data?.context?.outputs as any)?.else_task?.branch).toBe(undefined);
 
   const i2Create = await client.POST("/instances", {
     body: { process: name, input: { go_then: false } },
@@ -145,29 +148,29 @@ test("lifecycle — conditional routes to correct branch", async () => {
   const i2 = await client.GET("/instances/{id}", {
     params: { path: { id: i2Create.data!.id } },
   });
-  expect((i2.data?.context?.outputs as any)?.else_step?.branch).toBe("else");
-  expect((i2.data?.context?.outputs as any)?.then_step?.branch).toBe(undefined);
+  expect((i2.data?.context?.outputs as any)?.else_task?.branch).toBe("else");
+  expect((i2.data?.context?.outputs as any)?.then_task?.branch).toBe(undefined);
 
   thenMock.stop();
   elseMock.stop();
 });
 
-test("lifecycle — task fails when output violates output_schema", async () => {
+test("lifecycle — task fails when output violates result_schema", async () => {
   const mock = await startMockService(0, {
     response: { wrong_field: true },
   });
 
-  const name = `lifecycle_output_schema_${crypto.randomUUID()}`;
+  const name = `lifecycle_result_schema_${crypto.randomUUID()}`;
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "charge",
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${mock.port}/action`,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { charged: { type: "boolean" } },
               required: ["charged"],

@@ -70,13 +70,13 @@ var registry = func() []actionDef {
 					},
 					Required: []string{"order_id"},
 				},
-				Steps: []*model.Step{
+				Tasks: []*model.Task{
 					{
 						ID: "charge",
 						Action: &model.Action{
 							Type:     model.ActionTypeREST,
 							Endpoint: "http://localhost:9001/charge",
-							OutputSchema: &schema.SchemaNode{
+							ResultSchema: &schema.SchemaNode{
 								Type: schema.SchemaType{"object"},
 								Properties: map[string]*schema.SchemaNode{
 									"charged": {Type: schema.SchemaType{"boolean"}},
@@ -85,7 +85,7 @@ var registry = func() []actionDef {
 						},
 						TimeoutMs: 5000, OnError: []model.ErrorCase{{Retries: 3}},
 						Switch: model.SwitchMap{
-							{Case: "self.charged == true", Goto: "$ship"},
+							{Case: "self.output.charged == true", Goto: "$ship"},
 							{Goto: "$refund"},
 						},
 					},
@@ -170,7 +170,7 @@ var registry = func() []actionDef {
 				Definitions: []model.ProcessDefinition{
 					{
 						Name:  "child_process",
-						Steps: []*model.Step{{ID: "run", Action: &model.Action{Type: model.ActionTypeREST, Endpoint: "http://localhost:9001/run"}}},
+						Tasks: []*model.Task{{ID: "run", Action: &model.Action{Type: model.ActionTypeREST, Endpoint: "http://localhost:9001/run"}}},
 					},
 				},
 			},
@@ -254,7 +254,7 @@ var registry = func() []actionDef {
 			Req: []model.ProcessDefinition{
 				{
 					Name:  "order_pipeline",
-					Steps: []*model.Step{{ID: "charge", Action: &model.Action{Type: model.ActionTypeREST, Endpoint: "http://localhost:9001/charge"}}},
+					Tasks: []*model.Task{{ID: "charge", Action: &model.Action{Type: model.ActionTypeREST, Endpoint: "http://localhost:9001/charge"}}},
 				},
 			},
 			Resp: []map[string]any{{"process": "order_pipeline", "version": 1}},
@@ -299,7 +299,7 @@ var registry = func() []actionDef {
 				Tree    bool   `query:"tree" description:"Include the whole process subtree, keyed on the root instance"`
 			}{},
 			Resp: []LogEntryResp{{
-				Time: "2026-06-14T12:00:00Z", Level: model.LogInfo, Event: model.EventStepSucceeded, Step: "charge",
+				Time: "2026-06-14T12:00:00Z", Level: model.LogInfo, Event: model.EventTaskSucceeded, Task: "charge",
 			}},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
 				q := r.URL.Query()

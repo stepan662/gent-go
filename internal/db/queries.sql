@@ -25,14 +25,14 @@ DELETE FROM process_dependencies
 WHERE parent_name = sqlc.arg(parent_name) AND parent_version = sqlc.arg(parent_version);
 
 -- name: InsertDependency :exec
-INSERT INTO process_dependencies (parent_name, parent_version, step_id, child_key, child_name, child_version)
-VALUES (sqlc.arg(parent_name), sqlc.arg(parent_version), sqlc.arg(step_id), sqlc.arg(child_key), sqlc.arg(child_name), sqlc.arg(child_version));
+INSERT INTO process_dependencies (parent_name, parent_version, task_id, child_key, child_name, child_version)
+VALUES (sqlc.arg(parent_name), sqlc.arg(parent_version), sqlc.arg(task_id), sqlc.arg(child_key), sqlc.arg(child_name), sqlc.arg(child_version));
 
 -- name: GetDependencyVersion :one
 SELECT child_version FROM process_dependencies
 WHERE parent_name = sqlc.arg(parent_name)
   AND parent_version = sqlc.arg(parent_version)
-  AND step_id = sqlc.arg(step_id)
+  AND task_id = sqlc.arg(task_id)
   AND child_key = sqlc.arg(child_key);
 
 -- name: UpsertChannel :exec
@@ -61,17 +61,17 @@ ORDER BY pc.name;
 
 -- name: InsertInstance :exec
 INSERT INTO process_instances
-    (id, process_name, process_version, step_queue, context_data, parent_id, spawn_step_id,
+    (id, process_name, process_version, task_queue, context_data, parent_id, spawn_task_id,
      call_stack, retry_count, wake_at, status, wait_state, error, created_at, updated_at)
 VALUES
     (sqlc.arg(id), sqlc.arg(process_name), sqlc.arg(process_version),
-     sqlc.arg(step_queue), sqlc.arg(context_data), sqlc.arg(parent_id), sqlc.arg(spawn_step_id),
+     sqlc.arg(task_queue), sqlc.arg(context_data), sqlc.arg(parent_id), sqlc.arg(spawn_task_id),
      sqlc.arg(call_stack), sqlc.arg(retry_count), sqlc.arg(wake_at),
      sqlc.arg(status), sqlc.arg(wait_state), sqlc.arg(error), sqlc.arg(created_at), sqlc.arg(updated_at));
 
 -- name: UpdateInstance :exec
 UPDATE process_instances
-SET step_queue       = sqlc.arg(step_queue),
+SET task_queue       = sqlc.arg(task_queue),
     context_data     = sqlc.arg(context_data),
     retry_count      = sqlc.arg(retry_count),
     wake_at    = sqlc.arg(wake_at),
@@ -85,7 +85,7 @@ WHERE id = sqlc.arg(id);
 
 -- name: UpdateInstanceProgress :exec
 UPDATE process_instances
-SET step_queue       = sqlc.arg(step_queue),
+SET task_queue       = sqlc.arg(task_queue),
     context_data     = sqlc.arg(context_data),
     retry_count      = sqlc.arg(retry_count),
     wake_at    = sqlc.arg(wake_at),
@@ -96,17 +96,17 @@ SET step_queue       = sqlc.arg(step_queue),
 WHERE id = sqlc.arg(id);
 
 -- name: GetInstance :one
-SELECT id, process_name, process_version, step_queue, context_data, parent_id,
+SELECT id, process_name, process_version, task_queue, context_data, parent_id,
        call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
 FROM process_instances
 WHERE id = sqlc.arg(id);
 
 -- name: ListInstances :many
 -- Empty status lists every instance; a non-empty status filters to it.
-SELECT id, process_name, process_version, step_queue, context_data, parent_id,
+SELECT id, process_name, process_version, task_queue, context_data, parent_id,
        call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
 FROM process_instances
 WHERE (sqlc.arg(status) = '' OR status = sqlc.arg(status))
 ORDER BY created_at DESC;
@@ -130,7 +130,7 @@ WHERE id IN (
 -- name: CountActiveSiblings :one
 SELECT COUNT(*) FROM process_instances
 WHERE parent_id = sqlc.arg(parent_id)
-  AND spawn_step_id = sqlc.arg(spawn_step_id)
+  AND spawn_task_id = sqlc.arg(spawn_task_id)
   AND status NOT IN ('completed', 'failed', 'cancelled');
 
 -- name: GetWaitState :one
@@ -142,13 +142,13 @@ SET wait_state = CASE WHEN status = 'running' THEN 'collecting' ELSE '' END,
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id);
 
--- name: GetChildrenForStep :many
-SELECT id, process_name, process_version, step_queue, context_data, parent_id,
+-- name: GetChildrenForTask :many
+SELECT id, process_name, process_version, task_queue, context_data, parent_id,
        call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
 FROM process_instances
 WHERE parent_id = sqlc.arg(parent_id)
-  AND spawn_step_id = sqlc.arg(spawn_step_id);
+  AND spawn_task_id = sqlc.arg(spawn_task_id);
 
 -- name: FindParentsOf :many
 SELECT pd.parent_name, pc.version AS parent_version, defp.definition AS parent_definition,
@@ -167,7 +167,7 @@ WHERE id IN (SELECT value FROM json_each(sqlc.arg(ids)))
 
 -- name: FindStaleRefs :many
 SELECT pd.parent_name, pc.version AS parent_version,
-       pd.step_id, pd.child_name,
+       pd.task_id, pd.child_name,
        pd.child_version AS baked_version, pc2.version AS channel_version
 FROM process_dependencies pd
 JOIN process_channels pc  ON pc.name  = pd.parent_name AND pc.channel = sqlc.arg(channel)
@@ -177,16 +177,16 @@ WHERE pd.parent_version = pc.version
 
 -- name: InsertLog :exec
 INSERT INTO process_logs
-    (id, instance_id, level, event, step_id, message, code, detail, created_at)
+    (id, instance_id, level, event, task_id, message, code, detail, created_at)
 VALUES
     (sqlc.arg(id), sqlc.arg(instance_id), sqlc.arg(level), sqlc.arg(event),
-     sqlc.arg(step_id), sqlc.arg(message), sqlc.arg(code), sqlc.arg(detail), sqlc.arg(created_at));
+     sqlc.arg(task_id), sqlc.arg(message), sqlc.arg(code), sqlc.arg(detail), sqlc.arg(created_at));
 
 -- name: ListLogs :many
 -- Empty level lists every level. since=0 lists from the start. The (after_ts,
 -- after_id) pair is a keyset cursor: pass (0, '') for the first page. The tuple
 -- comparison is spelled out (not row-value syntax) so it runs on SQLite too.
-SELECT id, instance_id, level, event, step_id, message, code, detail, created_at
+SELECT id, instance_id, level, event, task_id, message, code, detail, created_at
 FROM process_logs
 WHERE instance_id = sqlc.arg(instance_id)
   AND (sqlc.arg(level) = '' OR level = sqlc.arg(level))

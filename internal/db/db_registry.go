@@ -16,7 +16,7 @@ import (
 type DependencyRow struct {
 	ParentName    string
 	ParentVersion int
-	StepID        string
+	TaskID        string
 	ChildKey      string
 	ChildName     string
 	ChildVersion  int
@@ -26,7 +26,7 @@ type DependencyRow struct {
 type StaleRefRow struct {
 	ParentName     string
 	ParentVersion  int
-	StepID         string
+	TaskID         string
 	ChildName      string
 	BakedVersion   int
 	ChannelVersion int
@@ -75,7 +75,7 @@ func (db *DB) SaveDefinition(def *model.ProcessDefinition, version int, deps []D
 		if err := qtx.InsertDependency(ctx, dbgen.InsertDependencyParams{
 			ParentName:    d.ParentName,
 			ParentVersion: int64(d.ParentVersion),
-			StepID:        d.StepID,
+			TaskID:        d.TaskID,
 			ChildKey:      d.ChildKey,
 			ChildName:     d.ChildName,
 			ChildVersion:  int64(d.ChildVersion),
@@ -118,7 +118,7 @@ func (db *DB) GetDefinition(name string, version int) (*model.ProcessDefinition,
 		db.defCache.Store(key, raw)
 	}
 
-	// Unmarshal a fresh copy every call so callers never share mutable Step pointers.
+	// Unmarshal a fresh copy every call so callers never share mutable Task pointers.
 	var def model.ProcessDefinition
 	return &def, json.Unmarshal([]byte(raw.(string)), &def)
 }
@@ -164,15 +164,15 @@ func (db *DB) FindVersionByHash(name, hash string) (int, error) {
 	return int(v.(int64)), nil
 }
 
-func (db *DB) GetDependencyVersion(parentName string, parentVersion int, stepID string, childKey string) (int, error) {
+func (db *DB) GetDependencyVersion(parentName string, parentVersion int, taskID string, childKey string) (int, error) {
 	v, err := db.q.GetDependencyVersion(context.Background(), dbgen.GetDependencyVersionParams{
 		ParentName:    parentName,
 		ParentVersion: int64(parentVersion),
-		StepID:        stepID,
+		TaskID:        taskID,
 		ChildKey:      childKey,
 	})
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("dependency not found for %q v%d step %q child %q", parentName, parentVersion, stepID, childKey)
+		return 0, fmt.Errorf("dependency not found for %q v%d task %q child %q", parentName, parentVersion, taskID, childKey)
 	}
 	if err != nil {
 		return 0, err
@@ -245,7 +245,7 @@ func (db *DB) FindStaleRefs(channel string) ([]StaleRefRow, error) {
 		out[i] = StaleRefRow{
 			ParentName:     r.ParentName,
 			ParentVersion:  int(r.ParentVersion),
-			StepID:         r.StepID,
+			TaskID:         r.TaskID,
 			ChildName:      r.ChildName,
 			BakedVersion:   int(r.BakedVersion),
 			ChannelVersion: int(r.ChannelVersion),

@@ -75,6 +75,14 @@ function refDefName(ref: { $ref: string }): string {
   return ref.$ref.replace("#/$defs/", "");
 }
 
+// Each named schema is compiled on its own, but its body may contain
+// `$ref: #/$defs/...` pointers into sibling defs (e.g. a recursive type the
+// engine hoisted to the shared $defs). Re-attach the shared $defs so those
+// refs resolve during compilation.
+function withDefs(s: object): object {
+  return { ...s, $defs: defs };
+}
+
 // ─── generate types.ts ────────────────────────────────────────────────────
 
 const typeSections: string[] = [
@@ -86,7 +94,7 @@ const typeSections: string[] = [
 if (processInput) {
   const inputDef = defs[refDefName(processInput)];
   if (inputDef)
-    typeSections.push(await compile(inputDef, "ProcessInput", opts));
+    typeSections.push(await compile(withDefs(inputDef), "ProcessInput", opts));
 }
 
 for (const [id, task] of Object.entries(tasks)) {
@@ -97,13 +105,13 @@ for (const [id, task] of Object.entries(tasks)) {
     const inputSchema = inputRef.$ref
       ? (defs[refDefName(inputRef as { $ref: string })] ?? task.input)
       : task.input;
-    typeSections.push(await compile(inputSchema, `${pascal}Input`, opts));
+    typeSections.push(await compile(withDefs(inputSchema), `${pascal}Input`, opts));
   }
 
   if (task.output) {
     const defSchema = defs[refDefName(task.output)];
     if (defSchema) {
-      typeSections.push(await compile(defSchema, `${pascal}Output`, opts));
+      typeSections.push(await compile(withDefs(defSchema), `${pascal}Output`, opts));
     }
   }
 }
@@ -154,7 +162,7 @@ function buildServerFile(): string {
     "// Transport envelope — mirrors internal/transport/transport.go",
     "interface TaskRequest {",
     "  instance_id: string",
-    "  step_id:     string",
+    "  task_id:     string",
     "  data:        unknown",
     "}",
     "",
@@ -164,45 +172,45 @@ function buildServerFile(): string {
     "}",
     "",
     "// Output schemas baked in for runtime validation via AJV.",
-    "const stepSchemas: Record<string, object> = {",
+    "const taskSchemas: Record<string, object> = {",
     schemaEntries,
     "}",
     "",
     "const ajv = new Ajv()",
     "const validators = Object.fromEntries(",
-    "  Object.entries(stepSchemas).map(([id, schema]) => [id, ajv.compile(schema)])",
+    "  Object.entries(taskSchemas).map(([id, schema]) => [id, ajv.compile(schema)])",
     ")",
     "",
     "export function startServer(handlers: Handlers, port: number): void {",
     "  const server = createServer(async (req, res) => {",
-    "    const stepId = new URL(req.url ?? '/', `http://localhost`).pathname.slice(1)",
+    "    const taskId = new URL(req.url ?? '/', `http://localhost`).pathname.slice(1)",
     "",
-    "    if (!(stepId in handlers)) {",
+    "    if (!(taskId in handlers)) {",
     "      res.writeHead(404, { 'Content-Type': 'application/json' })",
-    "      res.end(JSON.stringify({ status: 'error', error: `no handler for step \"${stepId}\"` }))",
+    "      res.end(JSON.stringify({ status: 'error', error: `no handler for task \"${taskId}\"` }))",
     "      return",
     "    }",
     "",
     "    let body = ''",
     "    for await (const chunk of req) body += chunk",
     "    const taskReq: TaskRequest = JSON.parse(body)",
-    "    console.log(`→ ${stepId} [${taskReq.instance_id}]`)",
+    "    console.log(`→ ${taskId} [${taskReq.instance_id}]`)",
     "",
     "    try {",
-    "      const fn = (handlers as unknown as Record<string, (ctx: unknown) => Promise<unknown>>)[stepId]",
+    "      const fn = (handlers as unknown as Record<string, (ctx: unknown) => Promise<unknown>>)[taskId]",
     "      const output = await fn(taskReq.data)",
-    "      const validate = validators[stepId]",
+    "      const validate = validators[taskId]",
     "      if (validate && !validate(output)) {",
-    "        console.log(`← ${stepId} [schema error]`)",
+    "        console.log(`← ${taskId} [schema error]`)",
     "        res.writeHead(500, { 'Content-Type': 'application/json' })",
     "        res.end(JSON.stringify({ error: `output schema violation: ${ajv.errorsText(validate.errors)}` }))",
     "        return",
     "      }",
-    "      console.log(`← ${stepId} [ok]`)",
+    "      console.log(`← ${taskId} [ok]`)",
     "      res.writeHead(200, { 'Content-Type': 'application/json' })",
     "      res.end(JSON.stringify(output))",
     "    } catch (err) {",
-    "      console.log(`← ${stepId} [error]`)",
+    "      console.log(`← ${taskId} [error]`)",
     "      res.writeHead(500, { 'Content-Type': 'application/json' })",
     "      res.end(JSON.stringify({ error: String(err) }))",
     "    }",

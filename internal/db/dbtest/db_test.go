@@ -86,7 +86,7 @@ func insertRunning(t *testing.T, db *dbpkg.DB, id string) {
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		StepQueue:      []*model.Step{},
+		TaskQueue:      []*model.Task{},
 		ContextData:    map[string]any{},
 		Status:         model.StatusRunning,
 	}

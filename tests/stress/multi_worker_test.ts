@@ -115,7 +115,7 @@ for (const backend of backends) {
               properties: { ttl: { type: "integer" } },
               required: ["ttl"],
             },
-            steps: [
+            tasks: [
               {
                 id: "recursion_condition",
                 switch: [
@@ -131,7 +131,7 @@ for (const backend of backends) {
                     first: {
                       name: processName,
                       input: { ttl: "{{input.ttl - 1}}" },
-                      output_schema: {
+                      result_schema: {
                         type: "object",
                         properties: { processes: { type: "number" } },
                         required: ["processes"],
@@ -140,7 +140,7 @@ for (const backend of backends) {
                     second: {
                       name: processName,
                       input: { ttl: "{{input.ttl - 1}}" },
-                      output_schema: {
+                      result_schema: {
                         type: "object",
                         properties: { processes: { type: "number" } },
                         required: ["processes"],
@@ -148,6 +148,7 @@ for (const backend of backends) {
                     },
                   },
                 },
+                output: "{{ self.result }}",
                 switch: [{ goto: "end" }],
               },
             ],

@@ -9,6 +9,7 @@ package template
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"gent/internal/expression"
@@ -69,6 +70,50 @@ func checkMixedNullability(s string, sc schema.Schema) error {
 		}
 	}
 	return nil
+}
+
+// OutputRefs returns the distinct task ids referenced via outputs.<id> across all
+// {{ }} expressions in template s (used to build the output-dependency graph).
+func OutputRefs(s string) ([]string, error) {
+	set := map[string]struct{}{}
+	addRefs := func(expr string) error {
+		refs, err := expression.OutputRefs(expr)
+		if err != nil {
+			return fmt.Errorf("template expression %q: %w", expr, err)
+		}
+		for _, r := range refs {
+			set[r] = struct{}{}
+		}
+		return nil
+	}
+	if expr, ok := singleExpr(s); ok {
+		if err := addRefs(expr); err != nil {
+			return nil, err
+		}
+	} else {
+		rest := s
+		for {
+			start := strings.Index(rest, "{{")
+			if start == -1 {
+				break
+			}
+			rest = rest[start+2:]
+			end := strings.Index(rest, "}}")
+			if end == -1 {
+				break
+			}
+			if err := addRefs(rest[:end]); err != nil {
+				return nil, err
+			}
+			rest = rest[end+2:]
+		}
+	}
+	ids := make([]string, 0, len(set))
+	for id := range set {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 // singleExpr reports whether s is exactly "{{expr}}" with nothing outside.

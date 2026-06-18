@@ -15,9 +15,9 @@ const (
 // Log event kinds emitted by the engine as it advances an instance. These are
 // the stable machine-readable identifiers; the human message lives in Message.
 const (
-	EventStepStarted     = "step_started"
-	EventStepSucceeded   = "step_succeeded"
-	EventStepCompleted   = "step_completed"
+	EventTaskStarted     = "task_started"
+	EventTaskSucceeded   = "task_succeeded"
+	EventTaskCompleted   = "task_completed"
 	EventRetryScheduled  = "retry_scheduled"
 	EventErrorRoute      = "routing_to_error_handler"
 	EventErrorCompleted  = "error_route_completed"
@@ -39,7 +39,7 @@ type LogEntry struct {
 	InstanceID string         `json:"instance_id"`
 	Level      LogLevel       `json:"level"`
 	Event      string         `json:"event"`
-	StepID     string         `json:"step_id,omitempty"`
+	TaskID     string         `json:"task_id,omitempty"`
 	Message    string         `json:"message,omitempty"`
 	Code       string         `json:"code,omitempty"`
 	Detail     map[string]any `json:"detail,omitempty"`

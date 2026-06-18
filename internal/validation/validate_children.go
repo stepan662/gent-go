@@ -13,7 +13,7 @@ type DefinitionGetter interface {
 	LatestVersion(name string) (int, error)
 }
 
-// ValidateChildProcessRefs checks every child/child_parallel step in def:
+// ValidateChildProcessRefs checks every child/child_parallel task in def:
 //  1. The referenced process exists (version 0 resolves to latest).
 //  2. The schema inferred from the input expressions is a subset of the child's InputSchema.
 //
@@ -25,9 +25,9 @@ func ValidateChildProcessRefs(def *model.ProcessDefinition, currentVersion int, 
 		return err
 	}
 
-	required, optional, mustErr, mayErr := computeContextSets(def.Steps)
+	required, optional, mustErr, mayErr := computeContextSets(def.Tasks)
 
-	for _, s := range def.Steps {
+	for _, s := range def.Tasks {
 		if s.Action == nil {
 			continue
 		}
@@ -53,8 +53,8 @@ func ValidateChildProcessRefs(def *model.ProcessDefinition, currentVersion int, 
 	return nil
 }
 
-func validateChildEntry(stepID string, label string, p model.ChildEntry, ctx *schema.SchemaNode, defs map[string]*schema.SchemaNode, current *model.ProcessDefinition, currentVersion int, getter DefinitionGetter) error {
-	prefix := fmt.Sprintf("step %q: %s", stepID, label)
+func validateChildEntry(taskID string, label string, p model.ChildEntry, ctx *schema.SchemaNode, defs map[string]*schema.SchemaNode, current *model.ProcessDefinition, currentVersion int, getter DefinitionGetter) error {
+	prefix := fmt.Sprintf("task %q: %s", taskID, label)
 
 	var child *model.ProcessDefinition
 	var childVersion int
@@ -81,17 +81,21 @@ func validateChildEntry(stepID string, label string, p model.ChildEntry, ctx *sc
 		return nil
 	}
 
-	inferred, err := inferObjectSchema(p.Input, ctx, func(name string) string {
-		return fmt.Sprintf("%s input %q", prefix, name)
-	})
-	if err != nil {
-		return err
+	var inferred *schema.SchemaNode
+	if p.Input.Present() {
+		var err error
+		inferred, err = inferShape(p.Input.Raw, ctx, fmt.Sprintf("%s input", prefix))
+		if err != nil {
+			return err
+		}
+	} else {
+		inferred = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
 	}
 
 	if len(defs) > 0 {
 		inferred = withDefs(inferred, defs)
 	}
-	inferred, err = schema.Normalize(inferred)
+	inferred, err := schema.Normalize(inferred)
 	if err != nil {
 		return fmt.Errorf("%s: normalize inferred input: %w", prefix, err)
 	}

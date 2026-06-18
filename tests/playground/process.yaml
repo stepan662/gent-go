@@ -5,26 +5,27 @@ input_schema:
   properties:
     ttl:
       type: integer
-  required: [ ttl ]
-steps:
-  - id: switch
-    switch:
-      - case: "input.ttl > 0"
-        goto: $recursion
-      - goto: end
+  required: [ttl]
 
-  - id: recursion
+tasks:
+  - id: start
     action:
-      type: child
-      name: order-pipeline
-      input:
-        ttl: "{{ input.ttl - 1 }}"
-      output_schema:
+      type: rest
+      endpoint: "http://localhost:3001/start"
+      result_schema:
         type: object
         properties:
           num:
-            type: integer
-        required: [num]
+            type: number
+          str:
+            type: string
+        required: [num, str]
+    output: "{{ self.result }}"
+    switch:
+      - case: "self.result.num < input.ttl"
+        goto: next
+      - goto: end
+
+  - id: finish
+    output: "{{outputs.start.num}}"
     switch: end
-output:
-  num: "{{ (outputs.recursion.num ?? 0) + 1 }}"

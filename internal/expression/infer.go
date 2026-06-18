@@ -102,6 +102,14 @@ func inferMember(n *ast.MemberNode, ictx inferCtx) (*schema.SchemaNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Member access on a known-null base is null, matching runtime optional
+	// chaining (eval returns nil for a nil base). This is also what lets the
+	// recursive-inference seed work: the self-reference's previous value is null
+	// on the first iteration, and `self.previous.x` must resolve to null so a
+	// `?? default` base case can fire rather than erroring on a missing property.
+	if schema.IsNullType(base) {
+		return typeSchema("null"), nil
+	}
 	switch prop := n.Property.(type) {
 	case *ast.StringNode:
 		return schema.LookupProperty(base, prop.Value, ictx.defs)

@@ -5,8 +5,11 @@ export interface ProcessInput {
   ttl: number;
 }
 
-export interface RecursionInput {}
+export type FinishOutput = number;
 
-export interface RecursionOutput {
+export interface StartInput {}
+
+export interface StartOutput {
   num: number;
+  str: string;
 }
