@@ -51,7 +51,7 @@ interface MockServiceOptions {
   statusCode?: number;
   // How long to delay the very first request before responding.
   // 0 (default) = respond immediately.
-  // Infinity     = never respond; use this to simulate a worker hanging mid-step.
+  // Infinity     = never respond; use this to simulate a worker hanging mid-task.
   firstRequestDelayMs?: number;
 }
 

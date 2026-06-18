@@ -20,7 +20,7 @@ import (
 )
 
 // TestStress_MultiWorker_ExactlyOnce starts engineCount Engine instances sharing
-// the same SQLite database, each polling at 1 ms, and verifies that each step of
+// the same SQLite database, each polling at 1 ms, and verifies that each task of
 // each process instance is executed exactly once — no double-execution despite
 // workers all racing to claim the same pool of instances.
 func TestStress_MultiWorker_ExactlyOnce(t *testing.T) {
@@ -32,38 +32,38 @@ func TestStress_MultiWorker_ExactlyOnce(t *testing.T) {
 
 	database := openStressDB(t)
 
-	// Counting server: records how many times each (instanceID, stepID) pair is called.
+	// Counting server: records how many times each (instanceID, taskID) pair is called.
 	var mu sync.Mutex
 	callCounts := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			InstanceID string `json:"instance_id"`
-			StepID     string `json:"step_id"`
+			TaskID     string `json:"task_id"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		mu.Lock()
-		callCounts[req.InstanceID+"/"+req.StepID]++
+		callCounts[req.InstanceID+"/"+req.TaskID]++
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
 
-	// Two-step definition: step-a → step-b → end.
+	// Two-task definition: task-a → task-b → end.
 	processName := fmt.Sprintf("stress-once-%d", time.Now().UnixNano())
-	steps := []*model.Step{
+	tasks := []*model.Task{
 		{
-			ID:     "step-a",
+			ID:     "task-a",
 			Action:   &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
 			Switch: model.SwitchMap{{Goto: model.GotoNext}},
 		},
 		{
-			ID:     "step-b",
+			ID:     "task-b",
 			Action:   &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
 			Switch: model.SwitchMap{{Goto: model.GotoEnd}},
 		},
 	}
-	def := &model.ProcessDefinition{Name: processName, Steps: steps}
+	def := &model.ProcessDefinition{Name: processName, Tasks: tasks}
 	if err := database.SaveDefinition(def, 1, nil, "stress-hash", ""); err != nil {
 		t.Fatalf("SaveDefinition: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestStress_MultiWorker_ExactlyOnce(t *testing.T) {
 			ID:             id,
 			ProcessName:    processName,
 			ProcessVersion: 1,
-			StepQueue:      steps,
+			TaskQueue:      tasks,
 			ContextData:    map[string]any{},
 			Status:         model.StatusRunning,
 		}
@@ -119,7 +119,7 @@ func TestStress_MultiWorker_ExactlyOnce(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	// Each step must have been called exactly once per instance.
+	// Each task must have been called exactly once per instance.
 	mu.Lock()
 	defer mu.Unlock()
 	total := 0
@@ -135,9 +135,9 @@ func TestStress_MultiWorker_ExactlyOnce(t *testing.T) {
 		if inst.Status != model.StatusCompleted {
 			t.Errorf("instance %s: status = %q, want completed", id, inst.Status)
 		}
-		for _, stepID := range []string{"step-a", "step-b"} {
-			if n := callCounts[id+"/"+stepID]; n != 1 {
-				t.Errorf("instance %s step %s: called %d times, want 1", id, stepID, n)
+		for _, taskID := range []string{"task-a", "task-b"} {
+			if n := callCounts[id+"/"+taskID]; n != 1 {
+				t.Errorf("instance %s task %s: called %d times, want 1", id, taskID, n)
 			}
 		}
 	}
@@ -173,9 +173,9 @@ func TestStress_Chaos_CancelRetryRandomErrors(t *testing.T) {
 	database := openStressDB(t)
 
 	// Mock service: fails with probability failPct/100 (atomically switchable).
-	// Per (instance, step) it tracks whether a 200 was already served: repeat
+	// Per (instance, task) it tracks whether a 200 was already served: repeat
 	// calls are legitimate only after failures (automatic on_error retries or a
-	// manual retry of a failed step), so any call arriving after a success is a
+	// manual retry of a failed task), so any call arriving after a success is a
 	// double execution and recorded as a violation.
 	var failPct atomic.Int64
 	failPct.Store(30)
@@ -187,10 +187,10 @@ func TestStress_Chaos_CancelRetryRandomErrors(t *testing.T) {
 		totalCalls.Add(1)
 		var req struct {
 			InstanceID string `json:"instance_id"`
-			StepID     string `json:"step_id"`
+			TaskID     string `json:"task_id"`
 		}
 		json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
-		key := req.InstanceID + "/" + req.StepID
+		key := req.InstanceID + "/" + req.TaskID
 
 		fail := rand.Int63n(100) < failPct.Load()
 		callMu.Lock()
@@ -213,30 +213,30 @@ func TestStress_Chaos_CancelRetryRandomErrors(t *testing.T) {
 	defer srv.Close()
 
 	// Definitions: root ─child→ mid ─child_parallel→ {a,b} leaves.
-	// Every REST step gets one automatic retry on http.% so the on_error path
+	// Every REST task gets one automatic retry on http.% so the on_error path
 	// is exercised too (immediateRetries → no backoff).
 	uid := time.Now().UnixNano()
 	leafName := fmt.Sprintf("chaos-leaf-%d", uid)
 	midName := fmt.Sprintf("chaos-mid-%d", uid)
 	rootName := fmt.Sprintf("chaos-root-%d", uid)
 
-	restStep := func(id string, last bool) *model.Step {
+	restTask := func(id string, last bool) *model.Task {
 		gt := model.GotoNext
 		if last {
 			gt = model.GotoEnd
 		}
-		return &model.Step{
+		return &model.Task{
 			ID:      id,
 			Action:    &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
 			OnError: []model.ErrorCase{{Code: []string{"http.%"}, Retries: 1}},
 			Switch:  model.SwitchMap{{Goto: gt}},
 		}
 	}
-	leafDef := &model.ProcessDefinition{Name: leafName, Steps: []*model.Step{
-		restStep("work-1", false),
-		restStep("work-2", true),
+	leafDef := &model.ProcessDefinition{Name: leafName, Tasks: []*model.Task{
+		restTask("work-1", false),
+		restTask("work-2", true),
 	}}
-	midDef := &model.ProcessDefinition{Name: midName, Steps: []*model.Step{
+	midDef := &model.ProcessDefinition{Name: midName, Tasks: []*model.Task{
 		{
 			ID: "fanout",
 			Action: &model.Action{Type: model.ActionTypeChildParallel, Children: map[string]model.ChildEntry{
@@ -245,15 +245,15 @@ func TestStress_Chaos_CancelRetryRandomErrors(t *testing.T) {
 			}},
 			Switch: model.SwitchMap{{Goto: model.GotoNext}},
 		},
-		restStep("mid-work", true),
+		restTask("mid-work", true),
 	}}
-	rootDef := &model.ProcessDefinition{Name: rootName, Steps: []*model.Step{
+	rootDef := &model.ProcessDefinition{Name: rootName, Tasks: []*model.Task{
 		{
 			ID:     "spawn-mid",
 			Action:   &model.Action{Type: model.ActionTypeChild, Name: midName},
 			Switch: model.SwitchMap{{Goto: model.GotoNext}},
 		},
-		restStep("root-work", true),
+		restTask("root-work", true),
 	}}
 	for _, def := range []*model.ProcessDefinition{leafDef, midDef, rootDef} {
 		if err := database.SaveDefinition(def, 1, nil, "chaos-hash-"+def.Name, ""); err != nil {
@@ -269,7 +269,7 @@ func TestStress_Chaos_CancelRetryRandomErrors(t *testing.T) {
 			ID:             id,
 			ProcessName:    rootName,
 			ProcessVersion: 1,
-			StepQueue:      rootDef.Steps,
+			TaskQueue:      rootDef.Tasks,
 			ContextData:    map[string]any{},
 			Status:         model.StatusRunning,
 		}
@@ -455,23 +455,23 @@ func TestStress_Chaos_CancelRetryRandomErrors(t *testing.T) {
 		}
 	}
 
-	// Exactly-once on success: a step that returned 200 must never have been
+	// Exactly-once on success: a task that returned 200 must never have been
 	// called again — cancels, retries, and on_error retries may only re-run
-	// steps whose previous attempts failed.
+	// tasks whose previous attempts failed.
 	callMu.Lock()
 	for _, key := range doubleExecs {
-		t.Errorf("step executed again after a successful call: %s", key)
+		t.Errorf("task executed again after a successful call: %s", key)
 	}
-	stepsRun := len(succeeded)
+	tasksRun := len(succeeded)
 	callMu.Unlock()
 
-	// And since every tree completed, every REST step succeeded exactly once.
-	// REST steps per tree: root-work(1) + mid-work(1) + 2 leaves × work-1/2(2) = 6.
-	if want := rootCount * 6; stepsRun != want {
-		t.Errorf("distinct successful (instance, step) pairs = %d, want %d", stepsRun, want)
+	// And since every tree completed, every REST task succeeded exactly once.
+	// REST tasks per tree: root-work(1) + mid-work(1) + 2 leaves × work-1/2(2) = 6.
+	if want := rootCount * 6; tasksRun != want {
+		t.Errorf("distinct successful (instance, task) pairs = %d, want %d", tasksRun, want)
 	}
-	t.Logf("instances: %d (roots %d), HTTP calls: %d, distinct successful steps: %d",
-		len(insts), rootCount, totalCalls.Load(), stepsRun)
+	t.Logf("instances: %d (roots %d), HTTP calls: %d, distinct successful tasks: %d",
+		len(insts), rootCount, totalCalls.Load(), tasksRun)
 }
 
 // TestGracefulShutdown_ReleasesLeases verifies that a clean shutdown (ctx cancel)
@@ -483,8 +483,8 @@ func TestStress_Chaos_CancelRetryRandomErrors(t *testing.T) {
 func TestGracefulShutdown_ReleasesLeases(t *testing.T) {
 	database := openStressDB(t)
 
-	// Signals when the step is hit, then blocks until the test releases it, so the
-	// step stays in-flight (lease held) right up to shutdown. On shutdown the engine
+	// Signals when the task is hit, then blocks until the test releases it, so the
+	// task stays in-flight (lease held) right up to shutdown. On shutdown the engine
 	// aborts its request client-side (transport.Send returns), so the assertions run
 	// without needing the handler to unblock; we close release at the end purely so
 	// srv.Close() doesn't wait on the leaked handler goroutine.
@@ -501,12 +501,12 @@ func TestGracefulShutdown_ReleasesLeases(t *testing.T) {
 	defer close(release) // LIFO: runs before srv.Close() so the handler can exit
 
 	processName := fmt.Sprintf("graceful-%d", time.Now().UnixNano())
-	steps := []*model.Step{{
+	tasks := []*model.Task{{
 		ID:     "work",
 		Action:   &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
 		Switch: model.SwitchMap{{Goto: model.GotoEnd}},
 	}}
-	if err := database.SaveDefinition(&model.ProcessDefinition{Name: processName, Steps: steps}, 1, nil, "graceful-hash", ""); err != nil {
+	if err := database.SaveDefinition(&model.ProcessDefinition{Name: processName, Tasks: tasks}, 1, nil, "graceful-hash", ""); err != nil {
 		t.Fatalf("SaveDefinition: %v", err)
 	}
 
@@ -515,7 +515,7 @@ func TestGracefulShutdown_ReleasesLeases(t *testing.T) {
 		ID:             instID,
 		ProcessName:    processName,
 		ProcessVersion: 1,
-		StepQueue:      steps,
+		TaskQueue:      tasks,
 		ContextData:    map[string]any{},
 		Status:         model.StatusRunning,
 	}); err != nil {
@@ -529,12 +529,12 @@ func TestGracefulShutdown_ReleasesLeases(t *testing.T) {
 	done := make(chan struct{})
 	go func() { eng.Run(ctx); close(done) }()
 
-	// Wait until the engine has claimed the instance and the step is in-flight.
+	// Wait until the engine has claimed the instance and the task is in-flight.
 	select {
 	case <-hit:
 	case <-time.After(10 * time.Second):
 		cancel()
-		t.Fatal("step never went in-flight")
+		t.Fatal("task never went in-flight")
 	}
 
 	// Sanity: an in-flight instance holds a lease.
@@ -568,7 +568,7 @@ func TestGracefulShutdown_ReleasesLeases(t *testing.T) {
 
 // TestOverwhelm_GracefulExit deterministically forces the overwhelm condition and
 // shows the new behaviour: the engine stops the pump, drains the in-flight advance,
-// and Run returns an *OverwhelmError (no os.Exit). A step blocks server-side well past
+// and Run returns an *OverwhelmError (no os.Exit). A task blocks server-side well past
 // a deliberately tiny 1s lease (with the renewer far enough out that it can't save it),
 // and maxConcurrent=2 leaves a free slot for the pump to re-claim the still-in-flight
 // instance on. Engine logs go to stderr so the diagnostic is visible under `-v`.
@@ -584,18 +584,18 @@ func TestOverwhelm_GracefulExit(t *testing.T) {
 	defer srv.Close()
 
 	name := fmt.Sprintf("overwhelm-%d", time.Now().UnixNano())
-	steps := []*model.Step{{
+	tasks := []*model.Task{{
 		ID:     "slow",
 		Action:   &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
 		Switch: model.SwitchMap{{Goto: model.GotoEnd}},
 	}}
-	if err := database.SaveDefinition(&model.ProcessDefinition{Name: name, Steps: steps}, 1, nil, "overwhelm-hash", ""); err != nil {
+	if err := database.SaveDefinition(&model.ProcessDefinition{Name: name, Tasks: tasks}, 1, nil, "overwhelm-hash", ""); err != nil {
 		t.Fatalf("SaveDefinition: %v", err)
 	}
 	id := fmt.Sprintf("oi-%d", time.Now().UnixNano())
 	if err := database.SaveInstance(&model.ProcessInstance{
 		ID: id, ProcessName: name, ProcessVersion: 1,
-		StepQueue: steps, ContextData: map[string]any{}, Status: model.StatusRunning,
+		TaskQueue: tasks, ContextData: map[string]any{}, Status: model.StatusRunning,
 	}); err != nil {
 		t.Fatalf("SaveInstance: %v", err)
 	}
@@ -636,7 +636,7 @@ func TestOverwhelm_GracefulExit(t *testing.T) {
 		}
 	}
 	if elapsed < blockFor-time.Second {
-		t.Errorf("Run returned in %v, too fast to have drained the %v in-flight step", elapsed, blockFor)
+		t.Errorf("Run returned in %v, too fast to have drained the %v in-flight task", elapsed, blockFor)
 	}
 }
 

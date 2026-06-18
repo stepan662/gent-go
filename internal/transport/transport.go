@@ -20,7 +20,7 @@ import (
 // Request is the message the engine sends to a service.
 type Request struct {
 	InstanceID string `json:"instance_id"`
-	StepID     string `json:"step_id"`
+	TaskID     string `json:"task_id"`
 	Data       any    `json:"data"`
 }
 
@@ -34,7 +34,7 @@ type Response struct {
 	ErrorMessage string
 }
 
-// Send dispatches a request to the appropriate endpoint based on the step's call config.
+// Send dispatches a request to the appropriate endpoint based on the task's call config.
 // headers contains pre-resolved header values (for rest calls).
 func Send(ctx context.Context, call *model.Action, headers map[string]string, req Request) (*Response, error) {
 	body, err := json.Marshal(req)

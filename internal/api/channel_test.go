@@ -28,7 +28,7 @@ func TestApplyBatch_VersionedSelfRefCreatesDep(t *testing.T) {
 	// v1: plain recursive process (no versioned self-ref).
 	v1 := map[string]any{
 		"name": "recursive",
-		"steps": []any{
+		"tasks": []any{
 			map[string]any{"id": "recurse", "action": map[string]any{
 				"type": "child",
 				"name": "recursive",
@@ -40,7 +40,7 @@ func TestApplyBatch_VersionedSelfRefCreatesDep(t *testing.T) {
 	// v2: references recursive@v1 explicitly via child_parallel — both self-ref variants.
 	v2 := map[string]any{
 		"name": "recursive",
-		"steps": []any{
+		"tasks": []any{
 			map[string]any{"id": "recurse", "action": map[string]any{
 				"type": "child_parallel",
 				"children": map[string]any{

@@ -13,17 +13,17 @@ import (
 const countActiveSiblings = `-- name: CountActiveSiblings :one
 SELECT COUNT(*) FROM process_instances
 WHERE parent_id = ?1
-  AND spawn_step_id = ?2
+  AND spawn_task_id = ?2
   AND status NOT IN ('completed', 'failed', 'cancelled')
 `
 
 type CountActiveSiblingsParams struct {
 	ParentID    string
-	SpawnStepID string
+	SpawnTaskID string
 }
 
 func (q *Queries) CountActiveSiblings(ctx context.Context, arg CountActiveSiblingsParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countActiveSiblings, arg.ParentID, arg.SpawnStepID)
+	row := q.db.QueryRowContext(ctx, countActiveSiblings, arg.ParentID, arg.SpawnTaskID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -146,7 +146,7 @@ func (q *Queries) FindParentsOf(ctx context.Context, arg FindParentsOfParams) ([
 
 const findStaleRefs = `-- name: FindStaleRefs :many
 SELECT pd.parent_name, pc.version AS parent_version,
-       pd.step_id, pd.child_name,
+       pd.task_id, pd.child_name,
        pd.child_version AS baked_version, pc2.version AS channel_version
 FROM process_dependencies pd
 JOIN process_channels pc  ON pc.name  = pd.parent_name AND pc.channel = ?1
@@ -158,7 +158,7 @@ WHERE pd.parent_version = pc.version
 type FindStaleRefsRow struct {
 	ParentName     string
 	ParentVersion  int64
-	StepID         string
+	TaskID         string
 	ChildName      string
 	BakedVersion   int64
 	ChannelVersion int64
@@ -176,7 +176,7 @@ func (q *Queries) FindStaleRefs(ctx context.Context, channel string) ([]FindStal
 		if err := rows.Scan(
 			&i.ParentName,
 			&i.ParentVersion,
-			&i.StepID,
+			&i.TaskID,
 			&i.ChildName,
 			&i.BakedVersion,
 			&i.ChannelVersion,
@@ -228,22 +228,22 @@ func (q *Queries) GetChannel(ctx context.Context, arg GetChannelParams) (int64, 
 	return version, err
 }
 
-const getChildrenForStep = `-- name: GetChildrenForStep :many
-SELECT id, process_name, process_version, step_queue, context_data, parent_id,
+const getChildrenForTask = `-- name: GetChildrenForTask :many
+SELECT id, process_name, process_version, task_queue, context_data, parent_id,
        call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
 FROM process_instances
 WHERE parent_id = ?1
-  AND spawn_step_id = ?2
+  AND spawn_task_id = ?2
 `
 
-type GetChildrenForStepParams struct {
+type GetChildrenForTaskParams struct {
 	ParentID    string
-	SpawnStepID string
+	SpawnTaskID string
 }
 
-func (q *Queries) GetChildrenForStep(ctx context.Context, arg GetChildrenForStepParams) ([]ProcessInstance, error) {
-	rows, err := q.db.QueryContext(ctx, getChildrenForStep, arg.ParentID, arg.SpawnStepID)
+func (q *Queries) GetChildrenForTask(ctx context.Context, arg GetChildrenForTaskParams) ([]ProcessInstance, error) {
+	rows, err := q.db.QueryContext(ctx, getChildrenForTask, arg.ParentID, arg.SpawnTaskID)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func (q *Queries) GetChildrenForStep(ctx context.Context, arg GetChildrenForStep
 			&i.ID,
 			&i.ProcessName,
 			&i.ProcessVersion,
-			&i.StepQueue,
+			&i.TaskQueue,
 			&i.ContextData,
 			&i.ParentID,
 			&i.CallStack,
@@ -268,7 +268,7 @@ func (q *Queries) GetChildrenForStep(ctx context.Context, arg GetChildrenForStep
 			&i.WorkerID,
 			&i.LeaseExpiresAt,
 			&i.WaitState,
-			&i.SpawnStepID,
+			&i.SpawnTaskID,
 		); err != nil {
 			return nil, err
 		}
@@ -311,14 +311,14 @@ const getDependencyVersion = `-- name: GetDependencyVersion :one
 SELECT child_version FROM process_dependencies
 WHERE parent_name = ?1
   AND parent_version = ?2
-  AND step_id = ?3
+  AND task_id = ?3
   AND child_key = ?4
 `
 
 type GetDependencyVersionParams struct {
 	ParentName    string
 	ParentVersion int64
-	StepID        string
+	TaskID        string
 	ChildKey      string
 }
 
@@ -326,7 +326,7 @@ func (q *Queries) GetDependencyVersion(ctx context.Context, arg GetDependencyVer
 	row := q.db.QueryRowContext(ctx, getDependencyVersion,
 		arg.ParentName,
 		arg.ParentVersion,
-		arg.StepID,
+		arg.TaskID,
 		arg.ChildKey,
 	)
 	var child_version int64
@@ -335,9 +335,9 @@ func (q *Queries) GetDependencyVersion(ctx context.Context, arg GetDependencyVer
 }
 
 const getInstance = `-- name: GetInstance :one
-SELECT id, process_name, process_version, step_queue, context_data, parent_id,
+SELECT id, process_name, process_version, task_queue, context_data, parent_id,
        call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
 FROM process_instances
 WHERE id = ?1
 `
@@ -349,7 +349,7 @@ func (q *Queries) GetInstance(ctx context.Context, id string) (ProcessInstance, 
 		&i.ID,
 		&i.ProcessName,
 		&i.ProcessVersion,
-		&i.StepQueue,
+		&i.TaskQueue,
 		&i.ContextData,
 		&i.ParentID,
 		&i.CallStack,
@@ -362,7 +362,7 @@ func (q *Queries) GetInstance(ctx context.Context, id string) (ProcessInstance, 
 		&i.WorkerID,
 		&i.LeaseExpiresAt,
 		&i.WaitState,
-		&i.SpawnStepID,
+		&i.SpawnTaskID,
 	)
 	return i, err
 }
@@ -404,14 +404,14 @@ func (q *Queries) InsertDefinition(ctx context.Context, arg InsertDefinitionPara
 }
 
 const insertDependency = `-- name: InsertDependency :exec
-INSERT INTO process_dependencies (parent_name, parent_version, step_id, child_key, child_name, child_version)
+INSERT INTO process_dependencies (parent_name, parent_version, task_id, child_key, child_name, child_version)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 `
 
 type InsertDependencyParams struct {
 	ParentName    string
 	ParentVersion int64
-	StepID        string
+	TaskID        string
 	ChildKey      string
 	ChildName     string
 	ChildVersion  int64
@@ -421,7 +421,7 @@ func (q *Queries) InsertDependency(ctx context.Context, arg InsertDependencyPara
 	_, err := q.db.ExecContext(ctx, insertDependency,
 		arg.ParentName,
 		arg.ParentVersion,
-		arg.StepID,
+		arg.TaskID,
 		arg.ChildKey,
 		arg.ChildName,
 		arg.ChildVersion,
@@ -431,7 +431,7 @@ func (q *Queries) InsertDependency(ctx context.Context, arg InsertDependencyPara
 
 const insertInstance = `-- name: InsertInstance :exec
 INSERT INTO process_instances
-    (id, process_name, process_version, step_queue, context_data, parent_id, spawn_step_id,
+    (id, process_name, process_version, task_queue, context_data, parent_id, spawn_task_id,
      call_stack, retry_count, wake_at, status, wait_state, error, created_at, updated_at)
 VALUES
     (?1, ?2, ?3,
@@ -444,10 +444,10 @@ type InsertInstanceParams struct {
 	ID             string
 	ProcessName    string
 	ProcessVersion int64
-	StepQueue      string
+	TaskQueue      string
 	ContextData    string
 	ParentID       string
-	SpawnStepID    string
+	SpawnTaskID    string
 	CallStack      string
 	RetryCount     int64
 	WakeAt         sql.NullInt64
@@ -463,10 +463,10 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 		arg.ID,
 		arg.ProcessName,
 		arg.ProcessVersion,
-		arg.StepQueue,
+		arg.TaskQueue,
 		arg.ContextData,
 		arg.ParentID,
-		arg.SpawnStepID,
+		arg.SpawnTaskID,
 		arg.CallStack,
 		arg.RetryCount,
 		arg.WakeAt,
@@ -481,7 +481,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 
 const insertLog = `-- name: InsertLog :exec
 INSERT INTO process_logs
-    (id, instance_id, level, event, step_id, message, code, detail, created_at)
+    (id, instance_id, level, event, task_id, message, code, detail, created_at)
 VALUES
     (?1, ?2, ?3, ?4,
      ?5, ?6, ?7, ?8, ?9)
@@ -492,7 +492,7 @@ type InsertLogParams struct {
 	InstanceID string
 	Level      string
 	Event      string
-	StepID     string
+	TaskID     string
 	Message    string
 	Code       string
 	Detail     string
@@ -505,7 +505,7 @@ func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
 		arg.InstanceID,
 		arg.Level,
 		arg.Event,
-		arg.StepID,
+		arg.TaskID,
 		arg.Message,
 		arg.Code,
 		arg.Detail,
@@ -595,9 +595,9 @@ func (q *Queries) ListDefinitions(ctx context.Context) ([]ProcessDefinition, err
 }
 
 const listInstances = `-- name: ListInstances :many
-SELECT id, process_name, process_version, step_queue, context_data, parent_id,
+SELECT id, process_name, process_version, task_queue, context_data, parent_id,
        call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_step_id
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
 FROM process_instances
 WHERE (?1 = '' OR status = ?1)
 ORDER BY created_at DESC
@@ -617,7 +617,7 @@ func (q *Queries) ListInstances(ctx context.Context, status interface{}) ([]Proc
 			&i.ID,
 			&i.ProcessName,
 			&i.ProcessVersion,
-			&i.StepQueue,
+			&i.TaskQueue,
 			&i.ContextData,
 			&i.ParentID,
 			&i.CallStack,
@@ -630,7 +630,7 @@ func (q *Queries) ListInstances(ctx context.Context, status interface{}) ([]Proc
 			&i.WorkerID,
 			&i.LeaseExpiresAt,
 			&i.WaitState,
-			&i.SpawnStepID,
+			&i.SpawnTaskID,
 		); err != nil {
 			return nil, err
 		}
@@ -646,7 +646,7 @@ func (q *Queries) ListInstances(ctx context.Context, status interface{}) ([]Proc
 }
 
 const listLogs = `-- name: ListLogs :many
-SELECT id, instance_id, level, event, step_id, message, code, detail, created_at
+SELECT id, instance_id, level, event, task_id, message, code, detail, created_at
 FROM process_logs
 WHERE instance_id = ?1
   AND (?2 = '' OR level = ?2)
@@ -690,7 +690,7 @@ func (q *Queries) ListLogs(ctx context.Context, arg ListLogsParams) ([]ProcessLo
 			&i.InstanceID,
 			&i.Level,
 			&i.Event,
-			&i.StepID,
+			&i.TaskID,
 			&i.Message,
 			&i.Code,
 			&i.Detail,
@@ -778,7 +778,7 @@ func (q *Queries) RenewWorkerLeasesChunk(ctx context.Context, arg RenewWorkerLea
 
 const updateInstance = `-- name: UpdateInstance :exec
 UPDATE process_instances
-SET step_queue       = ?1,
+SET task_queue       = ?1,
     context_data     = ?2,
     retry_count      = ?3,
     wake_at    = ?4,
@@ -792,7 +792,7 @@ WHERE id = ?9
 `
 
 type UpdateInstanceParams struct {
-	StepQueue   string
+	TaskQueue   string
 	ContextData string
 	RetryCount  int64
 	WakeAt      sql.NullInt64
@@ -805,7 +805,7 @@ type UpdateInstanceParams struct {
 
 func (q *Queries) UpdateInstance(ctx context.Context, arg UpdateInstanceParams) error {
 	_, err := q.db.ExecContext(ctx, updateInstance,
-		arg.StepQueue,
+		arg.TaskQueue,
 		arg.ContextData,
 		arg.RetryCount,
 		arg.WakeAt,
@@ -820,7 +820,7 @@ func (q *Queries) UpdateInstance(ctx context.Context, arg UpdateInstanceParams) 
 
 const updateInstanceProgress = `-- name: UpdateInstanceProgress :exec
 UPDATE process_instances
-SET step_queue       = ?1,
+SET task_queue       = ?1,
     context_data     = ?2,
     retry_count      = ?3,
     wake_at    = ?4,
@@ -832,7 +832,7 @@ WHERE id = ?7
 `
 
 type UpdateInstanceProgressParams struct {
-	StepQueue   string
+	TaskQueue   string
 	ContextData string
 	RetryCount  int64
 	WakeAt      sql.NullInt64
@@ -843,7 +843,7 @@ type UpdateInstanceProgressParams struct {
 
 func (q *Queries) UpdateInstanceProgress(ctx context.Context, arg UpdateInstanceProgressParams) error {
 	_, err := q.db.ExecContext(ctx, updateInstanceProgress,
-		arg.StepQueue,
+		arg.TaskQueue,
 		arg.ContextData,
 		arg.RetryCount,
 		arg.WakeAt,

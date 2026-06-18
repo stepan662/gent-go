@@ -5,28 +5,27 @@ input_schema:
   properties:
     ttl:
       type: integer
-    rec:
-      $ref: "#/$defs/recursive"
   required: [ttl]
-  $defs:
-    recursive:
-      type: object
-      properties:
-        num:
-          type: number
-        rec:
-          $ref: "#/$defs/recursive"
 
-steps:
+tasks:
   - id: start
-    switch: next
-
-  - id: loop
-    output:
-      result: "{{ self.previous.result ?? input }}"
+    action:
+      type: rest
+      endpoint: "http://localhost:3001/start"
+      result_schema:
+        type: object
+        properties:
+          num:
+            type: number
+          str:
+            type: string
+        required: [num, str]
+    output: "{{ self.result }}"
     switch:
-      - case: "self.output.result != null"
-        goto: $start
+      - case: "self.result.num < input.ttl"
+        goto: next
       - goto: end
 
-output: "{{ outputs.loop }}"
+  - id: finish
+    output: "{{outputs.start.num}}"
+    switch: end

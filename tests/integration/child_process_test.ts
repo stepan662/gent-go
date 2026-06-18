@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { client, startMockService, waitForInstance } from "../helpers/client.ts";
 
-test("child — step without output_schema after a step with one does not fail", async () => {
+test("child — task without result_schema after a task with one does not fail", async () => {
   const id = crypto.randomUUID();
   const leafWithOutput = `leaf_with_output_${id}`;
   const leafNoOutput = `leaf_no_output_${id}`;
@@ -10,7 +10,7 @@ test("child — step without output_schema after a step with one does not fail",
   await client.PUT("/definitions", {
     body: {
       name: leafWithOutput,
-      steps: [{ id: "done", switch: [{ goto: "end" }] }],
+      tasks: [{ id: "done", switch: [{ goto: "end" }] }],
       output: { value: "{{1}}" },
     },
   });
@@ -18,20 +18,20 @@ test("child — step without output_schema after a step with one does not fail",
   await client.PUT("/definitions", {
     body: {
       name: leafNoOutput,
-      steps: [{ id: "done", switch: [{ goto: "end" }] }],
+      tasks: [{ id: "done", switch: [{ goto: "end" }] }],
     },
   });
 
   await client.PUT("/definitions", {
     body: {
       name: parentName,
-      steps: [
+      tasks: [
         {
-          id: "step_a",
+          id: "task_a",
           action: {
             type: "child" as const,
             name: leafWithOutput,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { value: { type: "number" } },
               required: ["value"],
@@ -40,7 +40,7 @@ test("child — step without output_schema after a step with one does not fail",
           switch: [{ goto: "next" }],
         },
         {
-          id: "step_b",
+          id: "task_b",
           action: { type: "child" as const, name: leafNoOutput },
           switch: [{ goto: "end" }],
         },
@@ -65,20 +65,20 @@ test("child — output validation failure error includes process name", async ()
   await client.PUT("/definitions", {
     body: {
       name: childName,
-      steps: [{ id: "done", switch: [{ goto: "end" }] }],
+      tasks: [{ id: "done", switch: [{ goto: "end" }] }],
     },
   });
 
   await client.PUT("/definitions", {
     body: {
       name: parentName,
-      steps: [
+      tasks: [
         {
           id: "spawn",
           action: {
             type: "child" as const,
             name: childName,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { required_field: { type: "string" } },
               required: ["required_field"],
@@ -112,7 +112,7 @@ test("child — on_error with child.failed pattern is rejected at registration",
   await client.PUT("/definitions", {
     body: {
       name: childName,
-      steps: [
+      tasks: [
         {
           id: "action",
           switch: [{ goto: "end" }],
@@ -124,7 +124,7 @@ test("child — on_error with child.failed pattern is rejected at registration",
   const { error } = await client.PUT("/definitions", {
     body: {
       name: parentName,
-      steps: [
+      tasks: [
         {
           id: "spawn",
           action: { type: "child" as const, name: childName },
@@ -149,7 +149,7 @@ test("child — no on_error cascades to parent failure", async () => {
   await client.PUT("/definitions", {
     body: {
       name: childName,
-      steps: [
+      tasks: [
         {
           id: "action",
           action: { type: "rest" as const, endpoint: `http://localhost:${failMock.port}/action` },
@@ -163,7 +163,7 @@ test("child — no on_error cascades to parent failure", async () => {
   await client.PUT("/definitions", {
     body: {
       name: parentName,
-      steps: [
+      tasks: [
         {
           id: "spawn",
           action: { type: "child" as const, name: childName },
@@ -190,7 +190,7 @@ test("child — failure propagates through the entire ancestor chain", async () 
   await client.PUT("/definitions", {
     body: {
       name: leafName,
-      steps: [
+      tasks: [
         {
           id: "action",
           action: { type: "rest" as const, endpoint: `http://localhost:${failMock.port}/action` },
@@ -204,7 +204,7 @@ test("child — failure propagates through the entire ancestor chain", async () 
   await client.PUT("/definitions", {
     body: {
       name: middleName,
-      steps: [
+      tasks: [
         {
           id: "spawn",
           action: { type: "child" as const, name: leafName },
@@ -217,7 +217,7 @@ test("child — failure propagates through the entire ancestor chain", async () 
   await client.PUT("/definitions", {
     body: {
       name: grandName,
-      steps: [
+      tasks: [
         {
           id: "spawn_middle",
           action: { type: "child" as const, name: middleName },
@@ -246,7 +246,7 @@ test("child — parent error contains child's error message when child fails", a
   await client.PUT("/definitions", {
     body: {
       name: childName,
-      steps: [
+      tasks: [
         {
           id: "action",
           action: { type: "rest" as const, endpoint: `http://localhost:${failMock.port}/action` },
@@ -260,7 +260,7 @@ test("child — parent error contains child's error message when child fails", a
   await client.PUT("/definitions", {
     body: {
       name: parentName,
-      steps: [
+      tasks: [
         {
           id: "spawn",
           action: { type: "child" as const, name: childName },
@@ -290,7 +290,7 @@ test("child_parallel — recursive spawn completes with correct aggregated outpu
         properties: { ttl: { type: "integer" } },
         required: ["ttl"],
       },
-      steps: [
+      tasks: [
         {
           id: "recursion_condition",
           switch: [
@@ -306,7 +306,7 @@ test("child_parallel — recursive spawn completes with correct aggregated outpu
               first: {
                 name: processName,
                 input: { ttl: "{{input.ttl - 1}}" },
-                output_schema: {
+                result_schema: {
                   type: "object",
                   properties: { processes: { type: "number" } },
                   required: ["processes"],
@@ -315,7 +315,7 @@ test("child_parallel — recursive spawn completes with correct aggregated outpu
               second: {
                 name: processName,
                 input: { ttl: "{{input.ttl - 1}}" },
-                output_schema: {
+                result_schema: {
                   type: "object",
                   properties: { processes: { type: "number" } },
                   required: ["processes"],
@@ -323,6 +323,7 @@ test("child_parallel — recursive spawn completes with correct aggregated outpu
               },
             },
           },
+          output: "{{ self.result }}",
           switch: [{ goto: "end" }],
         },
       ],
@@ -357,11 +358,11 @@ test("child_parallel — recursive spawn completes with correct aggregated outpu
   expect((data?.context?.output as any)?.processes).toBe(7);
 });
 
-// Regression: a parent with TWO sequential child steps must spawn both batches.
+// Regression: a parent with TWO sequential child tasks must spawn both batches.
 // Before wait_state was persisted by UpdateInstanceProgress, the stale
-// 'collecting' left over from the first step's collect made the engine treat
-// the second spawn step as already-collected and skip it silently.
-test("child — two sequential child steps both spawn and collect", async () => {
+// 'collecting' left over from the first task's collect made the engine treat
+// the second spawn task as already-collected and skip it silently.
+test("child — two sequential child tasks both spawn and collect", async () => {
   const uid = crypto.randomUUID();
   const leafName = `seq_leaf_${uid}`;
   const parentName = `seq_parent_${uid}`;
@@ -371,7 +372,7 @@ test("child — two sequential child steps both spawn and collect", async () => 
     await client.PUT("/definitions", {
       body: {
         name: leafName,
-        steps: [
+        tasks: [
           {
             id: "work",
             action: { type: "rest" as const, endpoint: `http://localhost:${mock.port}/action` },
@@ -385,15 +386,17 @@ test("child — two sequential child steps both spawn and collect", async () => 
     await client.PUT("/definitions", {
       body: {
         name: parentName,
-        steps: [
+        tasks: [
           {
             id: "first",
             action: { type: "child" as const, name: leafName },
+            output: "{{ self.result }}",
             switch: [{ goto: "next" }],
           },
           {
             id: "second",
             action: { type: "child" as const, name: leafName },
+            output: "{{ self.result }}",
             switch: [{ goto: "end" }],
           },
         ],

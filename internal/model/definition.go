@@ -17,11 +17,11 @@ import (
 // compared against the goto value at runtime; on the wire it is literally "end".
 const GotoEnd = "end"
 
-// GotoNext signals advance to the next step in the sequence. Valid only on
-// non-terminal steps; using it on the last step is a validation error.
+// GotoNext signals advance to the next task in the sequence. Valid only on
+// non-terminal tasks; using it on the last task is a validation error.
 const GotoNext = "next"
 
-// ActionType identifies how the engine invokes a step's action.
+// ActionType identifies how the engine invokes a task's action.
 type ActionType string
 
 const (
@@ -37,18 +37,18 @@ type ChildEntry struct {
 	Name         string             `json:"name"                    description:"Name of the child process to invoke."`
 	Version      int                `json:"version,omitempty"       description:"Version to run; 0 means latest published version."`
 	Input        *Shape             `json:"input,omitempty"         description:"Templated value (a string expression or nested object of expressions) evaluated against the current context to build the child's input payload."`
-	OutputSchema *schema.SchemaNode `json:"output_schema,omitempty" description:"JSON Schema to validate and expose this child's output."`
+	ResultSchema *schema.SchemaNode `json:"result_schema,omitempty" description:"JSON Schema to validate and expose this child's output."`
 }
 
-// Action describes how to invoke a step's action. It is a discriminated union on Type.
-//   - "rest":           Endpoint (required), Headers (optional), AcceptedStatus (optional), OutputSchema (optional)
-//   - "script":         Exec (required), OutputSchema (optional)
-//   - "child":          Name (required), Input (optional), OutputSchema (optional) — single child process
+// Action describes how to invoke a task's action. It is a discriminated union on Type.
+//   - "rest":           Endpoint (required), Headers (optional), AcceptedStatus (optional), ResultSchema (optional)
+//   - "script":         Exec (required), ResultSchema (optional)
+//   - "child":          Name (required), Input (optional), ResultSchema (optional) — single child process
 //   - "child_parallel": Children (required, keyed map) — concurrent named child processes
 //   - "delay":          Ms (required) — pauses the instance for a duration without holding a worker, then routes via switch
 //
-// OutputSchema (rest/script/child): when set, the response body is validated and stored in
-// context as outputs.stepID. Without it the body is available only as "self" in this step's switch.
+// ResultSchema (rest/script/child): when set, the response body is validated and stored in
+// context as outputs.taskID. Without it the body is available only as "self" in this task's switch.
 //
 // AcceptedStatus (rest only): HTTP status patterns treated as non-errors. Defaults to any 2xx.
 type Action struct {
@@ -57,7 +57,7 @@ type Action struct {
 	Headers        map[string]string      `json:"headers,omitempty"`         // rest, values are expressions
 	AcceptedStatus []string               `json:"accepted_status,omitempty"` // rest: HTTP status patterns accepted as non-errors
 	Exec           string                 `json:"exec,omitempty"`            // script
-	OutputSchema   *schema.SchemaNode     `json:"output_schema,omitempty"`   // rest/script/child: validate & persist output
+	ResultSchema   *schema.SchemaNode     `json:"result_schema,omitempty"`   // rest/script/child: validate & persist output
 	Name           string                 `json:"name,omitempty"`            // child
 	Version        int                    `json:"version,omitempty"`         // child
 	Input          *Shape                 `json:"input,omitempty"`           // child
@@ -78,7 +78,7 @@ func (Action) JSONSchemaBytes() ([]byte, error) {
 					"endpoint":        {"type": "string", "description": "URL of the HTTP endpoint to call."},
 					"headers":         {"type": "object", "additionalProperties": {"type": "string"}, "description": "HTTP headers to include. Values are expressions evaluated against the current context."},
 					"accepted_status": {"type": "array", "items": {"type": "string"}, "description": "HTTP status patterns accepted as non-errors, e.g. \"2xx\" or \"404\". Defaults to any 2xx."},
-					"output_schema":   {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist the response body. Without it the response is available only as 'self' in this step's switch."}
+					"result_schema":   {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist the response body. Without it the response is available only as 'self' in this task's switch."}
 				},
 				"required": ["type", "endpoint"],
 				"additionalProperties": false
@@ -89,39 +89,39 @@ func (Action) JSONSchemaBytes() ([]byte, error) {
 				"properties": {
 					"type":          {"type": "string", "const": "script"},
 					"exec":          {"type": "string", "description": "Shell command or script body to execute."},
-					"output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist stdout. Without it the output is available only as 'self' in this step's switch."}
+					"result_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist stdout. Without it the output is available only as 'self' in this task's switch."}
 				},
 				"required": ["type", "exec"],
 				"additionalProperties": false
 			},
 			{
 				"type": "object",
-				"description": "Single child-process call — runs one named process as a sub-instance and waits for it to complete. The child's output is available as outputs.stepID.",
+				"description": "Single child-process call — runs one named process as a sub-instance and waits for it to complete. The child's output is available as outputs.taskID.",
 				"properties": {
 					"type":          {"type": "string", "const": "child"},
 					"name":          {"type": "string", "description": "Name of the child process to invoke."},
 					"version":       {"type": "integer", "description": "Version to run; 0 means latest published version."},
 					"input":         {"$ref": "#/$defs/ModelShape", "description": "Templated value (string expression or nested object) evaluated against the current context to build the child's input payload."},
-					"output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist the child's output. Without it the output is not stored in context."}
+					"result_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and persist the child's output. Without it the output is not stored in context."}
 				},
 				"required": ["type", "name"],
 				"additionalProperties": false
 			},
 			{
 				"type": "object",
-				"description": "Parallel child-process call — runs multiple named processes concurrently and waits for all to complete. Each child's output is available as outputs.stepID.childKey.",
+				"description": "Parallel child-process call — runs multiple named processes concurrently and waits for all to complete. Each child's output is available as outputs.taskID.childKey.",
 				"properties": {
 					"type": {"type": "string", "const": "child_parallel"},
 					"children": {
 						"type": "object",
-						"description": "Keyed map of child processes to run concurrently. Keys become the access names in outputs.stepID.",
+						"description": "Keyed map of child processes to run concurrently. Keys become the access names in outputs.taskID.",
 						"additionalProperties": {
 							"type": "object",
 							"properties": {
 								"name":          {"type": "string", "description": "Name of the child process to invoke."},
 								"version":       {"type": "integer", "description": "Version to run; 0 means latest published version."},
 								"input":         {"$ref": "#/$defs/ModelShape", "description": "Templated value (string expression or nested object) evaluated against the current context to build the child's input payload."},
-								"output_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and expose this child's output."}
+								"result_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema to validate and expose this child's output."}
 							},
 							"required": ["name"],
 							"additionalProperties": false
@@ -147,11 +147,11 @@ func (Action) JSONSchemaBytes() ([]byte, error) {
 	}`), nil
 }
 
-// SwitchCase is a single entry in a Step's switch list: a boolean expression
-// evaluated against the process context (and this step's own output as "self"),
+// SwitchCase is a single entry in a Task's switch list: a boolean expression
+// evaluated against the process context (and this task's own output as "self"),
 // and the routing target when the expression is true.
 // An empty Case means "catch-all" — it matches unconditionally and must be last.
-// Goto stores the raw wire value: "end", "next", or "$step-id".
+// Goto stores the raw wire value: "end", "next", or "$task-id".
 type SwitchCase struct {
 	Case string
 	Goto string
@@ -183,14 +183,14 @@ func (s *SwitchMap) UnmarshalJSON(data []byte) error {
 		*s = nil
 		return nil
 	}
-	// Scalar shorthand: "next", "end", or "$step-id" — desugars to a single catch-all.
+	// Scalar shorthand: "next", "end", or "$task-id" — desugars to a single catch-all.
 	if len(data) > 0 && data[0] == '"' {
 		var v string
 		if err := json.Unmarshal(data, &v); err != nil {
 			return fmt.Errorf("switch: %w", err)
 		}
 		if v != GotoEnd && v != GotoNext && !strings.HasPrefix(v, "$") {
-			return fmt.Errorf("switch: %q must be \"next\", \"end\", or a step reference like \"$step-id\"", v)
+			return fmt.Errorf("switch: %q must be \"next\", \"end\", or a task reference like \"$task-id\"", v)
 		}
 		*s = SwitchMap{{Goto: v}}
 		return nil
@@ -209,7 +209,7 @@ func (s *SwitchMap) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("switch: goto is required")
 		}
 		if item.Goto != GotoEnd && item.Goto != GotoNext && !strings.HasPrefix(item.Goto, "$") {
-			return fmt.Errorf("switch: goto %q must be \"end\", \"next\", or a step reference like \"$step-id\"", item.Goto)
+			return fmt.Errorf("switch: goto %q must be \"end\", \"next\", or a task reference like \"$task-id\"", item.Goto)
 		}
 		*s = append(*s, SwitchCase{Case: item.Case, Goto: item.Goto})
 	}
@@ -223,7 +223,7 @@ func (SwitchMap) JSONSchemaBytes() ([]byte, error) {
 		"oneOf": [
 			{
 				"type": "string",
-				"description": "Shorthand for a single unconditional route. \"next\" advances to the next step (not valid on the last step), \"end\" terminates the instance, \"$step-id\" jumps to a named step."
+				"description": "Shorthand for a single unconditional route. \"next\" advances to the next task (not valid on the last task), \"end\" terminates the instance, \"$task-id\" jumps to a named task."
 			},
 			{
 				"type": "array",
@@ -232,7 +232,7 @@ func (SwitchMap) JSONSchemaBytes() ([]byte, error) {
 					"type": "object",
 					"properties": {
 						"case": {"type": "string", "description": "Boolean expression. Omit for a catch-all; must be last."},
-						"goto": {"type": "string", "description": "\"end\" to terminate, \"next\" to advance, or \"$step-id\" to jump to a step."}
+						"goto": {"type": "string", "description": "\"end\" to terminate, \"next\" to advance, or \"$task-id\" to jump to a task."}
 					},
 					"required": ["goto"],
 					"additionalProperties": false
@@ -275,7 +275,7 @@ func (s Shape) MarshalJSON() ([]byte, error) {
 }
 
 // Present reports whether the shape carries a value. Nil-safe so callers can
-// write step.Output.Present() without a separate nil check.
+// write task.Output.Present() without a separate nil check.
 func (s *Shape) Present() bool {
 	return s != nil && s.Raw != nil
 }
@@ -338,14 +338,14 @@ func checkShape(n any) error {
 	}
 }
 
-// ErrorCase is a single error-routing rule evaluated when a step's call fails.
+// ErrorCase is a single error-routing rule evaluated when a task's call fails.
 // Rules are evaluated in order; the first match applies.
 // An empty Code list is a catch-all matching any error.
 type ErrorCase struct {
 	Code        []string `json:"code,omitempty"        description:"SQL LIKE patterns matched against the error code. '%' = any chars, '_' = one char. Empty = catch-all. Known codes — REST: http.NNN (e.g. http.500), http.timeout, pre.error, pre.timeout, output.parse, output.invalid; Script: script.N (exit code, e.g. script.1), script.timeout, pre.exec, output.parse; Child process: output.invalid. pre.* codes mean the call never reached the remote. Note: child.failed cannot be caught here — handle errors inside the child process and communicate them via return data."`
-	Retries     int      `json:"retries,omitempty"     description:"Number of retries before following goto or failing. 0 = no retries. On only_once:true steps only pre.* codes (or rules with not_reached:true) may have retries > 0."`
-	Goto        string   `json:"goto,omitempty"        description:"Step to route to when retries are exhausted. '$step-id' or 'end'. Omit to fail the instance."`
-	NotReached  *bool    `json:"not_reached,omitempty" description:"Assert that this error code means the remote call was never reached. When true, retries are allowed even on only_once:true steps. Omit to use the engine's default classification (pre.* = not reached, everything else = potentially reached)."`
+	Retries     int      `json:"retries,omitempty"     description:"Number of retries before following goto or failing. 0 = no retries. On only_once:true tasks only pre.* codes (or rules with not_reached:true) may have retries > 0."`
+	Goto        string   `json:"goto,omitempty"        description:"Task to route to when retries are exhausted. '$task-id' or 'end'. Omit to fail the instance."`
+	NotReached  *bool    `json:"not_reached,omitempty" description:"Assert that this error code means the remote call was never reached. When true, retries are allowed even on only_once:true tasks. Omit to use the engine's default classification (pre.* = not reached, everything else = potentially reached)."`
 }
 
 func (e ErrorCase) MarshalJSON() ([]byte, error) {
@@ -387,44 +387,44 @@ func (e *ErrorCase) UnmarshalJSON(data []byte) error {
 	} else if strings.HasPrefix(w.Goto, "$") {
 		e.Goto = w.Goto[1:]
 	} else {
-		return fmt.Errorf("on_error: goto %q must be \"end\" or a step reference like \"$step-id\"", w.Goto)
+		return fmt.Errorf("on_error: goto %q must be \"end\" or a task reference like \"$task-id\"", w.Goto)
 	}
 	return nil
 }
 
-// Step is a single unit of work in a process definition.
-// Every step must have a switch (and optionally a call).
+// Task is a single unit of work in a process definition.
+// Every task must have a switch (and optionally a call).
 //
 //   - Action-only (Action set, Switch present): executes the call, then routes via switch.
-//   - Switch-only (Action nil, Switch present): pure routing step with no external call.
-//   - Both: executes the call first, then evaluates the switch (with this step's output as "self").
+//   - Switch-only (Action nil, Switch present): pure routing task with no external call.
+//   - Both: executes the call first, then evaluates the switch (with this task's output as "self").
 //
-// Switch is always required. Use the scalar shorthand ("next", "end", "$step-id") for
+// Switch is always required. Use the scalar shorthand ("next", "end", "$task-id") for
 // simple linear flow, or an array of cases for conditional branching.
 // The last case must always be a catch-all (no "case" expression).
-// "end" terminates the instance; "next" advances to the next step in the list
-// (invalid on the last step — use "end" instead); "$step-id" jumps to a named step.
-type Step struct {
-	ID        string            `json:"id"                 validate:"required" description:"Unique step identifier. 'end' and 'next' are reserved and cannot be used."`
-	Action      *Action             `json:"action,omitempty"                        description:"Describes the action to perform. Omit for switch-only (routing) steps."`
+// "end" terminates the instance; "next" advances to the next task in the list
+// (invalid on the last task — use "end" instead); "$task-id" jumps to a named task.
+type Task struct {
+	ID        string            `json:"id"                 validate:"required" description:"Unique task identifier. 'end' and 'next' are reserved and cannot be used."`
+	Action      *Action             `json:"action,omitempty"                        description:"Describes the action to perform. Omit for switch-only (routing) tasks."`
 	TimeoutMs int               `json:"timeout_ms,omitempty"                  description:"Maximum execution time in milliseconds. 0 means no timeout."`
 	OnlyOnce  *bool             `json:"only_once,omitempty"                   description:"When true, the engine guarantees at-most-once execution: retries are only allowed for pre.* errors (remote never reached) or on_error rules with not_reached:true. Defaults to false (retryable)."`
 	OnError   []ErrorCase       `json:"on_error,omitempty"                    description:"Ordered error-routing rules evaluated when the call fails. First match wins."`
 	Params    *Shape            `json:"params,omitempty"                      description:"Templated value (a string expression or nested object of expressions) evaluated against the current context to build the call's input."`
-	Output    *Shape            `json:"output,omitempty"                      description:"Templated value that remaps this step's output. Evaluated against the context plus self.result (the action's raw result) and self.previous (this step's prior output). When set, this value is stored as outputs.stepID and seen by the switch as self.output; the raw result is not exported."`
-	Switch    SwitchMap         `json:"switch"                                description:"Required. Routing declaration: scalar shorthand (\"next\", \"end\", \"$step-id\") or an ordered list of conditional cases. The last case must be a catch-all (omit 'case')."`
+	Output    *Shape            `json:"output,omitempty"                      description:"Templated value that remaps this task's output. Evaluated against the context plus self.result (the action's raw result) and self.previous (this task's prior output). When set, this value is stored as outputs.taskID and seen by the switch as self.output; the raw result is not exported."`
+	Switch    SwitchMap         `json:"switch"                                description:"Required. Routing declaration: scalar shorthand (\"next\", \"end\", \"$task-id\") or an ordered list of conditional cases. The last case must be a catch-all (omit 'case')."`
 }
 
 // ProcessDefinition is the immutable versioned blueprint for a process.
 // Versions are assigned by the server on apply; never include a version when submitting definitions.
 type ProcessDefinition struct {
 	Name        string             `json:"name"         validate:"required" description:"Unique process identifier."`
-	Steps       []*Step            `json:"steps"        validate:"required,min=1,dive" description:"Ordered list of execution steps. Control advances linearly unless a switch case redirects."`
+	Tasks       []*Task            `json:"tasks"        validate:"required,min=1,dive" description:"Ordered list of execution tasks. Control advances linearly unless a switch case redirects."`
 	InputSchema *schema.SchemaNode `json:"input_schema,omitempty"          description:"JSON Schema used to validate the input payload when starting a new instance."`
 	Output      *Shape             `json:"output,omitempty"                description:"Templated value (a string expression or nested object of expressions) evaluated at completion to produce the process output."`
 }
 
-// Normalize normalizes InputSchema and all step OutputSchemas in-place using the
+// Normalize normalizes InputSchema and all task OutputSchemas in-place using the
 // schema package (flattens $defs to root, removes unused definitions, rewrites $refs).
 func (d *ProcessDefinition) Normalize() error {
 	if d.InputSchema != nil {
@@ -434,25 +434,25 @@ func (d *ProcessDefinition) Normalize() error {
 		}
 		d.InputSchema = normalized
 	}
-	for _, s := range d.Steps {
+	for _, s := range d.Tasks {
 		if s.Action == nil {
 			continue
 		}
-		if s.Action.OutputSchema != nil {
-			normalized, err := schema.Normalize(s.Action.OutputSchema)
+		if s.Action.ResultSchema != nil {
+			normalized, err := schema.Normalize(s.Action.ResultSchema)
 			if err != nil {
-				return fmt.Errorf("step %q action.output_schema: %w", s.ID, err)
+				return fmt.Errorf("task %q action.result_schema: %w", s.ID, err)
 			}
-			s.Action.OutputSchema = normalized
+			s.Action.ResultSchema = normalized
 		}
 		if s.Action.Type == ActionTypeChildParallel {
 			for key, entry := range s.Action.Children {
-				if entry.OutputSchema != nil {
-					normalized, err := schema.Normalize(entry.OutputSchema)
+				if entry.ResultSchema != nil {
+					normalized, err := schema.Normalize(entry.ResultSchema)
 					if err != nil {
-						return fmt.Errorf("step %q action.children[%q].output_schema: %w", s.ID, key, err)
+						return fmt.Errorf("task %q action.children[%q].result_schema: %w", s.ID, key, err)
 					}
-					entry.OutputSchema = normalized
+					entry.ResultSchema = normalized
 					s.Action.Children[key] = entry
 				}
 			}
@@ -461,9 +461,9 @@ func (d *ProcessDefinition) Normalize() error {
 	return nil
 }
 
-// Validate checks the definition and all its steps against the struct tag rules,
+// Validate checks the definition and all its tasks against the struct tag rules,
 // and verifies that any attached JSON Schemas are valid schema documents.
-// It also checks statically that all switch goto targets name known steps.
+// It also checks statically that all switch goto targets name known tasks.
 func (d *ProcessDefinition) Validate() error {
 	if err := fmtValidationErr(v.Struct(d)); err != nil {
 		return err
@@ -471,102 +471,102 @@ func (d *ProcessDefinition) Validate() error {
 	if err := checkSchemaDoc("input_schema", d.InputSchema); err != nil {
 		return err
 	}
-	stepIDs := make(map[string]struct{}, len(d.Steps))
-	for _, s := range d.Steps {
-		stepIDs[s.ID] = struct{}{}
+	taskIDs := make(map[string]struct{}, len(d.Tasks))
+	for _, s := range d.Tasks {
+		taskIDs[s.ID] = struct{}{}
 	}
-	lastIdx := len(d.Steps) - 1
-	for i, s := range d.Steps {
-		if err := validateStep(s, stepIDs, i, lastIdx); err != nil {
+	lastIdx := len(d.Tasks) - 1
+	for i, s := range d.Tasks {
+		if err := validateTask(s, taskIDs, i, lastIdx); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateStep(s *Step, stepIDs map[string]struct{}, stepIdx, lastIdx int) error {
-	// Reserved step IDs.
+func validateTask(s *Task, taskIDs map[string]struct{}, taskIdx, lastIdx int) error {
+	// Reserved task IDs.
 	if s.ID == GotoEnd || s.ID == GotoNext {
-		return fmt.Errorf("step ID %q is reserved", s.ID)
+		return fmt.Errorf("task ID %q is reserved", s.ID)
 	}
 
 	if s.Action != nil {
 		switch s.Action.Type {
 		case ActionTypeREST:
 			if s.Action.Endpoint == "" {
-				return fmt.Errorf("step %q: action.endpoint is required for type %q", s.ID, s.Action.Type)
+				return fmt.Errorf("task %q: action.endpoint is required for type %q", s.ID, s.Action.Type)
 			}
 		case ActionTypeScript:
 			if s.Action.Exec == "" {
-				return fmt.Errorf("step %q: action.exec is required for type %q", s.ID, s.Action.Type)
+				return fmt.Errorf("task %q: action.exec is required for type %q", s.ID, s.Action.Type)
 			}
 		case ActionTypeChild:
 			if s.Action.Name == "" {
-				return fmt.Errorf("step %q: action.name is required for type %q", s.ID, s.Action.Type)
+				return fmt.Errorf("task %q: action.name is required for type %q", s.ID, s.Action.Type)
 			}
 		case ActionTypeChildParallel:
 			if len(s.Action.Children) == 0 {
-				return fmt.Errorf("step %q: action.children is required for type %q", s.ID, s.Action.Type)
+				return fmt.Errorf("task %q: action.children is required for type %q", s.ID, s.Action.Type)
 			}
 			for key, entry := range s.Action.Children {
 				if entry.Name == "" {
-					return fmt.Errorf("step %q: action.children[%q].name is required", s.ID, key)
+					return fmt.Errorf("task %q: action.children[%q].name is required", s.ID, key)
 				}
 			}
 		case ActionTypeDelay:
 			if s.Action.Ms == "" {
-				return fmt.Errorf("step %q: action.ms is required for type %q", s.ID, s.Action.Type)
+				return fmt.Errorf("task %q: action.ms is required for type %q", s.ID, s.Action.Type)
 			}
 		default:
-			return fmt.Errorf("step %q: action.type must be one of: rest, script, child, child_parallel, delay", s.ID)
+			return fmt.Errorf("task %q: action.type must be one of: rest, script, child, child_parallel, delay", s.ID)
 		}
 	}
 
 	if len(s.Switch) == 0 {
-		return fmt.Errorf("step %q: switch is required", s.ID)
+		return fmt.Errorf("task %q: switch is required", s.ID)
 	}
 
 	for i, c := range s.Switch {
 		isLast := i == len(s.Switch)-1
 		if c.Case == "" && !isLast {
-			return fmt.Errorf("step %q switch: catch-all at index %d must be the last case (unreachable cases after it)", s.ID, i)
+			return fmt.Errorf("task %q switch: catch-all at index %d must be the last case (unreachable cases after it)", s.ID, i)
 		}
 		switch {
 		case c.Goto == GotoEnd:
 			// always valid
 		case c.Goto == GotoNext:
-			if stepIdx == lastIdx {
-				return fmt.Errorf("step %q switch: 'next' is not allowed on the last step; use 'end' to terminate", s.ID)
+			if taskIdx == lastIdx {
+				return fmt.Errorf("task %q switch: 'next' is not allowed on the last task; use 'end' to terminate", s.ID)
 			}
 		case strings.HasPrefix(c.Goto, "$"):
-			stepID := c.Goto[1:]
-			if _, ok := stepIDs[stepID]; !ok {
-				return fmt.Errorf("step %q switch: goto %q is not a known step", s.ID, c.Goto)
+			taskID := c.Goto[1:]
+			if _, ok := taskIDs[taskID]; !ok {
+				return fmt.Errorf("task %q switch: goto %q is not a known task", s.ID, c.Goto)
 			}
 		default:
-			return fmt.Errorf("step %q switch: goto %q must be \"end\", \"next\", or a step reference like \"$step-id\"", s.ID, c.Goto)
+			return fmt.Errorf("task %q switch: goto %q must be \"end\", \"next\", or a task reference like \"$task-id\"", s.ID, c.Goto)
 		}
 	}
 	if s.Switch[len(s.Switch)-1].Case != "" {
-		return fmt.Errorf("step %q switch: last case must be a catch-all (omit 'case' to match unconditionally)", s.ID)
+		return fmt.Errorf("task %q switch: last case must be a catch-all (omit 'case' to match unconditionally)", s.ID)
 	}
 	onlyOnce := s.OnlyOnce != nil && *s.OnlyOnce
 	for i, ec := range s.OnError {
 		for _, pat := range ec.Code {
 			if !validLikePattern(pat) {
-				return fmt.Errorf("step %q on_error[%d]: code pattern must not be empty", s.ID, i)
+				return fmt.Errorf("task %q on_error[%d]: code pattern must not be empty", s.ID, i)
 			}
 			if sqlLikeMatch(pat, "child.failed") {
-				return fmt.Errorf("step %q on_error[%d]: catching child.failed is not supported; handle errors inside the child process and communicate them via return data", s.ID, i)
+				return fmt.Errorf("task %q on_error[%d]: catching child.failed is not supported; handle errors inside the child process and communicate them via return data", s.ID, i)
 			}
 		}
 		isLast := i == len(s.OnError)-1
 		if len(ec.Code) == 0 && !isLast {
-			return fmt.Errorf("step %q on_error[%d]: catch-all must be the last rule (unreachable rules after it)", s.ID, i)
+			return fmt.Errorf("task %q on_error[%d]: catch-all must be the last rule (unreachable rules after it)", s.ID, i)
 		}
 		if ec.Goto != "" && ec.Goto != GotoEnd {
-			if _, ok := stepIDs[ec.Goto]; !ok {
-				return fmt.Errorf("step %q on_error[%d]: goto %q is not a known step", s.ID, i, ec.Goto)
+			if _, ok := taskIDs[ec.Goto]; !ok {
+				return fmt.Errorf("task %q on_error[%d]: goto %q is not a known task", s.ID, i, ec.Goto)
 			}
 		}
 		if onlyOnce && ec.Retries > 0 {
@@ -576,11 +576,11 @@ func validateStep(s *Step, stepIDs map[string]struct{}, stepIdx, lastIdx int) er
 			}
 			// Catch-all rules (empty Code) would match any error including reached ones.
 			if len(ec.Code) == 0 {
-				return fmt.Errorf("step %q on_error[%d]: catch-all rule cannot have retries on an only_once step; restrict to pre.%% or add not_reached:true", s.ID, i)
+				return fmt.Errorf("task %q on_error[%d]: catch-all rule cannot have retries on an only_once task; restrict to pre.%% or add not_reached:true", s.ID, i)
 			}
 			for _, pat := range ec.Code {
 				if !patternOnlyMatchesPre(pat) {
-					return fmt.Errorf("step %q on_error[%d]: pattern %q can match errors where the call may have executed; restrict to pre.%% patterns or add not_reached:true to assert the remote was not reached", s.ID, i, pat)
+					return fmt.Errorf("task %q on_error[%d]: pattern %q can match errors where the call may have executed; restrict to pre.%% patterns or add not_reached:true to assert the remote was not reached", s.ID, i, pat)
 				}
 			}
 		}
@@ -588,17 +588,17 @@ func validateStep(s *Step, stepIDs map[string]struct{}, stepIdx, lastIdx int) er
 	if s.Action != nil && s.Action.Type == ActionTypeREST {
 		for _, pat := range s.Action.AcceptedStatus {
 			if !validAcceptedStatusPattern(pat) {
-				return fmt.Errorf("step %q: accepted_status %q must be \"2xx\"/\"3xx\"/\"4xx\"/\"5xx\" or a 3-digit code", s.ID, pat)
+				return fmt.Errorf("task %q: accepted_status %q must be \"2xx\"/\"3xx\"/\"4xx\"/\"5xx\" or a 3-digit code", s.ID, pat)
 			}
 		}
 	}
 	if s.Action != nil {
-		if err := checkSchemaDoc(fmt.Sprintf("step %q action.output_schema", s.ID), s.Action.OutputSchema); err != nil {
+		if err := checkSchemaDoc(fmt.Sprintf("task %q action.result_schema", s.ID), s.Action.ResultSchema); err != nil {
 			return err
 		}
 		if s.Action.Type == ActionTypeChildParallel {
 			for key, entry := range s.Action.Children {
-				if err := checkSchemaDoc(fmt.Sprintf("step %q action.children[%q].output_schema", s.ID, key), entry.OutputSchema); err != nil {
+				if err := checkSchemaDoc(fmt.Sprintf("task %q action.children[%q].result_schema", s.ID, key), entry.ResultSchema); err != nil {
 					return err
 				}
 			}
@@ -683,9 +683,9 @@ func (d *ProcessDefinition) ValidateInput(input any) error {
 	return validateSchema(d.InputSchema, input)
 }
 
-// ValidateOutput checks output data against call.OutputSchema. No-op if unset.
+// ValidateOutput checks output data against call.ResultSchema. No-op if unset.
 func (c *Action) ValidateOutput(output any) error {
-	return validateSchema(c.OutputSchema, output)
+	return validateSchema(c.ResultSchema, output)
 }
 
 

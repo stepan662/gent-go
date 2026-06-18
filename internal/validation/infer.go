@@ -2,6 +2,7 @@ package validation
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"gent/internal/expression"
@@ -10,25 +11,25 @@ import (
 	"gent/internal/template"
 )
 
-func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, defs map[string]*schema.SchemaNode) error {
-	if err := checkReachability(steps); err != nil {
+func buildInputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, processInput *schema.SchemaNode, defs map[string]*schema.SchemaNode) error {
+	if err := checkReachability(tasks); err != nil {
 		return err
 	}
-	required, optional, mustErr, mayErr := computeContextSets(steps)
+	required, optional, mustErr, mayErr := computeContextSets(tasks)
 
-	// Phase 1: infer every output-map step's exported type, in dependency order
-	// (mutually-recursive steps resolved jointly), writing each to defs so the
-	// switches and later steps below see the final types.
-	if err := inferOutputs(steps, tasks, processInput, defs, required, optional, mustErr, mayErr); err != nil {
+	// Phase 1: infer every output-map task's exported type, in dependency order
+	// (mutually-recursive tasks resolved jointly), writing each to defs so the
+	// switches and later tasks below see the final types.
+	if err := inferOutputs(tasks, taskSchemas, processInput, defs, required, optional, mustErr, mayErr); err != nil {
 		return err
 	}
 
 	// Phase 2: action inputs (params) and switch type-checks.
-	for _, s := range steps {
+	for _, s := range tasks {
 		if s.Action != nil {
-			ts, inMap := tasks[s.ID]
+			ts, inMap := taskSchemas[s.ID]
 			if inMap || s.Params.Present() {
-				ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
+				ctx := contextSchema(required[s.ID], optional[s.ID], taskSchemas, processInput, mustErr[s.ID], mayErr[s.ID])
 				if len(defs) > 0 {
 					ctx = withDefs(ctx, defs)
 				}
@@ -40,14 +41,15 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 					ts.ActionType = s.Action.Type
 				}
 				ts.Input = input
-				tasks[s.ID] = ts
+				taskSchemas[s.ID] = ts
 			}
 		}
 
 		if len(s.Switch) > 0 {
-			switchCtx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
+			switchCtx := contextSchema(required[s.ID], optional[s.ID], taskSchemas, processInput, mustErr[s.ID], mayErr[s.ID])
 			if s.Action != nil || s.Output.Present() {
-				switchCtx = addSelfSchema(switchCtx, s)
+				loops := slices.Contains(optional[s.ID], s.ID) || slices.Contains(required[s.ID], s.ID)
+				switchCtx = addSelfSchema(switchCtx, s, loops)
 			}
 			if len(defs) > 0 {
 				switchCtx = withDefs(switchCtx, defs)
@@ -58,10 +60,10 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 				}
 				inferred, err := expression.InferType(c.Case, schema.FromNode(switchCtx))
 				if err != nil {
-					return fmt.Errorf("step %q switch case %q: %w", s.ID, c.Case, err)
+					return fmt.Errorf("task %q switch case %q: %w", s.ID, c.Case, err)
 				}
 				if !isType(inferred.Node(), "boolean") {
-					return fmt.Errorf("step %q switch case %q: expression must evaluate to boolean, got %q", s.ID, c.Case, schemaTypeName(inferred.Node()))
+					return fmt.Errorf("task %q switch case %q: expression must evaluate to boolean, got %q", s.ID, c.Case, schemaTypeName(inferred.Node()))
 				}
 			}
 		}
@@ -69,7 +71,7 @@ func buildInputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput
 	return nil
 }
 
-func inferInput(s *model.Step, ctx *schema.SchemaNode, defs map[string]*schema.SchemaNode) (*schema.SchemaNode, error) {
+func inferInput(s *model.Task, ctx *schema.SchemaNode, defs map[string]*schema.SchemaNode) (*schema.SchemaNode, error) {
 	if !s.Params.Present() {
 		return &schema.SchemaNode{Type: schema.SchemaType{"object"}}, nil
 	}
@@ -145,11 +147,11 @@ func contextSchema(preceding []string, optional []string, tasks map[string]TaskS
 		errSchema := &schema.SchemaNode{
 			Type: schema.SchemaType{"object"},
 			Properties: map[string]*schema.SchemaNode{
-				"step":    {Type: schema.SchemaType{"string"}},
+				"task":    {Type: schema.SchemaType{"string"}},
 				"message": {Type: schema.SchemaType{"string"}},
 				"code":    {Type: schema.SchemaType{"string"}},
 			},
-			Required: []string{"step", "message", "code"},
+			Required: []string{"task", "message", "code"},
 		}
 		if errRequired {
 			props["error"] = errSchema
@@ -165,22 +167,29 @@ func contextSchema(preceding []string, optional []string, tasks map[string]TaskS
 	}
 }
 
-// addSelfSchema gives the switch context self.output — the step's final output
-// (the remapped output map result, the action's output_schema, or a permissive
-// object for an untyped raw result). The switch never sees the intermediate
-// self.result. self.output resolves through $defs[<id>_output], which holds the
-// inferred output-map type (filled earlier in the walk) or the declared schema.
-func addSelfSchema(ctx *schema.SchemaNode, s *model.Step) *schema.SchemaNode {
-	var outputType *schema.SchemaNode
-	if stepHasOutput(s) {
-		outputType = schemaRef(s.ID + "_output")
-	} else {
-		outputType = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
+// addSelfSchema gives a switch context this task's transient self scope:
+//   - self.result: the raw action result (typed by result_schema; null for delay
+//     or a no-action task). Always present.
+//   - self.output: the exported output projection — present only when the task
+//     defines an `output`. Routing on the raw result of a task with no projection
+//     uses self.result; referencing self.output there is an error.
+//   - self.previous: this task's prior output — present only when it loops (and so
+//     has a prior iteration). Both output and previous resolve through
+//     $defs[<id>_output].
+func addSelfSchema(ctx *schema.SchemaNode, s *model.Task, loops bool) *schema.SchemaNode {
+	selfProps := map[string]*schema.SchemaNode{"result": actionResultType(s)}
+	required := []string{"result"}
+	if s.Output.Present() {
+		selfProps["output"] = schemaRef(s.ID + "_output")
+		required = append(required, "output")
+		if loops {
+			selfProps["previous"] = schemaRef(s.ID + "_output")
+		}
 	}
 	self := &schema.SchemaNode{
 		Type:       schema.SchemaType{"object"},
-		Properties: map[string]*schema.SchemaNode{"output": outputType},
-		Required:   []string{"output"},
+		Properties: selfProps,
+		Required:   required,
 	}
 	n := *ctx
 	newProps := make(map[string]*schema.SchemaNode, len(ctx.Properties)+1)
@@ -193,10 +202,10 @@ func addSelfSchema(ctx *schema.SchemaNode, s *model.Step) *schema.SchemaNode {
 	return &n
 }
 
-// actionResultType is the type of a step's raw action result — self.result inside
-// an output map (typed by output_schema when present, else permissive; null for
-// delay or a no-action step).
-func actionResultType(s *model.Step) *schema.SchemaNode {
+// actionResultType is the type of a task's raw action result — self.result inside
+// an output map (typed by result_schema when present, else permissive; null for
+// delay or a no-action task).
+func actionResultType(s *model.Task) *schema.SchemaNode {
 	if s.Action == nil {
 		return &schema.SchemaNode{Type: schema.SchemaType{"null"}}
 	}
@@ -206,27 +215,27 @@ func actionResultType(s *model.Step) *schema.SchemaNode {
 	case model.ActionTypeDelay:
 		return &schema.SchemaNode{Type: schema.SchemaType{"null"}}
 	default:
-		if s.Action.OutputSchema != nil {
-			return s.Action.OutputSchema
+		if s.Action.ResultSchema != nil {
+			return s.Action.ResultSchema
 		}
 		return &schema.SchemaNode{Type: schema.SchemaType{"object"}}
 	}
 }
 
-// outputMapContext builds the context for inferring a step's output map: the base
-// context plus self.result (the raw action result), and — only when the step
+// outputMapContext builds the context for inferring a task's output map: the base
+// context plus self.result (the raw action result), and — only when the task
 // actually loops back to itself — self.previous (its own prior output).
 //
-// The self-reference is meaningful only for a looping step, which alone has a
+// The self-reference is meaningful only for a looping task, which alone has a
 // prior iteration. When loops is true, both self.previous and outputs.<id> (the
 // latter supplied by the base context via reachability) resolve through
 // $defs[<id>_output], the recursive placeholder the fixpoint drives. When the
-// step does not loop, neither is available — referencing one's own output without
-// looping is an error, since the step is not its own predecessor.
-func outputMapContext(base *schema.SchemaNode, resultType *schema.SchemaNode, stepID string, loops bool) *schema.SchemaNode {
+// task does not loop, neither is available — referencing one's own output without
+// looping is an error, since the task is not its own predecessor.
+func outputMapContext(base *schema.SchemaNode, resultType *schema.SchemaNode, taskID string, loops bool) *schema.SchemaNode {
 	selfProps := map[string]*schema.SchemaNode{"result": resultType}
 	if loops {
-		selfProps["previous"] = schemaRef(stepID + "_output")
+		selfProps["previous"] = schemaRef(taskID + "_output")
 	}
 
 	newProps := make(map[string]*schema.SchemaNode, len(base.Properties)+1)

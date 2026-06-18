@@ -59,7 +59,7 @@ func (db *DB) AppendLog(entry *model.LogEntry) error {
 		InstanceID: entry.InstanceID,
 		Level:      string(entry.Level),
 		Event:      entry.Event,
-		StepID:     entry.StepID,
+		TaskID:     entry.TaskID,
 		Message:    entry.Message,
 		Code:       entry.Code,
 		Detail:     string(detail),
@@ -88,7 +88,7 @@ func (db *DB) ListLogs(instanceID string, opts LogQuery) ([]*model.LogEntry, err
 // first. A recursive CTE walks process_instances.parent_id from the given id down
 // (the base row covers the node itself), then joins its logs — no denormalised
 // root_id and no closure table, so it adds zero write cost. The walk rides the
-// idx_instances_parent_step index. Hand-written (not sqlc) because sqlc's SQLite
+// idx_instances_parent_task index. Hand-written (not sqlc) because sqlc's SQLite
 // grammar can't parse WITH RECURSIVE; both runtime drivers support it. The
 // cursor/level predicates mirror ListLogs.
 // The subtree CTE also carries each instance's depth relative to the queried
@@ -101,7 +101,7 @@ WITH RECURSIVE subtree(id, depth) AS (
     UNION ALL
     SELECT pi.id, s.depth + 1 FROM process_instances pi JOIN subtree s ON pi.parent_id = s.id
 )
-SELECT pl.id, pl.instance_id, pl.level, pl.event, pl.step_id, pl.message, pl.code, pl.detail, pl.created_at, st.depth
+SELECT pl.id, pl.instance_id, pl.level, pl.event, pl.task_id, pl.message, pl.code, pl.detail, pl.created_at, st.depth
 FROM process_logs pl
 JOIN subtree st ON st.id = pl.instance_id
 WHERE (? = '' OR pl.level = ?)
@@ -126,7 +126,7 @@ func (db *DB) ListTreeLogs(rootID string, opts LogQuery) ([]*model.LogEntry, err
 		var r dbgen.ProcessLog
 		var depth int64
 		if err := rows.Scan(&r.ID, &r.InstanceID, &r.Level, &r.Event,
-			&r.StepID, &r.Message, &r.Code, &r.Detail, &r.CreatedAt, &depth); err != nil {
+			&r.TaskID, &r.Message, &r.Code, &r.Detail, &r.CreatedAt, &depth); err != nil {
 			return nil, err
 		}
 		e, err := toLogEntry(r)
@@ -166,7 +166,7 @@ func toLogEntry(r dbgen.ProcessLog) (*model.LogEntry, error) {
 		InstanceID: r.InstanceID,
 		Level:      model.LogLevel(r.Level),
 		Event:      r.Event,
-		StepID:     r.StepID,
+		TaskID:     r.TaskID,
 		Message:    r.Message,
 		Code:       r.Code,
 		CreatedAt:  toTime(r.CreatedAt),

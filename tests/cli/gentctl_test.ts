@@ -17,18 +17,18 @@ function uid(prefix: string) {
 function switchDef(name: string) {
   return {
     name,
-    steps: [{ id: "s1", switch: [{ goto: "end" }] }],
+    tasks: [{ id: "s1", switch: [{ goto: "end" }] }],
   };
 }
 
 function restDef(name: string, endpoint = "http://localhost/x") {
-  return { name, steps: [{ id: "s1", action: { type: "rest", endpoint }, switch: [{ goto: "end" }] }] };
+  return { name, tasks: [{ id: "s1", action: { type: "rest", endpoint }, switch: [{ goto: "end" }] }] };
 }
 
 function childDef(name: string, childName: string) {
   return {
     name,
-    steps: [{ id: "spawn", action: { type: "child", name: childName }, switch: [{ goto: "end" }] }],
+    tasks: [{ id: "spawn", action: { type: "child", name: childName }, switch: [{ goto: "end" }] }],
   };
 }
 
@@ -91,7 +91,7 @@ test("apply --auto-update-parents cascades to parent on same channel", () => {
   runCli(bin, ["apply", "-f", writeDefs([switchDef(childName), childDef(parentName, childName)]), "--channel", "stable"]);
 
   // Change child content and apply with --auto-update-parents.
-  const child2 = { ...switchDef(childName), steps: [{ id: "s2", switch: [{ goto: "end" }] }] };
+  const child2 = { ...switchDef(childName), tasks: [{ id: "s2", switch: [{ goto: "end" }] }] };
   const r = runCli(bin, ["apply", "-f", writeDefs([child2]), "--channel", "stable", "--auto-update-parents"]);
 
   expect(r.ok).toBe(true);
@@ -111,7 +111,7 @@ test("apply — accepts self-referential (recursive) process", () => {
 });
 
 test("apply — exits non-zero and prints error for invalid definition", () => {
-  const file = writeDefs([{ name: "bad", steps: [] }]); // steps must not be empty
+  const file = writeDefs([{ name: "bad", tasks: [] }]); // tasks must not be empty
 
   const r = runCli(bin, ["apply", "-f", file]);
 
@@ -132,7 +132,7 @@ test("validate — exits 0 and prints schema for valid definition", () => {
 });
 
 test("validate — exits non-zero for invalid definition", () => {
-  const file = writeDefs([{ name: "bad", steps: [] }]);
+  const file = writeDefs([{ name: "bad", tasks: [] }]);
 
   const r = runCli(bin, ["validate", "-f", file]);
 
@@ -245,7 +245,7 @@ test("status -- reports stale ref after child is advanced without updating paren
   runCli(bin, ["apply", "-f", writeDefs([switchDef(childName), childDef(parentName, childName)]), "--channel", track]);
 
   // Advance child only.
-  const child2 = { ...switchDef(childName), steps: [{ id: "s2", switch: [{ goto: "end" }] }] };
+  const child2 = { ...switchDef(childName), tasks: [{ id: "s2", switch: [{ goto: "end" }] }] };
   runCli(bin, ["apply", "-f", writeDefs([child2]), "--channel", track]);
 
   const r = runCli(bin, ["status", "--channel", track]);

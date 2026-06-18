@@ -7,7 +7,7 @@ test("only_once:true — rejects retries on http.% pattern", async () => {
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_http_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -26,7 +26,7 @@ test("only_once:true — rejects retries on exact http.500", async () => {
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_exact_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -45,7 +45,7 @@ test("only_once:true — rejects catch-all with retries", async () => {
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_catchall_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -64,7 +64,7 @@ test("only_once:true — rejects wildcard crossing namespaces", async () => {
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_cross_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -83,7 +83,7 @@ test("only_once:true — accepts retries on pre.%", async () => {
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_start_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -104,7 +104,7 @@ test("only_once:true — accepts retries on exact pre.* codes", async () => {
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_exact_start_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -122,7 +122,7 @@ test("only_once:true — accepts not_reached:true override for http.422", async 
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_exec_false_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -143,7 +143,7 @@ test("only_once:true — accepts catch-all with not_reached:true", async () => {
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_catchall_exec_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -161,7 +161,7 @@ test("only_once:true — next-only rule on http.% is accepted (no retries)", asy
   const { error } = await client.PUT("/definitions", {
     body: {
       name: `ni_static_goto_only_${crypto.randomUUID()}`,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -190,7 +190,7 @@ test("only_once:true — http.500 routes to handler and is called exactly once",
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -211,7 +211,7 @@ test("only_once:true — http.500 routes to handler and is called exactly once",
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${handlerMock.port}/action`,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { handled: { type: "boolean" } },
               required: ["handled"],
@@ -245,7 +245,7 @@ test("only_once:true — connection refused triggers pre.% retries", async () =>
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
@@ -275,23 +275,23 @@ test("only_once:true — not_reached:true allows retry on http.422", async () =>
   let calls = 0;
   const mock = await startMockService(0, { statusCode: 200, response: { ok: true } });
   // We can't make the mock return different status codes per call, so instead we verify
-  // that with not_reached:true the definition is accepted and the step runs.
+  // that with not_reached:true the definition is accepted and the task runs.
   // A 200 response means not_reached:true retries would not fire (no error to trigger them).
   // The meaningful runtime check is the static acceptance test above; here we just confirm
-  // the step executes and completes normally.
+  // the task executes and completes normally.
 
   const name = `ni_rt_exec_false_${crypto.randomUUID()}`;
   const { error: defErr } = await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "charge",
           only_once: true,
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${mock.port}/action`,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { ok: { type: "boolean" } },
               required: ["ok"],
@@ -312,7 +312,7 @@ test("only_once:true — not_reached:true allows retry on http.422", async () =>
   mock.stop();
 });
 
-test("default step (no only_once) — http.500 retries normally", async () => {
+test("default task (no only_once) — http.500 retries normally", async () => {
   // Baseline: same setup without only_once:true. The http.% rule has retries:1.
   // Total calls = 2 (original + 1 retry), then $end → completed.
   const failMock = await startMockService(0, { statusCode: 500 });
@@ -321,7 +321,7 @@ test("default step (no only_once) — http.500 retries normally", async () => {
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "call",
           // No only_once:true — default behaviour

@@ -72,7 +72,7 @@ func checkMixedNullability(s string, sc schema.Schema) error {
 	return nil
 }
 
-// OutputRefs returns the distinct step ids referenced via outputs.<id> across all
+// OutputRefs returns the distinct task ids referenced via outputs.<id> across all
 // {{ }} expressions in template s (used to build the output-dependency graph).
 func OutputRefs(s string) ([]string, error) {
 	set := map[string]struct{}{}

@@ -7,12 +7,12 @@ import (
 )
 
 func TestProcessDefinition_Normalize(t *testing.T) {
-	validStep := func(id string) *Step {
-		return &Step{ID: id, Action: &Action{Type: ActionTypeREST, Endpoint: "http://localhost/x"}}
+	validTask := func(id string) *Task {
+		return &Task{ID: id, Action: &Action{Type: ActionTypeREST, Endpoint: "http://localhost/x"}}
 	}
 
 	t.Run("no schemas is a no-op", func(t *testing.T) {
-		d := ProcessDefinition{Name: "p", Steps: []*Step{validStep("s1")}}
+		d := ProcessDefinition{Name: "p", Tasks: []*Task{validTask("s1")}}
 		if err := d.Normalize(); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -20,7 +20,7 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 
 	t.Run("simple InputSchema without refs is unchanged", func(t *testing.T) {
 		d := ProcessDefinition{
-			Name: "p", Steps: []*Step{validStep("s1")},
+			Name: "p", Tasks: []*Task{validTask("s1")},
 			InputSchema: &schema.SchemaNode{
 				Type:       schema.SchemaType{"object"},
 				Properties: map[string]*schema.SchemaNode{"id": {Type: schema.SchemaType{"integer"}}},
@@ -36,7 +36,7 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 
 	t.Run("InputSchema $defs are flattened to root", func(t *testing.T) {
 		d := ProcessDefinition{
-			Name: "p", Steps: []*Step{validStep("s1")},
+			Name: "p", Tasks: []*Task{validTask("s1")},
 			InputSchema: &schema.SchemaNode{
 				Type: schema.SchemaType{"object"},
 				Properties: map[string]*schema.SchemaNode{
@@ -63,9 +63,9 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 		}
 	})
 
-	t.Run("step action.output_schema $defs are flattened to root", func(t *testing.T) {
-		step := validStep("charge")
-		step.Action.OutputSchema = &schema.SchemaNode{
+	t.Run("task action.result_schema $defs are flattened to root", func(t *testing.T) {
+		task := validTask("charge")
+		task.Action.ResultSchema = &schema.SchemaNode{
 			Type: schema.SchemaType{"object"},
 			Defs: map[string]*schema.SchemaNode{
 				"Result": {
@@ -77,47 +77,47 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 				"result": {Ref: "#/$defs/Result"},
 			},
 		}
-		d := ProcessDefinition{Name: "p", Steps: []*Step{step}}
+		d := ProcessDefinition{Name: "p", Tasks: []*Task{task}}
 		if err := d.Normalize(); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if step.Action.OutputSchema.Defs == nil || step.Action.OutputSchema.Defs["Result"] == nil {
-			t.Fatal("$defs/Result missing in action.output_schema after normalize")
+		if task.Action.ResultSchema.Defs == nil || task.Action.ResultSchema.Defs["Result"] == nil {
+			t.Fatal("$defs/Result missing in action.result_schema after normalize")
 		}
 	})
 
-	t.Run("all step action.output_schemas are normalized", func(t *testing.T) {
-		step1 := validStep("charge")
-		step1.Action.OutputSchema = &schema.SchemaNode{
+	t.Run("all task action.result_schemas are normalized", func(t *testing.T) {
+		step1 := validTask("charge")
+		step1.Action.ResultSchema = &schema.SchemaNode{
 			Type: schema.SchemaType{"object"},
 			Defs: map[string]*schema.SchemaNode{"Tracking": {Type: schema.SchemaType{"object"}}},
 			Properties: map[string]*schema.SchemaNode{
 				"tracking": {Ref: "#/$defs/Tracking"},
 			},
 		}
-		step2 := validStep("notify")
-		step2.Action.OutputSchema = &schema.SchemaNode{
+		step2 := validTask("notify")
+		step2.Action.ResultSchema = &schema.SchemaNode{
 			Type: schema.SchemaType{"object"},
 			Defs: map[string]*schema.SchemaNode{"Result": {Type: schema.SchemaType{"object"}}},
 			Properties: map[string]*schema.SchemaNode{
 				"result": {Ref: "#/$defs/Result"},
 			},
 		}
-		d := ProcessDefinition{Name: "p", Steps: []*Step{step1, step2}}
+		d := ProcessDefinition{Name: "p", Tasks: []*Task{step1, step2}}
 		if err := d.Normalize(); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if step1.Action.OutputSchema.Defs == nil || step1.Action.OutputSchema.Defs["Tracking"] == nil {
+		if step1.Action.ResultSchema.Defs == nil || step1.Action.ResultSchema.Defs["Tracking"] == nil {
 			t.Fatal("step1 $defs/Tracking missing after normalize")
 		}
-		if step2.Action.OutputSchema.Defs == nil || step2.Action.OutputSchema.Defs["Result"] == nil {
+		if step2.Action.ResultSchema.Defs == nil || step2.Action.ResultSchema.Defs["Result"] == nil {
 			t.Fatal("step2 $defs/Result missing after normalize")
 		}
 	})
 
 	t.Run("invalid $ref in InputSchema returns error", func(t *testing.T) {
 		d := ProcessDefinition{
-			Name: "p", Steps: []*Step{validStep("s1")},
+			Name: "p", Tasks: []*Task{validTask("s1")},
 			InputSchema: &schema.SchemaNode{
 				Type:       schema.SchemaType{"object"},
 				Properties: map[string]*schema.SchemaNode{"x": {Ref: "#/$defs/Missing"}},
@@ -128,29 +128,29 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid $ref in step action.output_schema returns error with step ID", func(t *testing.T) {
-		step := validStep("charge")
-		step.Action.OutputSchema = &schema.SchemaNode{
+	t.Run("invalid $ref in task action.result_schema returns error with task ID", func(t *testing.T) {
+		task := validTask("charge")
+		task.Action.ResultSchema = &schema.SchemaNode{
 			Type:       schema.SchemaType{"object"},
 			Properties: map[string]*schema.SchemaNode{"x": {Ref: "#/$defs/Missing"}},
 		}
-		d := ProcessDefinition{Name: "p", Steps: []*Step{step}}
+		d := ProcessDefinition{Name: "p", Tasks: []*Task{task}}
 		err := d.Normalize()
 		if err == nil {
 			t.Fatal("expected error for unresolved $ref, got nil")
 		}
 		if !containsStr(err.Error(), "charge") {
-			t.Errorf("error %q should mention step ID %q", err.Error(), "charge")
+			t.Errorf("error %q should mention task ID %q", err.Error(), "charge")
 		}
 	})
 
-	t.Run("child_parallel children output_schemas are normalized", func(t *testing.T) {
-		step := &Step{
+	t.Run("child_parallel children result_schemas are normalized", func(t *testing.T) {
+		task := &Task{
 			ID: "spawn",
 			Action: &Action{
 				Type: ActionTypeChildParallel,
 				Children: map[string]ChildEntry{
-					"a": {Name: "worker", OutputSchema: &schema.SchemaNode{
+					"a": {Name: "worker", ResultSchema: &schema.SchemaNode{
 						Type: schema.SchemaType{"object"},
 						Defs: map[string]*schema.SchemaNode{
 							"Result": {Type: schema.SchemaType{"object"}},
@@ -161,19 +161,19 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 			},
 			Switch: SwitchMap{{Goto: GotoEnd}},
 		}
-		d := ProcessDefinition{Name: "p", Steps: []*Step{step}}
+		d := ProcessDefinition{Name: "p", Tasks: []*Task{task}}
 		if err := d.Normalize(); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		entry := step.Action.Children["a"]
-		if entry.OutputSchema == nil || entry.OutputSchema.Defs == nil || entry.OutputSchema.Defs["Result"] == nil {
-			t.Fatal("$defs/Result missing in children[a].output_schema after normalize")
+		entry := task.Action.Children["a"]
+		if entry.ResultSchema == nil || entry.ResultSchema.Defs == nil || entry.ResultSchema.Defs["Result"] == nil {
+			t.Fatal("$defs/Result missing in children[a].result_schema after normalize")
 		}
 	})
 
 	t.Run("unused $defs are removed from InputSchema", func(t *testing.T) {
 		d := ProcessDefinition{
-			Name: "p", Steps: []*Step{validStep("s1")},
+			Name: "p", Tasks: []*Task{validTask("s1")},
 			InputSchema: &schema.SchemaNode{
 				Type: schema.SchemaType{"object"},
 				Defs: map[string]*schema.SchemaNode{
@@ -198,8 +198,8 @@ func TestProcessDefinition_Normalize(t *testing.T) {
 }
 
 func TestProcessDefinition_Validate(t *testing.T) {
-	restStepEnd := func(id, endpoint string) *Step {
-		return &Step{ID: id, Action: &Action{Type: ActionTypeREST, Endpoint: endpoint}, Switch: SwitchMap{{Goto: GotoEnd}}}
+	restTaskEnd := func(id, endpoint string) *Task {
+		return &Task{ID: id, Action: &Action{Type: ActionTypeREST, Endpoint: endpoint}, Switch: SwitchMap{{Goto: GotoEnd}}}
 	}
 
 	tests := []struct {
@@ -208,31 +208,31 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "valid rest call step",
-			def:     ProcessDefinition{Name: "p", Steps: []*Step{restStepEnd("step1", "http://localhost/action")}},
+			name:    "valid rest call task",
+			def:     ProcessDefinition{Name: "p", Tasks: []*Task{restTaskEnd("step1", "http://localhost/action")}},
 			wantErr: "",
 		},
 		{
-			name: "valid script call step",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "valid script call task",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "run", Action: &Action{Type: ActionTypeScript, Exec: "python3 foo.py"}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
 			wantErr: "",
 		},
 		{
-			name: "valid switch-only step",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "valid switch-only task",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "router", Switch: SwitchMap{
 					{Case: "input.ok == true", Goto: "$act"},
 					{Goto: GotoEnd},
 				}},
-				restStepEnd("act", "http://x"),
+				restTaskEnd("act", "http://x"),
 			}},
 			wantErr: "",
 		},
 		{
-			name: "valid step with both call and switch",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "valid task with both call and switch",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch: SwitchMap{
@@ -240,65 +240,65 @@ func TestProcessDefinition_Validate(t *testing.T) {
 						{Goto: GotoEnd},
 					},
 				},
-				restStepEnd("ship", "http://x"),
+				restTaskEnd("ship", "http://x"),
 			}},
 			wantErr: "",
 		},
 		{
 			name:    "missing name",
-			def:     ProcessDefinition{Steps: []*Step{restStepEnd("step1", "http://x")}},
+			def:     ProcessDefinition{Tasks: []*Task{restTaskEnd("step1", "http://x")}},
 			wantErr: "name is required",
 		},
 		{
-			name:    "no steps",
+			name:    "no tasks",
 			def:     ProcessDefinition{Name: "p"},
-			wantErr: "steps",
+			wantErr: "tasks",
 		},
 		{
-			name: "step without switch is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "task without switch is rejected",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "s", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}},
 			}},
 			wantErr: "switch is required",
 		},
 		{
-			name: "step with no call and no switch is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "task with no call and no switch is rejected",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "empty"},
 			}},
 			wantErr: "switch is required",
 		},
 		{
 			name: "rest call missing endpoint",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "s1", Action: &Action{Type: ActionTypeREST}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
 			wantErr: "action.endpoint is required",
 		},
 		{
 			name: "script call missing exec",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "s1", Action: &Action{Type: ActionTypeScript}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
 			wantErr: "action.exec is required",
 		},
 		{
 			name: "valid child call",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "spawn", Action: &Action{Type: ActionTypeChild, Name: "worker"}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
 			wantErr: "",
 		},
 		{
 			name: "child call missing name",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "spawn", Action: &Action{Type: ActionTypeChild}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
 			wantErr: "action.name is required",
 		},
 		{
 			name: "valid child_parallel call",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "spawn", Action: &Action{
 					Type: ActionTypeChildParallel,
 					Children: map[string]ChildEntry{
@@ -311,14 +311,14 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "child_parallel call missing children",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "spawn", Action: &Action{Type: ActionTypeChildParallel}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
 			wantErr: "action.children is required",
 		},
 		{
 			name: "child_parallel entry missing name",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "spawn", Action: &Action{
 					Type:     ActionTypeChildParallel,
 					Children: map[string]ChildEntry{"left": {Name: ""}},
@@ -328,27 +328,27 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "unknown call type",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "s1", Action: &Action{Type: "ftp", Endpoint: "ftp://x"}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
 			wantErr: "action.type must be one of: rest, script, child, child_parallel",
 		},
 		{
 			name: "switch missing catch-all is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch: SwitchMap{
 						{Case: "self.ok == true", Goto: "$ship"},
 					},
 				},
-				restStepEnd("ship", "http://x"),
+				restTaskEnd("ship", "http://x"),
 			}},
 			wantErr: `last case must be a catch-all`,
 		},
 		{
 			name: "switch catch-all not last is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch: SwitchMap{
@@ -356,13 +356,13 @@ func TestProcessDefinition_Validate(t *testing.T) {
 						{Case: "self.ok == true", Goto: "$ship"},
 					},
 				},
-				restStepEnd("ship", "http://x"),
+				restTaskEnd("ship", "http://x"),
 			}},
 			wantErr: `catch-all at index 0 must be the last case`,
 		},
 		{
 			name: "switch end in non-catch-all case is valid",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch: SwitchMap{
@@ -370,13 +370,13 @@ func TestProcessDefinition_Validate(t *testing.T) {
 						{Goto: "$ship"},
 					},
 				},
-				restStepEnd("ship", "http://x"),
+				restTaskEnd("ship", "http://x"),
 			}},
 			wantErr: "",
 		},
 		{
-			name: "switch goto references unknown step",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "switch goto references unknown task",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch: SwitchMap{
@@ -385,54 +385,54 @@ func TestProcessDefinition_Validate(t *testing.T) {
 					},
 				},
 			}},
-			wantErr: `goto "$nonexistent" is not a known step`,
+			wantErr: `goto "$nonexistent" is not a known task`,
 		},
 		{
-			name: "switch: next on last step is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "switch: next on last task is rejected",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "only", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}, Switch: SwitchMap{{Goto: GotoNext}}},
 			}},
-			wantErr: "'next' is not allowed on the last step",
+			wantErr: "'next' is not allowed on the last task",
 		},
 		{
-			name: "switch: next on non-last step is valid",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "switch: next on non-last task is valid",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "first", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}, Switch: SwitchMap{{Goto: GotoNext}}},
-				restStepEnd("second", "http://x"),
+				restTaskEnd("second", "http://x"),
 			}},
 			wantErr: "",
 		},
 		{
-			name: "switch: scalar next on non-last step is valid",
+			name: "switch: scalar next on non-last task is valid",
 			def: func() ProcessDefinition {
-				s := &Step{ID: "first", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}}
+				s := &Task{ID: "first", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}}
 				if err := s.Switch.UnmarshalJSON([]byte(`"next"`)); err != nil {
 					panic(err)
 				}
-				return ProcessDefinition{Name: "p", Steps: []*Step{s, restStepEnd("second", "http://x")}}
+				return ProcessDefinition{Name: "p", Tasks: []*Task{s, restTaskEnd("second", "http://x")}}
 			}(),
 			wantErr: "",
 		},
 		{
-			name: "step ID 'end' is reserved",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "task ID 'end' is reserved",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "end", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
-			wantErr: `step ID "end" is reserved`,
+			wantErr: `task ID "end" is reserved`,
 		},
 		{
-			name: "step ID 'next' is reserved",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			name: "task ID 'next' is reserved",
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{ID: "next", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}, Switch: SwitchMap{{Goto: GotoEnd}}},
 			}},
-			wantErr: `step ID "next" is reserved`,
+			wantErr: `task ID "next" is reserved`,
 		},
 
 		// ── only_once: true static validation ───────────────────────────────
 
 		{
 			name: "only_once:true — retries on pre.% is valid",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -444,7 +444,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:true — retries on exact pre.* codes is valid",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -456,20 +456,20 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:true — retries:0 with http.% next is valid",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
 					OnlyOnce: boolPtr(true),
 					OnError:  []ErrorCase{{Code: []string{"http.%"}, Goto: "handler"}},
 				},
-				restStepEnd("handler", "http://x"),
+				restTaskEnd("handler", "http://x"),
 			}},
 			wantErr: "",
 		},
 		{
 			name: "only_once:true — not_reached:true overrides http.422 retry",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -481,7 +481,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:true — not_reached:true on catch-all retry is valid",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -493,7 +493,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:true — retries on http.% is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -505,7 +505,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:true — retries on exact http.500 is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -517,7 +517,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:true — retries on script.% is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "run", Action: &Action{Type: ActionTypeScript, Exec: "echo ok"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -529,7 +529,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:true — catch-all with retries is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -537,11 +537,11 @@ func TestProcessDefinition_Validate(t *testing.T) {
 					OnError:  []ErrorCase{{Retries: 2}},
 				},
 			}},
-			wantErr: "catch-all rule cannot have retries on an only_once step",
+			wantErr: "catch-all rule cannot have retries on an only_once task",
 		},
 		{
 			name: "only_once:true — wildcard crossing namespaces is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -553,7 +553,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:true — mixed pre and non-pre patterns in one rule is rejected",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -565,7 +565,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once:false (explicit) — retries on http.% is valid",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID: "charge", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"},
 					Switch:   SwitchMap{{Goto: GotoEnd}},
@@ -577,7 +577,7 @@ func TestProcessDefinition_Validate(t *testing.T) {
 		},
 		{
 			name: "only_once nil (default) — retries on http.% is valid",
-			def: ProcessDefinition{Name: "p", Steps: []*Step{
+			def: ProcessDefinition{Name: "p", Tasks: []*Task{
 				{
 					ID:      "charge",
 					Action:    &Action{Type: ActionTypeREST, Endpoint: "http://x"},
@@ -620,7 +620,7 @@ func TestProcessDefinition_ValidateInput_Nullable(t *testing.T) {
 				"comment": {Type: schema.SchemaType{"string", "null"}},
 			},
 		},
-		Steps: []*Step{{ID: "s", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}}},
+		Tasks: []*Task{{ID: "s", Action: &Action{Type: ActionTypeREST, Endpoint: "http://x"}}},
 	}
 
 	tests := []struct {
@@ -671,12 +671,12 @@ func TestProcessDefinition_ValidateInput_Nullable(t *testing.T) {
 }
 
 func TestStep_ValidateOutput_Nullable(t *testing.T) {
-	step := &Step{
+	task := &Task{
 		ID: "charge",
 		Action: &Action{
 			Type:     ActionTypeREST,
 			Endpoint: "http://x",
-			OutputSchema: &schema.SchemaNode{
+			ResultSchema: &schema.SchemaNode{
 				Type:     schema.SchemaType{"object"},
 				Required: []string{"charged"},
 				Properties: map[string]*schema.SchemaNode{
@@ -723,7 +723,7 @@ func TestStep_ValidateOutput_Nullable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := step.Action.ValidateOutput(tt.output)
+			err := task.Action.ValidateOutput(tt.output)
 			if tt.wantErr && err == nil {
 				t.Error("expected error, got nil")
 			}
@@ -782,13 +782,13 @@ func TestSwitchMap_MarshalUnmarshal(t *testing.T) {
 		}
 	})
 
-	t.Run("scalar '$step-id' desugars to step reference", func(t *testing.T) {
+	t.Run("scalar '$task-id' desugars to task reference", func(t *testing.T) {
 		var s SwitchMap
-		if err := s.UnmarshalJSON([]byte(`"$my-step"`)); err != nil {
+		if err := s.UnmarshalJSON([]byte(`"$my-task"`)); err != nil {
 			t.Fatalf("unmarshal scalar: %v", err)
 		}
-		if len(s) != 1 || s[0].Case != "" || s[0].Goto != "$my-step" {
-			t.Errorf("expected [{Case:\"\", Goto:\"$my-step\"}], got %+v", s)
+		if len(s) != 1 || s[0].Case != "" || s[0].Goto != "$my-task" {
+			t.Errorf("expected [{Case:\"\", Goto:\"$my-task\"}], got %+v", s)
 		}
 	})
 

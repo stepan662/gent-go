@@ -2,21 +2,14 @@
 // Re-run `bun run playground:generate` after changing process.yaml.
 
 export interface ProcessInput {
-  rec?: Recursive;
   ttl: number;
 }
-export interface Recursive {
-  num?: number;
-  rec?: Recursive;
-}
 
-export interface LoopOutput {
-  result: {
-    rec?: Recursive;
-    ttl: number;
-  };
-}
-export interface Recursive {
-  num?: number;
-  rec?: Recursive;
+export type FinishOutput = number;
+
+export interface StartInput {}
+
+export interface StartOutput {
+  num: number;
+  str: string;
 }

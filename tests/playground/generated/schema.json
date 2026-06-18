@@ -3,24 +3,30 @@
   "process_input": {
     "$ref": "#/$defs/input"
   },
-  "process_output": {
-    "$ref": "#/$defs/output"
-  },
   "tasks": {
-    "loop": {
+    "finish": {
       "action_type": "",
       "output": {
-        "$ref": "#/$defs/loop_output"
+        "$ref": "#/$defs/finish_output"
+      }
+    },
+    "start": {
+      "action_type": "rest",
+      "input": {
+        "type": "object"
+      },
+      "output": {
+        "$ref": "#/$defs/start_output"
       }
     }
   },
   "$defs": {
+    "finish_output": {
+      "type": "number"
+    },
     "input": {
       "type": "object",
       "properties": {
-        "rec": {
-          "$ref": "#/$defs/recursive"
-        },
         "ttl": {
           "type": "integer"
         }
@@ -29,60 +35,20 @@
         "ttl"
       ]
     },
-    "loop_output": {
-      "type": "object",
-      "properties": {
-        "result": {
-          "type": "object",
-          "properties": {
-            "rec": {
-              "$ref": "#/$defs/recursive"
-            },
-            "ttl": {
-              "type": "integer"
-            }
-          },
-          "required": [
-            "ttl"
-          ]
-        }
-      },
-      "required": [
-        "result"
-      ]
-    },
-    "output": {
-      "type": "object",
-      "properties": {
-        "result": {
-          "type": "object",
-          "properties": {
-            "rec": {
-              "$ref": "#/$defs/recursive"
-            },
-            "ttl": {
-              "type": "integer"
-            }
-          },
-          "required": [
-            "ttl"
-          ]
-        }
-      },
-      "required": [
-        "result"
-      ]
-    },
-    "recursive": {
+    "start_output": {
       "type": "object",
       "properties": {
         "num": {
           "type": "number"
         },
-        "rec": {
-          "$ref": "#/$defs/recursive"
+        "str": {
+          "type": "string"
         }
-      }
+      },
+      "required": [
+        "num",
+        "str"
+      ]
     }
   }
 }

@@ -36,21 +36,21 @@ type ProcessInstance struct {
 	ProcessName    string
 	ProcessVersion int
 
-	// StepQueue holds the remaining steps to execute, serialized as JSON.
-	// A switch goto replaces this slice with the target step and all steps after it.
-	StepQueue []*Step
+	// TaskQueue holds the remaining tasks to execute, serialized as JSON.
+	// A switch goto replaces this slice with the target task and all tasks after it.
+	TaskQueue []*Task
 
-	// ContextData is the accumulated key/value state passed between steps.
+	// ContextData is the accumulated key/value state passed between tasks.
 	ContextData map[string]any
 
-	// ParentID is set when this instance was started by a child_process step.
+	// ParentID is set when this instance was started by a child_process task.
 	// Empty string means this is a root instance.
 	ParentID string
 
-	// SpawnStepID is the ID of the parent step that spawned this instance.
+	// SpawnTaskID is the ID of the parent task that spawned this instance.
 	// Empty string for root instances. Scopes sibling queries to one spawn batch
-	// so consecutive spawn steps under the same parent never mix.
-	SpawnStepID string
+	// so consecutive spawn tasks under the same parent never mix.
+	SpawnTaskID string
 
 	// CallStack is the ordered list of ancestor instance IDs (root first).
 	// Used for O(1) ancestor lookup during error cascade.
@@ -68,7 +68,7 @@ type ProcessInstance struct {
 
 	// ReclaimedExpired is a transient, non-persisted flag set by ClaimInstances
 	// when this instance was reclaimed from an expired lease (its prior worker_id
-	// was non-null) rather than picked up at a clean step boundary. It signals that
-	// the current step may have been interrupted mid-execution on the previous owner.
+	// was non-null) rather than picked up at a clean task boundary. It signals that
+	// the current task may have been interrupted mid-execution on the previous owner.
 	ReclaimedExpired bool
 }

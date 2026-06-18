@@ -13,7 +13,7 @@ async function ensureDefinition() {
         properties: { order_id: { type: "number" } },
         required: ["order_id"],
       },
-      steps: [
+      tasks: [
         {
           id: "s1",
           action: { type: "rest" as const, endpoint: "http://localhost:19991/action" },
@@ -99,7 +99,7 @@ test("POST /instances — what happens when referencing types?", async () => {
           },
         },
       },
-      steps: [
+      tasks: [
         {
           id: "s1",
           action: { type: "rest" as const, endpoint: "http://localhost:19991/action" },

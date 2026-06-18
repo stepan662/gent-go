@@ -2,7 +2,7 @@ package expressiontest
 
 import "testing"
 
-// nullableErrorSchema — error is a nullable object with string fields step/message/code,
+// nullableErrorSchema — error is a nullable object with string fields task/message/code,
 // mirroring the error context shape produced by the gent engine.
 var nullableErrorSchema = mustSchema(`{
 	"properties": {
@@ -11,11 +11,11 @@ var nullableErrorSchema = mustSchema(`{
 				{
 					"type": "object",
 					"properties": {
-						"step":    {"type": "string"},
+						"task":    {"type": "string"},
 						"message": {"type": "string"},
 						"code":    {"type": "string"}
 					},
-					"required": ["step", "message", "code"]
+					"required": ["task", "message", "code"]
 				},
 				{"type": "null"}
 			]

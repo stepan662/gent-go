@@ -56,10 +56,10 @@ afterAll(() => {
   }
 });
 
-test("crash recovery — new worker re-executes an unconfirmed step after the previous worker crashes", async () => {
+test("crash recovery — new worker re-executes an unconfirmed task after the previous worker crashes", async () => {
   const db = crashPgDSN ? "" : join(tmpdir(), `gent_crash_${Date.now()}.db`);
 
-  // firstRequestDelayMs: Infinity keeps the connection open so the step
+  // firstRequestDelayMs: Infinity keeps the connection open so the task
   // stays in-flight when we crash the worker.
   const mock = await startMockService(0, {
     response: { done: true },
@@ -73,14 +73,14 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
       body: {
         name: processName,
 
-        steps: [
+        tasks: [
           {
             id: "work",
             action: {
               type: "rest" as const,
               endpoint: `http://localhost:${mock.port}/action`,
             },
-            // Long enough that the step never times out before the crash.
+            // Long enough that the task never times out before the crash.
             timeout_ms: 120_000,
             switch: [{ goto: "end" }],
           },
@@ -93,7 +93,7 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
     });
     const instanceId = startData!.id;
 
-    // Wait until gent1 has claimed the instance and the step is in-flight.
+    // Wait until gent1 has claimed the instance and the task is in-flight.
     await Promise.race([
       mock.firstRequestReceived,
       new Promise<never>((_, reject) =>
@@ -121,7 +121,7 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
         gent2.client,
       );
 
-      // gent2 must have re-executed the step and completed the instance.
+      // gent2 must have re-executed the task and completed the instance.
       expect(finalStatus).toBe("completed");
       // Once by gent1 (abandoned at crash), once by gent2 (confirmed).
       expect(mock.requestCount()).toBe(2);
@@ -134,10 +134,10 @@ test("crash recovery — new worker re-executes an unconfirmed step after the pr
   }
 }, 60_000);
 
-test("crash recovery — an only_once step is failed (not re-executed) after a lease takeover", async () => {
+test("crash recovery — an only_once task is failed (not re-executed) after a lease takeover", async () => {
   const db = crashPgDSN ? "" : join(tmpdir(), `gent_crash_once_${Date.now()}.db`);
 
-  // The first request hangs so the step is in-flight when we crash the worker.
+  // The first request hangs so the task is in-flight when we crash the worker.
   const mock = await startMockService(0, {
     response: { done: true },
     firstRequestDelayMs: Infinity,
@@ -149,7 +149,7 @@ test("crash recovery — an only_once step is failed (not re-executed) after a l
     await gent1.client.PUT("/definitions", {
       body: {
         name: processName,
-        steps: [
+        tasks: [
           {
             id: "work",
             action: {
@@ -171,7 +171,7 @@ test("crash recovery — an only_once step is failed (not re-executed) after a l
     });
     const instanceId = startData!.id;
 
-    // Wait until gent1 has claimed the instance and the step is in-flight.
+    // Wait until gent1 has claimed the instance and the task is in-flight.
     await Promise.race([
       mock.firstRequestReceived,
       new Promise<never>((_, reject) =>
@@ -193,7 +193,7 @@ test("crash recovery — an only_once step is failed (not re-executed) after a l
         gent2.client,
       );
 
-      // gent2 detected the takeover and refused to re-execute the only_once step.
+      // gent2 detected the takeover and refused to re-execute the only_once task.
       expect(finalStatus).toBe("failed");
       const { data } = await gent2.client.GET("/instances/{id}", {
         params: { path: { id: instanceId } },

@@ -7,7 +7,7 @@ import (
 	"github.com/expr-lang/expr/parser"
 )
 
-// OutputRefs returns the distinct step ids referenced via outputs.<id> in expr
+// OutputRefs returns the distinct task ids referenced via outputs.<id> in expr
 // (e.g. "outputs.charge.ok + outputs.ship.n" → ["charge", "ship"]). Used to build
 // the output-dependency graph for ordering and recursion detection.
 func OutputRefs(expression string) ([]string, error) {

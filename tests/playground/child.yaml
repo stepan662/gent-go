@@ -1,11 +1,11 @@
 # yaml-language-server: $schema=http://localhost:8888/process-schema.json
 name: child
-steps:
+tasks:
   - id: child
     action:
       type: rest
       endpoint: http://localhost:3001/child
-      output_schema:
+      result_schema:
         type: object
         properties:
           ok:

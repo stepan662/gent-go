@@ -74,7 +74,7 @@ const DEFAULT_CONCURRENCY = 20;
 const BENCH_PORT = 8890; // distinct from the test servers (8888 sqlite, 8889 pg)
 const BENCH_ENGINES = process.env.BENCH_ENGINES ?? "sqlite,postgres";
 
-// Host fingerprint: printed and stamped onto every result so a step-change in the
+// Host fingerprint: printed and stamped onto every result so a task-change in the
 // charts can be told apart from a runner/hardware change (e.g. GitHub swaps CPUs).
 const HOST = (() => {
   const c = cpus();

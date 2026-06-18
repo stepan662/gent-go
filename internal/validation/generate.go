@@ -9,7 +9,7 @@ import (
 	"gent/internal/schema"
 )
 
-// TaskSchemas holds the schemas associated with a single task step.
+// TaskSchemas holds the schemas associated with a single task task.
 type TaskSchemas struct {
 	ActionType model.ActionType     `json:"action_type"`
 	Input    *schema.SchemaNode `json:"input,omitempty"`
@@ -32,7 +32,7 @@ func buildSchemaContext(def *model.ProcessDefinition) (defs map[string]*schema.S
 	if def.InputSchema != nil {
 		named["input"] = def.InputSchema
 	}
-	collectNamedOutputs(def.Steps, named)
+	collectNamedOutputs(def.Tasks, named)
 	if len(named) > 0 {
 		defs, err = flattenNamedSchemas(named)
 		if err != nil {
@@ -40,7 +40,7 @@ func buildSchemaContext(def *model.ProcessDefinition) (defs map[string]*schema.S
 		}
 	}
 	tasks = make(map[string]TaskSchemas)
-	collectTaskRefs(def.Steps, tasks)
+	collectTaskRefs(def.Tasks, tasks)
 	if named["input"] != nil {
 		processInput = schemaRef("input")
 	}
@@ -60,7 +60,7 @@ func Generate(def *model.ProcessDefinition) (SchemaFile, error) {
 	}
 	result.ProcessInput = processInput
 
-	if err := buildInputs(def.Steps, tasks, processInput, defs); err != nil {
+	if err := buildInputs(def.Tasks, tasks, processInput, defs); err != nil {
 		return SchemaFile{}, err
 	}
 
@@ -68,7 +68,7 @@ func Generate(def *model.ProcessDefinition) (SchemaFile, error) {
 		defs = make(map[string]*schema.SchemaNode)
 	}
 
-	for _, s := range def.Steps {
+	for _, s := range def.Tasks {
 		if ts, ok := tasks[s.ID]; ok {
 			if ts.Input != nil && ts.Input.Properties != nil {
 				name := uniqueDefName(s.ID+"_input", defs)
@@ -107,30 +107,23 @@ func inferProcessOutput(def *model.ProcessDefinition, tasks map[string]TaskSchem
 	return inferShape(def.Output.Raw, ctx, "output")
 }
 
-func collectNamedOutputs(steps []*model.Step, named map[string]*schema.SchemaNode) {
-	for _, s := range steps {
-		if !stepHasOutput(s) {
+func collectNamedOutputs(tasks []*model.Task, named map[string]*schema.SchemaNode) {
+	for _, s := range tasks {
+		if !s.Output.Present() {
 			continue
 		}
-		switch {
-		case s.Output.Present():
-			// Inferred during the per-step walk (it may be recursive); a permissive
-			// placeholder holds the $defs slot until then.
-			named[s.ID+"_output"] = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
-		case s.Action.Type == model.ActionTypeChildParallel:
-			named[s.ID+"_output"] = childParallelOutputSchema(s)
-		default:
-			named[s.ID+"_output"] = s.Action.OutputSchema
-		}
+		// Inferred during the per-task walk (it may be recursive); a permissive
+		// placeholder holds the $defs slot until then.
+		named[s.ID+"_output"] = &schema.SchemaNode{Type: schema.SchemaType{"object"}}
 	}
 }
 
-func collectTaskRefs(steps []*model.Step, out map[string]TaskSchemas) {
-	for _, s := range steps {
-		if !stepHasOutput(s) {
+func collectTaskRefs(tasks []*model.Task, out map[string]TaskSchemas) {
+	for _, s := range tasks {
+		if !s.Output.Present() {
 			continue
 		}
-		var at model.ActionType // empty for a no-action step whose output comes from its output map
+		var at model.ActionType // empty for a no-action (routing) task
 		if s.Action != nil {
 			at = s.Action.Type
 		}
@@ -138,12 +131,12 @@ func collectTaskRefs(steps []*model.Step, out map[string]TaskSchemas) {
 	}
 }
 
-func childParallelOutputSchema(s *model.Step) *schema.SchemaNode {
+func childParallelOutputSchema(s *model.Task) *schema.SchemaNode {
 	props := make(map[string]*schema.SchemaNode, len(s.Action.Children))
 	var required []string
 	for key, entry := range s.Action.Children {
-		if entry.OutputSchema != nil {
-			props[key] = entry.OutputSchema
+		if entry.ResultSchema != nil {
+			props[key] = entry.ResultSchema
 			required = append(required, key)
 		} else {
 			props[key] = &schema.SchemaNode{Type: schema.SchemaType{"object"}}

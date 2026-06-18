@@ -31,12 +31,12 @@ func TestProcessSchemaShape(t *testing.T) {
 		t.Errorf("ModelShape must recurse via #/$defs/ModelShape; got %s", raw)
 	}
 	// params and output must reference the Shape def.
-	step, _ := defs["ModelStep"].(map[string]any)
-	props, _ := step["properties"].(map[string]any)
+	task, _ := defs["ModelTask"].(map[string]any)
+	props, _ := task["properties"].(map[string]any)
 	for _, f := range []string{"params", "output"} {
 		fb, _ := json.Marshal(props[f])
 		if !strings.Contains(string(fb), "ModelShape") {
-			t.Errorf("Step.%s should reference ModelShape, got %s", f, fb)
+			t.Errorf("Task.%s should reference ModelShape, got %s", f, fb)
 		}
 	}
 }

@@ -27,7 +27,7 @@ const (
 // LogConfig controls how much the engine persists to each instance's audit log
 // and for how long.
 type LogConfig struct {
-	Payloads     bool          // capture truncated request/response snippets on step events
+	Payloads     bool          // capture truncated request/response snippets on task events
 	PayloadBytes int           // max bytes per captured snippet (<=0 → defaultPayloadBytes)
 	Retention    time.Duration // prune audit logs older than this; 0 = keep forever
 }
@@ -55,7 +55,7 @@ func (e *OverwhelmError) Error() string {
 }
 
 // Engine is the main orchestration loop. It polls the database for pending
-// instances and advances each one step at a time.
+// instances and advances each one task at a time.
 type Engine struct {
 	db                 *db.DB
 	pollEvery          time.Duration
@@ -324,11 +324,11 @@ func (e *Engine) Tick(ctx context.Context) (int, error) {
 	return len(instances), nil
 }
 
-// advance executes the next step in the instance's queue.
-// Each step may have a call, a switch, or both.
+// advance executes the next task in the instance's queue.
+// Each task may have a call, a switch, or both.
 // The call runs first; then the switch is evaluated with the call's output
-// available as "self". A matching switch case jumps to the named step; no match
-// advances to the next step in the queue.
+// available as "self". A matching switch case jumps to the named task; no match
+// advances to the next task in the queue.
 func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error {
 	if inst.Status == model.StatusFailing {
 		return e.settleFailing(inst)
@@ -338,42 +338,42 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 	}
 
 	// Lease takeover: this instance was reclaimed from an expired lease, so its
-	// front step (StepQueue[0]) may have started executing on the previous owner
-	// before it crashed/stalled. Re-running is fine for idempotent steps, but an
-	// only_once (non-idempotent) call step cannot be safely re-executed — the call
+	// front task (TaskQueue[0]) may have started executing on the previous owner
+	// before it crashed/stalled. Re-running is fine for idempotent tasks, but an
+	// only_once (non-idempotent) call task cannot be safely re-executed — the call
 	// may already have happened — so fail the instance to honour at-most-once.
 	if inst.ReclaimedExpired {
-		stepID := ""
-		if len(inst.StepQueue) > 0 {
-			stepID = inst.StepQueue[0].ID
+		taskID := ""
+		if len(inst.TaskQueue) > 0 {
+			taskID = inst.TaskQueue[0].ID
 		}
-		e.log.Warn("reclaimed instance with expired lease; previous owner crashed or stalled mid-step",
-			"id", inst.ID, "process", inst.ProcessName, "step", stepID)
-		if len(inst.StepQueue) > 0 {
-			s := inst.StepQueue[0]
+		e.log.Warn("reclaimed instance with expired lease; previous owner crashed or stalled mid-task",
+			"id", inst.ID, "process", inst.ProcessName, "task", taskID)
+		if len(inst.TaskQueue) > 0 {
+			s := inst.TaskQueue[0]
 			if s.Action != nil && s.OnlyOnce != nil && *s.OnlyOnce {
 				return e.failInstance(inst, fmt.Sprintf(
-					"step %q is only_once and was interrupted by a lease takeover; cannot re-execute", s.ID))
+					"task %q is only_once and was interrupted by a lease takeover; cannot re-execute", s.ID))
 			}
 		}
 	}
 
-	// Process steps in a loop. A call-less step (pure switch/routing) has no
+	// Process tasks in a loop. A call-less task (pure switch/routing) has no
 	// external side effects, so once it resolves its goto we continue to the next
-	// step in-memory without persisting — collapsing a chain of switch-only steps
+	// task in-memory without persisting — collapsing a chain of switch-only tasks
 	// into a single claim and a single DB write at the boundary. We stop and
-	// persist at the first step that has a call (child spawn or remote action), at
-	// a terminal state, or after maxInlineSteps transitions (a guard against a
+	// persist at the first task that has a call (child spawn or remote action), at
+	// a terminal state, or after maxInlineTasks transitions (a guard against a
 	// pathological all-switch loop holding the goroutine/lease forever).
 	//
-	// This is crash-safe: skipping persistence between call-less steps is fine
+	// This is crash-safe: skipping persistence between call-less tasks is fine
 	// because they only re-evaluate switches against already-persisted context, so
-	// resuming from the last persisted step queue is deterministic. Durable state
+	// resuming from the last persisted task queue is deterministic. Durable state
 	// only changes at the boundaries (spawn txn, action result, terminal save),
-	// each of which writes the live step queue.
-	const maxInlineSteps = 1000
+	// each of which writes the live task queue.
+	const maxInlineTasks = 1000
 	for i := 0; ; i++ {
-		if len(inst.StepQueue) == 0 {
+		if len(inst.TaskQueue) == 0 {
 			inst.Status = model.StatusCompleted
 			inst.WakeAt = nil
 			if err := e.computeOutput(inst); err != nil {
@@ -384,35 +384,35 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 			return e.saveAndNotify(inst)
 		}
 
-		step := inst.StepQueue[0]
-		hasCall := step.Action != nil
+		task := inst.TaskQueue[0]
+		hasCall := task.Action != nil
 		var actionResult any
 
-		// Capture this step's prior output before the action can overwrite it, so an
+		// Capture this task's prior output before the action can overwrite it, so an
 		// output map may reference self.previous (the value from the last loop iteration).
 		var priorOutput any
-		if step.Output.Present() {
+		if task.Output.Present() {
 			if outs, ok := inst.ContextData["outputs"].(map[string]any); ok {
-				priorOutput = outs[step.ID]
+				priorOutput = outs[task.ID]
 			}
 		}
 
 		if hasCall {
-			switch step.Action.Type {
+			switch task.Action.Type {
 			case model.ActionTypeChild, model.ActionTypeChildParallel:
-				out, done, err := e.runChildProcesses(ctx, inst, step)
+				out, done, err := e.runChildProcesses(ctx, inst, task)
 				if done || err != nil {
 					return err
 				}
 				actionResult = out
 			case model.ActionTypeDelay:
-				done, err := e.runDelay(inst, step)
+				done, err := e.runDelay(inst, task)
 				if done || err != nil {
 					return err
 				}
 				// Timer fired: fall through to the switch with no action result.
 			default: // rest, script
-				out, done, err := e.executeAction(ctx, inst, step)
+				out, done, err := e.executeAction(ctx, inst, task)
 				if done || err != nil {
 					return err
 				}
@@ -420,27 +420,35 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 			}
 		}
 
-		// The step's output is the raw action result unless an output map remaps it.
-		// A remapped output is always exported (replaces outputs.stepID); the switch
-		// only ever sees the final output, as self.output.
-		stepOutput := actionResult
-		if step.Output.Present() {
-			remapped, err := e.evalStepOutput(inst, step, actionResult, priorOutput)
+		// The output projection (if any) is the only thing exported (outputs.taskID).
+		// The raw result is never stored; it is exposed transiently to this task's own
+		// output/switch as self.result.
+		var taskOutput any
+		hasOutput := task.Output.Present()
+		if hasOutput {
+			remapped, err := e.evalTaskOutput(inst, task, actionResult, priorOutput)
 			if err != nil {
-				return e.failInstance(inst, fmt.Sprintf("step %q output: %v", step.ID, err))
+				return e.failInstance(inst, fmt.Sprintf("task %q output: %v", task.ID, err))
 			}
-			e.setStepOutput(inst, step.ID, remapped)
-			stepOutput = remapped
+			e.setTaskOutput(inst, task.ID, remapped)
+			taskOutput = remapped
 		}
 
-		gotoID, err := e.evalSwitch(inst, step, map[string]any{"output": stepOutput})
+		// self is this task's transient scope: result (raw action result) and
+		// previous (its own prior output), plus output (the projection) only when one
+		// is defined. None of these but the projection persist beyond this task.
+		self := map[string]any{"result": actionResult, "previous": priorOutput}
+		if hasOutput {
+			self["output"] = taskOutput
+		}
+		gotoID, err := e.evalSwitch(inst, task, self)
 		if err != nil {
-			return e.failInstance(inst, fmt.Sprintf("step %q switch: %v", step.ID, err))
+			return e.failInstance(inst, fmt.Sprintf("task %q switch: %v", task.ID, err))
 		}
 		if gotoID == "" {
 			// Validation requires a catch-all case, but legacy rows in the DB may
 			// predate that rule — fail the instance rather than panic on gotoID[1:].
-			return e.failInstance(inst, fmt.Sprintf("step %q switch: no case matched", step.ID))
+			return e.failInstance(inst, fmt.Sprintf("task %q switch: no case matched", task.ID))
 		}
 
 		if gotoID == model.GotoEnd {
@@ -450,43 +458,43 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) error
 			if err := e.computeOutput(inst); err != nil {
 				return e.failInstance(inst, err.Error())
 			}
-			e.log.Info("instance completed", "id", inst.ID, "step", step.ID)
-			e.audit(inst, model.LogInfo, model.EventInstanceDone, step.ID, "", "", nil)
+			e.log.Info("instance completed", "id", inst.ID, "task", task.ID)
+			e.audit(inst, model.LogInfo, model.EventInstanceDone, task.ID, "", "", nil)
 			return e.saveAndNotify(inst)
 		}
 
 		if gotoID == model.GotoNext {
-			inst.StepQueue = inst.StepQueue[1:]
+			inst.TaskQueue = inst.TaskQueue[1:]
 		} else {
-			// gotoID is a step reference like "$ship" — strip the sigil.
-			newQueue, err := e.queueFromStep(inst, gotoID[1:])
+			// gotoID is a task reference like "$ship" — strip the sigil.
+			newQueue, err := e.queueFromTask(inst, gotoID[1:])
 			if err != nil {
 				return e.failInstance(inst, err.Error())
 			}
-			inst.StepQueue = newQueue
+			inst.TaskQueue = newQueue
 		}
 
 		inst.RetryCount = 0
 		inst.WakeAt = nil
-		e.log.Info("step completed", "id", inst.ID, "step", step.ID)
-		e.audit(inst, model.LogInfo, model.EventStepCompleted, step.ID, "", "", map[string]any{"goto": gotoID})
+		e.log.Info("task completed", "id", inst.ID, "task", task.ID)
+		e.audit(inst, model.LogInfo, model.EventTaskCompleted, task.ID, "", "", map[string]any{"goto": gotoID})
 
-		// A step with a call has just executed a side effect — checkpoint and yield.
-		// A call-less routing step had none, so continue in-memory to the next step
-		// unless we've hit the inline-step guard.
-		if hasCall || i >= maxInlineSteps {
+		// A task with a call has just executed a side effect — checkpoint and yield.
+		// A call-less routing task had none, so continue in-memory to the next task
+		// unless we've hit the inline-task guard.
+		if hasCall || i >= maxInlineTasks {
 			return e.db.UpdateInstanceProgress(inst)
 		}
 	}
 }
 
-// executeAction sends a request to the step's endpoint and stores the output in
+// executeAction sends a request to the task's endpoint and stores the output in
 // the instance context. Returns (output, done, err):
-//   - done=false, err=nil: action succeeded; output is the step result.
+//   - done=false, err=nil: action succeeded; output is the task result.
 //   - done=true: instance already persisted (retry scheduled or permanent fail);
 //     caller should return err directly.
-func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
-	timeout := time.Duration(step.TimeoutMs) * time.Millisecond
+func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance, task *model.Task) (any, bool, error) {
+	timeout := time.Duration(task.TimeoutMs) * time.Millisecond
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
@@ -494,69 +502,50 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	taskCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	data, err := e.buildTaskData(inst, step)
+	data, err := e.buildTaskData(inst, task)
 	if err != nil {
-		return nil, true, e.failInstance(inst, fmt.Sprintf("step %q params: %v", step.ID, err))
+		return nil, true, e.failInstance(inst, fmt.Sprintf("task %q params: %v", task.ID, err))
 	}
 
 	req := transport.Request{
 		InstanceID: inst.ID,
-		StepID:     step.ID,
+		TaskID:     task.ID,
 		Data:       data,
 	}
 
-	e.log.Debug("executing step", "id", inst.ID, "step", step.ID, "action_type", step.Action.Type)
-	startDetail := map[string]any{"action_type": string(step.Action.Type)}
+	e.log.Debug("executing task", "id", inst.ID, "task", task.ID, "action_type", task.Action.Type)
+	startDetail := map[string]any{"action_type": string(task.Action.Type)}
 	if req := e.snippet(data); req != "" {
 		startDetail["request"] = req
 	}
-	e.audit(inst, model.LogDebug, model.EventStepStarted, step.ID, "", "", startDetail)
+	e.audit(inst, model.LogDebug, model.EventTaskStarted, task.ID, "", "", startDetail)
 
-	resolvedHeaders, err := e.resolveHeaders(inst, step.Action)
+	resolvedHeaders, err := e.resolveHeaders(inst, task.Action)
 	if err != nil {
-		return nil, true, e.failInstance(inst, fmt.Sprintf("step %q headers: %v", step.ID, err))
+		return nil, true, e.failInstance(inst, fmt.Sprintf("task %q headers: %v", task.ID, err))
 	}
 
-	resp, err := transport.Send(taskCtx, step.Action, resolvedHeaders, req)
+	resp, err := transport.Send(taskCtx, task.Action, resolvedHeaders, req)
 	if err != nil {
 		code := transport.ClassifyGoError(err)
-		if step.Action.Type == model.ActionTypeScript {
+		if task.Action.Type == model.ActionTypeScript {
 			code = transport.ClassifyScriptError(err)
 		}
-		return nil, true, e.handleCallError(inst, step, err.Error(), code)
+		return nil, true, e.handleCallError(inst, task, err.Error(), code)
 	}
 	if resp.ErrorCode != "" {
 		msg := resp.ErrorMessage
 		if msg == "" {
 			msg = resp.ErrorCode
 		}
-		return nil, true, e.handleCallError(inst, step, msg, resp.ErrorCode)
+		return nil, true, e.handleCallError(inst, task, msg, resp.ErrorCode)
 	}
 
-	if err := step.Action.ValidateOutput(resp.Body); err != nil {
-		return nil, true, e.handleCallError(inst, step, err.Error(), "output.invalid")
-	}
-
-	// Only persist output to context when output_schema is declared.
-	// Without it the output is only available as "self" within this step's switch.
-	if step.Action.OutputSchema != nil {
-		if inst.ContextData["outputs"] == nil {
-			inst.ContextData["outputs"] = map[string]any{}
-		}
-		inst.ContextData["outputs"].(map[string]any)[step.ID] = resp.Body
-
-		var order []string
-		switch v := inst.ContextData["output_order"].(type) {
-		case []string:
-			order = v
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok {
-					order = append(order, s)
-				}
-			}
-		}
-		inst.ContextData["output_order"] = append(order, step.ID)
+	// result_schema validates the raw result; it does not export it. The result is
+	// transient — available to this task's own output/switch as self.result. Only an
+	// `output` projection adds anything to outputs.<id>.
+	if err := task.Action.ValidateOutput(resp.Body); err != nil {
+		return nil, true, e.handleCallError(inst, task, err.Error(), "output.invalid")
 	}
 	inst.RetryCount = 0
 
@@ -564,29 +553,29 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	if body := e.snippet(resp.Body); body != "" {
 		okDetail = map[string]any{"response": body}
 	}
-	e.audit(inst, model.LogInfo, model.EventStepSucceeded, step.ID, "", "", okDetail)
+	e.audit(inst, model.LogInfo, model.EventTaskSucceeded, task.ID, "", "", okDetail)
 
 	return resp.Body, false, nil
 }
 
-// evalStepOutput evaluates a step's output map against the context plus self,
-// where self.result is the raw action result and self.previous is this step's
+// evalTaskOutput evaluates a task's output map against the context plus self,
+// where self.result is the raw action result and self.previous is this task's
 // prior output (its value from the last loop iteration, or nil on the first run).
-func (e *Engine) evalStepOutput(inst *model.ProcessInstance, step *model.Step, result, previous any) (any, error) {
+func (e *Engine) evalTaskOutput(inst *model.ProcessInstance, task *model.Task, result, previous any) (any, error) {
 	self := map[string]any{"result": result, "previous": previous}
-	return evalShape(step.Output.Raw, evalEnv(inst.ContextData, self))
+	return evalShape(task.Output.Raw, evalEnv(inst.ContextData, self))
 }
 
-// setStepOutput stores value as the step's exported output (outputs.stepID),
-// recording the step in output_order the first time it produces output (a loop
+// setTaskOutput stores value as the task's exported output (outputs.taskID),
+// recording the task in output_order the first time it produces output (a loop
 // re-execution overwrites the value without re-appending).
-func (e *Engine) setStepOutput(inst *model.ProcessInstance, stepID string, value any) {
+func (e *Engine) setTaskOutput(inst *model.ProcessInstance, taskID string, value any) {
 	if inst.ContextData["outputs"] == nil {
 		inst.ContextData["outputs"] = map[string]any{}
 	}
 	outs := inst.ContextData["outputs"].(map[string]any)
-	_, existed := outs[stepID]
-	outs[stepID] = value
+	_, existed := outs[taskID]
+	outs[taskID] = value
 	if existed {
 		return
 	}
@@ -601,15 +590,15 @@ func (e *Engine) setStepOutput(inst *model.ProcessInstance, stepID string, value
 			}
 		}
 	}
-	inst.ContextData["output_order"] = append(order, stepID)
+	inst.ContextData["output_order"] = append(order, taskID)
 }
 
-// evalSwitch walks the step's switch cases in order and returns the Goto target
+// evalSwitch walks the task's switch cases in order and returns the Goto target
 // of the first case whose Case expression evaluates to true. An empty Case is a
 // catch-all that always matches and must be the last entry when present. Returns ""
 // when the switch list is empty (should not happen on validated definitions).
-func (e *Engine) evalSwitch(inst *model.ProcessInstance, step *model.Step, selfOutput any) (string, error) {
-	for _, c := range step.Switch {
+func (e *Engine) evalSwitch(inst *model.ProcessInstance, task *model.Task, selfOutput any) (string, error) {
+	for _, c := range task.Switch {
 		if c.Case == "" {
 			return c.Goto, nil
 		}
@@ -624,28 +613,28 @@ func (e *Engine) evalSwitch(inst *model.ProcessInstance, step *model.Step, selfO
 	return "", nil
 }
 
-// queueFromStep looks up the process definition and returns all steps starting
+// queueFromTask looks up the process definition and returns all tasks starting
 // from the one with the given ID. Used to implement switch goto jumps (including
-// loops back to earlier steps).
-func (e *Engine) queueFromStep(inst *model.ProcessInstance, stepID string) ([]*model.Step, error) {
+// loops back to earlier tasks).
+func (e *Engine) queueFromTask(inst *model.ProcessInstance, taskID string) ([]*model.Task, error) {
 	def, err := e.db.GetDefinition(inst.ProcessName, inst.ProcessVersion)
 	if err != nil {
 		return nil, fmt.Errorf("resolve goto: %w", err)
 	}
-	for i, s := range def.Steps {
-		if s.ID == stepID {
-			return def.Steps[i:], nil
+	for i, s := range def.Tasks {
+		if s.ID == taskID {
+			return def.Tasks[i:], nil
 		}
 	}
-	return nil, fmt.Errorf("goto step %q not found in %q v%d", stepID, inst.ProcessName, inst.ProcessVersion)
+	return nil, fmt.Errorf("goto task %q not found in %q v%d", taskID, inst.ProcessName, inst.ProcessVersion)
 }
 
-// isRetryAllowed reports whether a retry is safe for the given step and error.
-// For idempotent steps (the default) retries are always governed by on_error rules.
-// For non-idempotent steps, a retry is only allowed when we know the remote call
+// isRetryAllowed reports whether a retry is safe for the given task and error.
+// For idempotent tasks (the default) retries are always governed by on_error rules.
+// For non-idempotent tasks, a retry is only allowed when we know the remote call
 // never started: start.* error codes, or an on_error rule with executed:false.
-func isRetryAllowed(step *model.Step, errCode string, matched *model.ErrorCase) bool {
-	if step.OnlyOnce == nil || !*step.OnlyOnce {
+func isRetryAllowed(task *model.Task, errCode string, matched *model.ErrorCase) bool {
+	if task.OnlyOnce == nil || !*task.OnlyOnce {
 		return true
 	}
 	if matched != nil && matched.NotReached != nil && *matched.NotReached {
@@ -656,9 +645,9 @@ func isRetryAllowed(step *model.Step, errCode string, matched *model.ErrorCase) 
 
 // matchOnError returns the first ErrorCase whose Code patterns match errCode,
 // or whose Code list is empty (catch-all). Returns nil when no rule matches.
-func matchOnError(step *model.Step, errCode string) *model.ErrorCase {
-	for i := range step.OnError {
-		c := &step.OnError[i]
+func matchOnError(task *model.Task, errCode string) *model.ErrorCase {
+	for i := range task.OnError {
+		c := &task.OnError[i]
 		if len(c.Code) == 0 {
 			return c
 		}
@@ -673,35 +662,35 @@ func matchOnError(step *model.Step, errCode string) *model.ErrorCase {
 
 // handleCallError evaluates on_error rules, retries if allowed, injects $error
 // context, and routes to the matching goto or fails the instance.
-func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, errMsg, errCode string) error {
+func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, errMsg, errCode string) error {
 	// If the process is being cancelled, suppress retries and honour the cancellation
 	// unless retries are exhausted / not configured — in that case error takes precedence.
 	if inst.Status == model.StatusCancelling {
-		matched := matchOnError(step, errCode)
-		if matched != nil && inst.RetryCount < matched.Retries && isRetryAllowed(step, errCode, matched) {
+		matched := matchOnError(task, errCode)
+		if matched != nil && inst.RetryCount < matched.Retries && isRetryAllowed(task, errCode, matched) {
 			// Retries remain but we're cancelling — skip the retry and cancel cleanly.
-			e.log.Info("step failed during cancellation, skipping retry",
-				"id", inst.ID, "step", step.ID, "code", errCode)
-			e.audit(inst, model.LogInfo, model.EventCancelSkipRetry, step.ID, errMsg, errCode, nil)
+			e.log.Info("task failed during cancellation, skipping retry",
+				"id", inst.ID, "task", task.ID, "code", errCode)
+			e.audit(inst, model.LogInfo, model.EventCancelSkipRetry, task.ID, errMsg, errCode, nil)
 			return e.cancelInstance(inst)
 		}
 		// No retries available — error takes precedence over cancellation.
-		return e.failInstance(inst, fmt.Sprintf("step %q: %s: %s", step.ID, errCode, errMsg))
+		return e.failInstance(inst, fmt.Sprintf("task %q: %s: %s", task.ID, errCode, errMsg))
 	}
 
-	matched := matchOnError(step, errCode)
+	matched := matchOnError(task, errCode)
 
-	if matched != nil && inst.RetryCount < matched.Retries && isRetryAllowed(step, errCode, matched) {
+	if matched != nil && inst.RetryCount < matched.Retries && isRetryAllowed(task, errCode, matched) {
 		inst.RetryCount++
 		next := db.Now().Add(e.retryDelay(inst.RetryCount))
 		inst.WakeAt = &next
-		e.log.Warn("step failed, scheduling retry",
-			"id", inst.ID, "step", step.ID,
+		e.log.Warn("task failed, scheduling retry",
+			"id", inst.ID, "task", task.ID,
 			"attempt", inst.RetryCount, "max", matched.Retries,
 			"next_retry", next.Format(time.RFC3339),
 			"code", errCode, "err", errMsg,
 		)
-		e.audit(inst, model.LogWarn, model.EventRetryScheduled, step.ID, errMsg, errCode, map[string]any{
+		e.audit(inst, model.LogWarn, model.EventRetryScheduled, task.ID, errMsg, errCode, map[string]any{
 			"attempt":    inst.RetryCount,
 			"max":        matched.Retries,
 			"next_retry": next.Format(time.RFC3339),
@@ -710,7 +699,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 	}
 
 	inst.ContextData["error"] = map[string]any{
-		"step":    step.ID,
+		"task":    task.ID,
 		"message": errMsg,
 		"code":    errCode,
 	}
@@ -719,50 +708,50 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, step *model.Step, 
 		if matched.Goto == model.GotoEnd {
 			inst.Status = model.StatusCompleted
 			inst.WakeAt = nil
-			e.log.Info("instance completed via error route", "id", inst.ID, "step", step.ID, "code", errCode)
-			e.audit(inst, model.LogInfo, model.EventErrorCompleted, step.ID, errMsg, errCode, nil)
+			e.log.Info("instance completed via error route", "id", inst.ID, "task", task.ID, "code", errCode)
+			e.audit(inst, model.LogInfo, model.EventErrorCompleted, task.ID, errMsg, errCode, nil)
 			return e.saveAndNotify(inst)
 		}
-		newQueue, err := e.queueFromStep(inst, matched.Goto)
+		newQueue, err := e.queueFromTask(inst, matched.Goto)
 		if err != nil {
 			return e.failInstance(inst, err.Error())
 		}
-		inst.StepQueue = newQueue
+		inst.TaskQueue = newQueue
 		inst.RetryCount = 0
 		inst.WakeAt = nil
 		e.log.Info("routing to error handler",
-			"id", inst.ID, "step", step.ID, "goto", matched.Goto, "code", errCode)
-		e.audit(inst, model.LogInfo, model.EventErrorRoute, step.ID, errMsg, errCode, map[string]any{"goto": matched.Goto})
+			"id", inst.ID, "task", task.ID, "goto", matched.Goto, "code", errCode)
+		e.audit(inst, model.LogInfo, model.EventErrorRoute, task.ID, errMsg, errCode, map[string]any{"goto": matched.Goto})
 		return e.db.UpdateInstance(inst)
 	}
 
-	return e.failInstance(inst, fmt.Sprintf("step %q: %s: %s", step.ID, errCode, errMsg))
+	return e.failInstance(inst, fmt.Sprintf("task %q: %s: %s", task.ID, errCode, errMsg))
 }
 
-func (e *Engine) buildTaskData(inst *model.ProcessInstance, step *model.Step) (any, error) {
-	if !step.Params.Present() {
+func (e *Engine) buildTaskData(inst *model.ProcessInstance, task *model.Task) (any, error) {
+	if !task.Params.Present() {
 		return map[string]any{}, nil
 	}
-	return evalShape(step.Params.Raw, evalEnv(inst.ContextData, nil))
+	return evalShape(task.Params.Raw, evalEnv(inst.ContextData, nil))
 }
 
 // runDelay implements the delay action. On first entry — WakeAt is nil
-// because every step transition resets it — it evaluates the duration, parks the
+// because every task transition resets it — it evaluates the duration, parks the
 // instance by stamping wake_at, and releases the worker via
 // UpdateInstanceProgress; the normal claim loop re-claims it once the timer
 // elapses. On re-entry (WakeAt set, so the claim guarantees the timer is
-// due) it returns done=false and advance continues to the step's switch.
+// due) it returns done=false and advance continues to the task's switch.
 // Returns done=true when it parked or failed (the caller returns immediately).
-func (e *Engine) runDelay(inst *model.ProcessInstance, step *model.Step) (bool, error) {
+func (e *Engine) runDelay(inst *model.ProcessInstance, task *model.Task) (bool, error) {
 	if inst.WakeAt == nil {
-		ms, err := evalDurationMs(step.Action.Ms, inst.ContextData)
+		ms, err := evalDurationMs(task.Action.Ms, inst.ContextData)
 		if err != nil {
-			return true, e.failInstance(inst, fmt.Sprintf("step %q delay: %v", step.ID, err))
+			return true, e.failInstance(inst, fmt.Sprintf("task %q delay: %v", task.ID, err))
 		}
 		wake := db.Now().Add(time.Duration(ms) * time.Millisecond)
 		inst.WakeAt = &wake
-		e.log.Info("instance delaying", "id", inst.ID, "step", step.ID, "ms", ms)
-		e.audit(inst, model.LogInfo, model.EventDelayArmed, step.ID, "", "", map[string]any{"ms": ms})
+		e.log.Info("instance delaying", "id", inst.ID, "task", task.ID, "ms", ms)
+		e.audit(inst, model.LogInfo, model.EventDelayArmed, task.ID, "", "", map[string]any{"ms": ms})
 		return true, e.db.UpdateInstanceProgress(inst)
 	}
 	return false, nil
@@ -803,12 +792,12 @@ func evalDurationMs(expr string, ctx map[string]any) (int64, error) {
 // best-effort: a write failure is logged and swallowed so audit logging can
 // never abort an advance. The structured slog output at each call site is left
 // intact for operational logging; this is the durable, queryable trail.
-func (e *Engine) audit(inst *model.ProcessInstance, level model.LogLevel, event, step, msg, code string, detail map[string]any) {
+func (e *Engine) audit(inst *model.ProcessInstance, level model.LogLevel, event, task, msg, code string, detail map[string]any) {
 	if err := e.db.AppendLog(&model.LogEntry{
 		InstanceID: inst.ID,
 		Level:      level,
 		Event:      event,
-		StepID:     step,
+		TaskID:     task,
 		Message:    msg,
 		Code:       code,
 		Detail:     detail,
@@ -891,51 +880,55 @@ func (e *Engine) saveAndNotify(inst *model.ProcessInstance) error {
 //
 //  1. WaitStateNone → spawn children, suspend parent (wait_state='waiting').
 //  2. WaitStateCollecting → all children are terminal; merge their outputs into
-//     parent context and return so advance() continues past this step.
+//     parent context and return so advance() continues past this task.
 //
 // A cancelling parent spawns cancelling children: they self-cancel and call
 // FinishChild, which transitions the parent to WaitStateCollecting normally.
-func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInstance, step *model.Step) (any, bool, error) {
-	// Phase 2: parent woke up with children done — collect their outputs.
+func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInstance, task *model.Task) (any, bool, error) {
+	// Phase 2: parent woke up with children done — collect their outputs into the
+	// action result (self.result). It is exported only if the task projects it.
 	if inst.WaitState == model.WaitStateCollecting {
-		if err := e.collectChildOutputs(ctx, inst, step); err != nil {
+		output, err := e.collectChildOutputs(ctx, inst, task)
+		if err != nil {
 			inst.WaitState = model.WaitStateNone
-			return nil, true, e.failInstance(inst, fmt.Sprintf("step %q collect: %v", step.ID, err))
+			return nil, true, e.failInstance(inst, fmt.Sprintf("task %q collect: %v", task.ID, err))
 		}
 		inst.WaitState = model.WaitStateNone
-		output := inst.ContextData["outputs"].(map[string]any)[step.ID]
-		e.log.Info("parent collected child outputs", "id", inst.ID, "step", step.ID)
-		e.audit(inst, model.LogInfo, model.EventChildrenCollect, step.ID, "", "", nil)
+		e.log.Info("parent collected child outputs", "id", inst.ID, "task", task.ID)
+		e.audit(inst, model.LogInfo, model.EventChildrenCollect, task.ID, "", "", nil)
 		return output, false, nil
 	}
 
-	// Phase 1: spawn children.
+	// Phase 1: spawn children. Record the spawned child IDs under the internal
+	// "_children" key (keyed by task, then by child key for parallel) so observers
+	// can correlate a parent task with its children. This is metadata only — child
+	// results flow to self.result at collection, not into outputs.
 	childCallStack := append(inst.CallStack, inst.ID)
-
-	if inst.ContextData["outputs"] == nil {
-		inst.ContextData["outputs"] = map[string]any{}
+	if inst.ContextData["_children"] == nil {
+		inst.ContextData["_children"] = map[string]any{}
 	}
+	spawned := inst.ContextData["_children"].(map[string]any)
 
 	var children []*model.ProcessInstance
-	switch step.Action.Type {
+	switch task.Action.Type {
 	case model.ActionTypeChild:
-		child, err := e.buildSingleChild(ctx, inst, step, childCallStack)
+		child, err := e.buildSingleChild(ctx, inst, task, childCallStack)
 		if err != nil {
 			return nil, true, err
 		}
-		inst.ContextData["outputs"].(map[string]any)[step.ID] = child.ID
+		spawned[task.ID] = child.ID
 		children = []*model.ProcessInstance{child}
 	case model.ActionTypeChildParallel:
-		parallel, err := e.buildParallelChildren(ctx, inst, step, childCallStack)
+		parallel, err := e.buildParallelChildren(ctx, inst, task, childCallStack)
 		if err != nil {
 			return nil, true, err
 		}
-		placeholder := make(map[string]any, len(parallel))
+		ids := make(map[string]any, len(parallel))
 		for _, c := range parallel {
 			key, _ := c.ContextData["_spawn_child_key"].(string)
-			placeholder[key] = c.ID
+			ids[key] = c.ID
 		}
-		inst.ContextData["outputs"].(map[string]any)[step.ID] = placeholder
+		spawned[task.ID] = ids
 		children = parallel
 	}
 
@@ -950,49 +943,49 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 			}
 		}
 	}
-	inst.ContextData["output_order"] = append(order, step.ID)
+	inst.ContextData["output_order"] = append(order, task.ID)
 
 	inst.RetryCount = 0
 	inst.WakeAt = nil
 
 	if err := e.db.SpawnChildrenAndWait(ctx, inst, children); err != nil {
-		return nil, true, e.failInstance(inst, fmt.Sprintf("step %q spawn: %v", step.ID, err))
+		return nil, true, e.failInstance(inst, fmt.Sprintf("task %q spawn: %v", task.ID, err))
 	}
 
-	e.log.Info("parent waiting for children", "id", inst.ID, "step", step.ID, "children", len(children))
-	e.audit(inst, model.LogInfo, model.EventChildrenSpawned, step.ID, "", "", map[string]any{"children": len(children)})
+	e.log.Info("parent waiting for children", "id", inst.ID, "task", task.ID, "children", len(children))
+	e.audit(inst, model.LogInfo, model.EventChildrenSpawned, task.ID, "", "", map[string]any{"children": len(children)})
 	return nil, true, nil
 }
 
 // buildSingleChild resolves the child definition, evaluates input, and constructs
 // a ProcessInstance ready to be saved. It does not persist anything.
-func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstance, step *model.Step, callStack []string) (*model.ProcessInstance, error) {
-	name := step.Action.Name
-	version := step.Action.Version
+func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstance, task *model.Task, callStack []string) (*model.ProcessInstance, error) {
+	name := task.Action.Name
+	version := task.Action.Version
 	if version == 0 {
 		if name == inst.ProcessName {
 			version = inst.ProcessVersion
 		} else {
 			var err error
-			version, err = e.db.GetDependencyVersion(inst.ProcessName, inst.ProcessVersion, step.ID, "")
+			version, err = e.db.GetDependencyVersion(inst.ProcessName, inst.ProcessVersion, task.ID, "")
 			if err != nil {
 				version, err = e.db.LatestVersion(name)
 				if err != nil {
-					return nil, e.failInstance(inst, fmt.Sprintf("step %q child: %v", step.ID, err))
+					return nil, e.failInstance(inst, fmt.Sprintf("task %q child: %v", task.ID, err))
 				}
 			}
 		}
 	}
 	def, err := e.db.GetDefinition(name, version)
 	if err != nil {
-		return nil, e.failInstance(inst, fmt.Sprintf("step %q child: %v", step.ID, err))
+		return nil, e.failInstance(inst, fmt.Sprintf("task %q child: %v", task.ID, err))
 	}
-	input, err := e.evalChildInput(inst, step.ID, "child", step.Action.Input)
+	input, err := e.evalChildInput(inst, task.ID, "child", task.Action.Input)
 	if err != nil {
 		return nil, e.failInstance(inst, err.Error())
 	}
 	if err := def.ValidateInput(input); err != nil {
-		return nil, e.failInstance(inst, fmt.Sprintf("step %q child input validation: %v", step.ID, err))
+		return nil, e.failInstance(inst, fmt.Sprintf("task %q child input validation: %v", task.ID, err))
 	}
 	childCtx := map[string]any{
 		"input":            input,
@@ -1001,29 +994,29 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 		"error":            nil,
 		"_spawn_action_type": string(model.ActionTypeChild),
 	}
-	if step.Action.OutputSchema != nil {
-		if b, err := json.Marshal(step.Action.OutputSchema); err == nil {
-			childCtx["_spawn_output_schema"] = string(b)
+	if task.Action.ResultSchema != nil {
+		if b, err := json.Marshal(task.Action.ResultSchema); err == nil {
+			childCtx["_spawn_result_schema"] = string(b)
 		}
 	}
 	return &model.ProcessInstance{
 		ID:             idgen.ChildBase(inst.ID).String(), // sorts after the parent
 		ProcessName:    def.Name,
 		ProcessVersion: version,
-		StepQueue:      def.Steps,
+		TaskQueue:      def.Tasks,
 		ContextData:    childCtx,
 		Status:         model.StatusRunning,
 		ParentID:       inst.ID,
-		SpawnStepID:    step.ID,
+		SpawnTaskID:    task.ID,
 		CallStack:      callStack,
 	}, nil
 }
 
 // buildParallelChildren resolves definitions, evaluates inputs, and constructs
 // ProcessInstances for all parallel children. Does not persist anything.
-func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessInstance, step *model.Step, callStack []string) ([]*model.ProcessInstance, error) {
-	keys := make([]string, 0, len(step.Action.Children))
-	for key := range step.Action.Children {
+func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessInstance, task *model.Task, callStack []string) ([]*model.ProcessInstance, error) {
+	keys := make([]string, 0, len(task.Action.Children))
+	for key := range task.Action.Children {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
@@ -1033,34 +1026,34 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 	// itself in spawn order.
 	base := idgen.ChildBase(inst.ID)
 
-	children := make([]*model.ProcessInstance, 0, len(step.Action.Children))
+	children := make([]*model.ProcessInstance, 0, len(task.Action.Children))
 	for i, key := range keys {
-		entry := step.Action.Children[key]
+		entry := task.Action.Children[key]
 		version := entry.Version
 		if version == 0 {
 			if entry.Name == inst.ProcessName {
 				version = inst.ProcessVersion
 			} else {
 				var err error
-				version, err = e.db.GetDependencyVersion(inst.ProcessName, inst.ProcessVersion, step.ID, key)
+				version, err = e.db.GetDependencyVersion(inst.ProcessName, inst.ProcessVersion, task.ID, key)
 				if err != nil {
 					version, err = e.db.LatestVersion(entry.Name)
 					if err != nil {
-						return nil, e.failInstance(inst, fmt.Sprintf("step %q child_parallel[%q]: %v", step.ID, key, err))
+						return nil, e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q]: %v", task.ID, key, err))
 					}
 				}
 			}
 		}
 		def, err := e.db.GetDefinition(entry.Name, version)
 		if err != nil {
-			return nil, e.failInstance(inst, fmt.Sprintf("step %q child_parallel[%q]: %v", step.ID, key, err))
+			return nil, e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q]: %v", task.ID, key, err))
 		}
-		input, err := e.evalChildInput(inst, step.ID, fmt.Sprintf("child_parallel[%q]", key), entry.Input)
+		input, err := e.evalChildInput(inst, task.ID, fmt.Sprintf("child_parallel[%q]", key), entry.Input)
 		if err != nil {
 			return nil, e.failInstance(inst, err.Error())
 		}
 		if err := def.ValidateInput(input); err != nil {
-			return nil, e.failInstance(inst, fmt.Sprintf("step %q child_parallel[%q] input validation: %v", step.ID, key, err))
+			return nil, e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q] input validation: %v", task.ID, key, err))
 		}
 		childCtx := map[string]any{
 			"input":            input,
@@ -1070,33 +1063,33 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 			"_spawn_action_type": string(model.ActionTypeChildParallel),
 			"_spawn_child_key": key,
 		}
-		if entry.OutputSchema != nil {
-			if b, err := json.Marshal(entry.OutputSchema); err == nil {
-				childCtx["_spawn_output_schema"] = string(b)
+		if entry.ResultSchema != nil {
+			if b, err := json.Marshal(entry.ResultSchema); err == nil {
+				childCtx["_spawn_result_schema"] = string(b)
 			}
 		}
 		children = append(children, &model.ProcessInstance{
 			ID:             idgen.Add(base, uint64(i)).String(),
 			ProcessName:    def.Name,
 			ProcessVersion: version,
-			StepQueue:      def.Steps,
+			TaskQueue:      def.Tasks,
 			ContextData:    childCtx,
 			Status:         model.StatusRunning,
 			ParentID:       inst.ID,
-			SpawnStepID:    step.ID,
+			SpawnTaskID:    task.ID,
 			CallStack:      callStack,
 		})
 	}
 	return children, nil
 }
 
-func (e *Engine) evalChildInput(inst *model.ProcessInstance, stepID, label string, input *model.Shape) (any, error) {
+func (e *Engine) evalChildInput(inst *model.ProcessInstance, taskID, label string, input *model.Shape) (any, error) {
 	if !input.Present() {
 		return map[string]any{}, nil
 	}
 	val, err := evalShape(input.Raw, evalEnv(inst.ContextData, nil))
 	if err != nil {
-		return nil, fmt.Errorf("step %q %s input: %v", stepID, label, err)
+		return nil, fmt.Errorf("task %q %s input: %v", taskID, label, err)
 	}
 	return val, nil
 }

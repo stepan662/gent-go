@@ -1,9 +1,9 @@
 import { expect, test } from "vitest";
 import { useTickEnv } from "./helpers.ts";
 
-// Exercises the per-step `output` map end to end: a no-action step computes its
+// Exercises the per-task `output` map end to end: a no-action task computes its
 // output from self.previous (recursive, inferred — no schema declared), the
-// switch routes on self.output, and the remapped value is what later steps and
+// switch routes on self.output, and the remapped value is what later tasks and
 // the process output see.
 const ctx = useTickEnv(20021);
 
@@ -11,7 +11,7 @@ test("no-action output map drives a counter via self.previous; switch reads self
   await ctx.env.client.PUT("/definitions", {
     body: {
       name: "out_counter",
-      steps: [
+      tasks: [
         {
           id: "count",
           output: { n: "{{ (self.previous.n ?? 0) + 1 }}" },
@@ -37,14 +37,14 @@ test("no-action output map drives a counter via self.previous; switch reads self
   expect((data!.context as any)?.output?.n).toBe(3);
 });
 
-test("cross-step mutual recursion (start <-> loop) type-checks and runs", async () => {
+test("cross-task mutual recursion (start <-> loop) type-checks and runs", async () => {
   // start reads loop's output and loop reads start's, closed by a goto loop —
   // a mutual cycle resolved by the joint SCC fixpoint at validation time.
   await ctx.env.client.PUT("/definitions", {
     body: {
       name: "cross_loop",
       input_schema: { type: "object", properties: { ttl: { type: "integer" } }, required: ["ttl"] },
-      steps: [
+      tasks: [
         { id: "start", output: { num: "{{ outputs.loop.num }}" }, switch: "next" },
         {
           id: "loop",

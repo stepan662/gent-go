@@ -7,36 +7,31 @@ import (
 	"gent/internal/model"
 )
 
-// predEdge is a predecessor edge in the step graph.
-// isErr is true for on_error routes: the failing step has no output on this path.
+// predEdge is a predecessor edge in the task graph.
+// isErr is true for on_error routes: the failing task has no output on this path.
 type predEdge struct {
-	idx   int  // predecessor step index; -1 = process start
+	idx   int  // predecessor task index; -1 = process start
 	isErr bool // true = on_error route
 }
 
-func stepHasOutput(s *model.Step) bool {
-	if s.Output.Present() {
-		return true // an output shape always produces output, even with no action
-	}
-	if s.Action == nil {
-		return false
-	}
-	if s.Action.Type == model.ActionTypeChildParallel {
-		return len(s.Action.Children) > 0
-	}
-	return s.Action.OutputSchema != nil
+// taskHasOutput reports whether a task exports an output to outputs.<id>. Only an
+// `output` projection exports; a raw action result (even with a result_schema, or
+// a child's output) is transient — available to the task's own output/switch as
+// self.result, but never added to the shared context.
+func taskHasOutput(s *model.Task) bool {
+	return s.Output.Present()
 }
 
-// outputContextSets returns which step outputs are required/optional at the
+// outputContextSets returns which task outputs are required/optional at the
 // process output boundary, and whether $error is required or optional there.
 func outputContextSets(def *model.ProcessDefinition) (required, optional []string, errRequired, errOptional bool) {
-	steps := def.Steps
-	n := len(steps)
+	tasks := def.Tasks
+	n := len(tasks)
 	if n == 0 {
 		return
 	}
 
-	reqMap, optMap, mustErrMap, mayErrMap := computeContextSets(steps)
+	reqMap, optMap, mustErrMap, mayErrMap := computeContextSets(tasks)
 
 	type endSet struct {
 		must   map[string]bool
@@ -47,12 +42,12 @@ func outputContextSets(def *model.ProcessDefinition) (required, optional []strin
 
 	var terminals []endSet
 
-	addTerminal := func(s *model.Step, includeOwnOutput bool, errMin, errMax bool) {
+	addTerminal := func(s *model.Task, includeOwnOutput bool, errMin, errMax bool) {
 		must := make(map[string]bool)
 		for _, id := range reqMap[s.ID] {
 			must[id] = true
 		}
-		if includeOwnOutput && stepHasOutput(s) {
+		if includeOwnOutput && taskHasOutput(s) {
 			must[s.ID] = true
 		}
 		may := make(map[string]bool)
@@ -65,7 +60,7 @@ func outputContextSets(def *model.ProcessDefinition) (required, optional []strin
 		terminals = append(terminals, endSet{must: must, may: may, errMin: errMin, errMax: errMax})
 	}
 
-	for i, s := range steps {
+	for i, s := range tasks {
 		isNormal := (len(s.Switch) == 0 && i == n-1) ||
 			func() bool {
 				for _, c := range s.Switch {
@@ -88,7 +83,7 @@ func outputContextSets(def *model.ProcessDefinition) (required, optional []strin
 			addTerminal(s, true, mustErrMap[s.ID], mayErrMap[s.ID])
 		}
 		if isErrEnd {
-			// failing step never produced output; error is always present on this path
+			// failing task never produced output; error is always present on this path
 			addTerminal(s, false, true, true)
 		}
 	}
@@ -144,18 +139,18 @@ func outputContextSets(def *model.ProcessDefinition) (required, optional []strin
 	return
 }
 
-// buildPreds constructs the predecessor graph for the step slice.
-// preds[i] lists all edges that route into step i; the process start is
-// represented as predEdge{idx: -1} on step 0.
-func buildPreds(steps []*model.Step) [][]predEdge {
-	n := len(steps)
+// buildPreds constructs the predecessor graph for the task slice.
+// preds[i] lists all edges that route into task i; the process start is
+// represented as predEdge{idx: -1} on task 0.
+func buildPreds(tasks []*model.Task) [][]predEdge {
+	n := len(tasks)
 	idx := make(map[string]int, n)
-	for i, s := range steps {
+	for i, s := range tasks {
 		idx[s.ID] = i
 	}
 	preds := make([][]predEdge, n)
 	preds[0] = append(preds[0], predEdge{idx: -1})
-	for i, s := range steps {
+	for i, s := range tasks {
 		addedNext := false
 		for _, c := range s.Switch {
 			if strings.HasPrefix(c.Goto, "$") {
@@ -167,7 +162,7 @@ func buildPreds(steps []*model.Step) [][]predEdge {
 				addedNext = true
 			}
 		}
-		// Backward-compat: steps with no switch fall through to the next step.
+		// Backward-compat: tasks with no switch fall through to the next task.
 		if len(s.Switch) == 0 && i+1 < n {
 			preds[i+1] = append(preds[i+1], predEdge{idx: i})
 		}
@@ -182,14 +177,14 @@ func buildPreds(steps []*model.Step) [][]predEdge {
 	return preds
 }
 
-// checkReachability returns an error if any step cannot be reached from the
-// first step via switch gotos or on_error routes.
-func checkReachability(steps []*model.Step) error {
-	if len(steps) == 0 {
+// checkReachability returns an error if any task cannot be reached from the
+// first task via switch gotos or on_error routes.
+func checkReachability(tasks []*model.Task) error {
+	if len(tasks) == 0 {
 		return nil
 	}
-	preds := buildPreds(steps)
-	reachable := make([]bool, len(steps))
+	preds := buildPreds(tasks)
+	reachable := make([]bool, len(tasks))
 	reachable[0] = true
 	for {
 		changed := false
@@ -209,20 +204,20 @@ func checkReachability(steps []*model.Step) error {
 			break
 		}
 	}
-	for i, s := range steps {
+	for i, s := range tasks {
 		if !reachable[i] {
-			return fmt.Errorf("step %q is unreachable: no switch or error handler routes to it", s.ID)
+			return fmt.Errorf("task %q is unreachable: no switch or error handler routes to it", s.ID)
 		}
 	}
 	return nil
 }
 
-// computeContextSets computes, for each step, which prior step outputs are
+// computeContextSets computes, for each task, which prior task outputs are
 // always available (required) and which are only sometimes available (optional).
 // It also returns mustErr and mayErr maps indicating whether the $error context
-// key is always / sometimes present at each step.
-func computeContextSets(steps []*model.Step) (required, optional map[string][]string, mustErr, mayErr map[string]bool) {
-	n := len(steps)
+// key is always / sometimes present at each task.
+func computeContextSets(tasks []*model.Task) (required, optional map[string][]string, mustErr, mayErr map[string]bool) {
+	n := len(tasks)
 	required = make(map[string][]string, n)
 	optional = make(map[string][]string, n)
 	mustErr = make(map[string]bool, n)
@@ -231,11 +226,11 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		return
 	}
 
-	preds := buildPreds(steps)
+	preds := buildPreds(tasks)
 
 	hasOutput := make([]bool, n)
-	for i, s := range steps {
-		hasOutput[i] = stepHasOutput(s)
+	for i, s := range tasks {
+		hasOutput[i] = taskHasOutput(s)
 	}
 
 	allTrue := func() []bool {
@@ -255,15 +250,15 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		return true
 	}
 
-	// mustOut[i][j] = step j's output is ALWAYS available when entering step i.
-	// Error edges clear the failing step's own output bit.
+	// mustOut[i][j] = task j's output is ALWAYS available when entering task i.
+	// Error edges clear the failing task's own output bit.
 	mustOut := make([][]bool, n)
 	for i := range mustOut {
 		mustOut[i] = allTrue()
 	}
 	for {
 		changed := false
-		for i := range steps {
+		for i := range tasks {
 			in := allTrue()
 			for _, p := range preds[i] {
 				if p.idx == -1 {
@@ -273,7 +268,7 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 				src := mustOut[p.idx]
 				if p.isErr && hasOutput[p.idx] {
 					src = append([]bool{}, mustOut[p.idx]...)
-					src[p.idx] = false // failing step produced no output
+					src[p.idx] = false // failing task produced no output
 				}
 				for j := range in {
 					in[j] = in[j] && src[j]
@@ -296,14 +291,14 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		}
 	}
 
-	// mayOut[i][j] = step j's output is POSSIBLY available when entering step i.
+	// mayOut[i][j] = task j's output is POSSIBLY available when entering task i.
 	mayOut := make([][]bool, n)
 	for i := range mayOut {
 		mayOut[i] = allFalse()
 	}
 	for {
 		changed := false
-		for i := range steps {
+		for i := range tasks {
 			in := allFalse()
 			for _, p := range preds[i] {
 				if p.idx == -1 {
@@ -332,11 +327,11 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		}
 	}
 
-	// mustErrArr[i] = $error is ALWAYS present when entering step i (all paths are error paths).
+	// mustErrArr[i] = $error is ALWAYS present when entering task i (all paths are error paths).
 	mustErrArr := make([]bool, n)
 	for {
 		changed := false
-		for i := range steps {
+		for i := range tasks {
 			if len(preds[i]) == 0 {
 				continue
 			}
@@ -362,11 +357,11 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		}
 	}
 
-	// mayErrArr[i] = $error is POSSIBLY present when entering step i.
+	// mayErrArr[i] = $error is POSSIBLY present when entering task i.
 	mayErrArr := make([]bool, n)
 	for {
 		changed := false
-		for i := range steps {
+		for i := range tasks {
 			val := false
 			for _, p := range preds[i] {
 				if p.idx != -1 && (p.isErr || mayErrArr[p.idx]) {
@@ -384,7 +379,7 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 		}
 	}
 
-	for i, s := range steps {
+	for i, s := range tasks {
 		mustIn := allTrue()
 		for _, p := range preds[i] {
 			if p.idx == -1 {
@@ -419,7 +414,7 @@ func computeContextSets(steps []*model.Step) (required, optional map[string][]st
 			}
 		}
 
-		for j, ss := range steps {
+		for j, ss := range tasks {
 			switch {
 			case mustIn[j]:
 				required[s.ID] = append(required[s.ID], ss.ID)

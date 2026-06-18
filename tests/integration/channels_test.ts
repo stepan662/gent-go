@@ -25,14 +25,14 @@ async function applyBatch(
 function switchDef(name: string) {
   return {
     name,
-    steps: [{ id: "s1", switch: [{ goto: "end" }] }],
+    tasks: [{ id: "s1", switch: [{ goto: "end" }] }],
   };
 }
 
 function restDef(name: string, endpoint = "http://localhost/x") {
   return {
     name,
-    steps: [{ id: "s1", action: { type: "rest" as const, endpoint }, switch: [{ goto: "end" }] }],
+    tasks: [{ id: "s1", action: { type: "rest" as const, endpoint }, switch: [{ goto: "end" }] }],
   };
 }
 
@@ -41,7 +41,7 @@ function childDef(name: string, childName: string, childVersion = 0) {
   if (childVersion !== 0) action.version = childVersion;
   return {
     name,
-    steps: [
+    tasks: [
       {
         id: "spawn",
         action,
@@ -120,7 +120,7 @@ test("channels — auto-update-parents cascades to dependent process on same cha
     [
       {
         ...switchDef(childName),
-        steps: [{ id: "s2", switch: [{ goto: "end" }] }],
+        tasks: [{ id: "s2", switch: [{ goto: "end" }] }],
       },
     ],
     "stable",
@@ -154,7 +154,7 @@ test("channels — auto-update-parents does not touch other channels", async () 
     [
       {
         ...switchDef(childName),
-        steps: [{ id: "s2", switch: [{ goto: "end" }] }],
+        tasks: [{ id: "s2", switch: [{ goto: "end" }] }],
       },
     ],
     "latest",
@@ -188,7 +188,7 @@ test("channels — channel_status reports stale refs after child is advanced", a
     [
       {
         ...switchDef(childName),
-        steps: [{ id: "s2", switch: [{ goto: "end" }] }],
+        tasks: [{ id: "s2", switch: [{ goto: "end" }] }],
       },
     ],
     track,
@@ -201,7 +201,7 @@ test("channels — channel_status reports stale refs after child is advanced", a
     name: string;
     version: number;
     stale_refs: Array<{
-      step_id: string;
+      task_id: string;
       child_name: string;
       baked_version: number;
       channel_version: number;
@@ -321,9 +321,9 @@ async function channelVersion(name: string, channel: string) {
   return (data as ChannelEntry[]).find((e) => e.channel === channel)?.version;
 }
 
-// A child whose steps differ from switchDef so it produces a new content hash.
+// A child whose tasks differ from switchDef so it produces a new content hash.
 function switchDefV2(name: string) {
-  return { ...switchDef(name), steps: [{ id: "s2", switch: [{ goto: "end" }] }] };
+  return { ...switchDef(name), tasks: [{ id: "s2", switch: [{ goto: "end" }] }] };
 }
 
 test("channels — identical content on a new channel reuses the existing version", async () => {
@@ -348,7 +348,7 @@ test("channels — re-applying a recursive (self-calling) process dedups", async
   const name = uid("recursive");
   const selfRef = {
     name,
-    steps: [
+    tasks: [
       { id: "recurse", action: { type: "child" as const, name }, switch: [{ goto: "end" }] },
     ],
   };

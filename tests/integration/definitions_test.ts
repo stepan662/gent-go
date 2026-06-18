@@ -4,7 +4,7 @@ import { client } from "../helpers/client.ts";
 const validDef = {
   name: `test_def_${crypto.randomUUID()}`,
 
-  steps: [
+  tasks: [
     {
       id: "step1",
       action: { type: "rest" as const, endpoint: "http://localhost:19990/action" },
@@ -33,7 +33,7 @@ test("PUT /definitions — rejects rest call without endpoint", async () => {
   const { data, error } = await client.PUT("/definitions", {
     body: {
       name: "bad",
-      steps: [
+      tasks: [
         {
           id: "s1",
           action: { type: "rest" as const } as any,
@@ -51,7 +51,7 @@ test("PUT /definitions — rejects unknown call type", async () => {
   const { data, error } = await client.PUT("/definitions", {
     body: {
       name: "bad",
-      steps: [
+      tasks: [
         {
           id: "s1",
           action: { type: "ftp", endpoint: "x" } as any,
@@ -65,11 +65,11 @@ test("PUT /definitions — rejects unknown call type", async () => {
   expect(data).toBeUndefined();
 });
 
-test("PUT /definitions — rejects unknown step type", async () => {
+test("PUT /definitions — rejects unknown task type", async () => {
   const { data, error } = await client.PUT("/definitions", {
     body: {
       name: "bad",
-      steps: [{ type: "parallel", id: "p1" } as any],
+      tasks: [{ type: "parallel", id: "p1" } as any],
     },
   });
 
@@ -80,7 +80,7 @@ test("PUT /definitions — rejects unknown step type", async () => {
 test("PUT /definitions — rejects missing process name", async () => {
   const { data, error } = await client.PUT("/definitions", {
     body: {
-      steps: [
+      tasks: [
         {
           id: "s1",
           action: { type: "rest" as const, endpoint: "http://localhost:19990/action" },

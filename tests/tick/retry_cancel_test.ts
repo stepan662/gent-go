@@ -5,7 +5,7 @@
  *
  *   1. Cancel issued while a retry is still pending
  *      → advance() sees 'cancelling' on the retry tick and short-circuits before
- *        executing the step — the instance cancels cleanly, retry is suppressed.
+ *        executing the task — the instance cancels cleanly, retry is suppressed.
  *
  *   2. All retries exhausted before any cancel
  *      → the final failed attempt calls failInstance(); status is 'failed'.

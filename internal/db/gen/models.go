@@ -26,7 +26,7 @@ type ProcessDefinition struct {
 type ProcessDependency struct {
 	ParentName    string
 	ParentVersion int64
-	StepID        string
+	TaskID        string
 	ChildKey      string
 	ChildName     string
 	ChildVersion  int64
@@ -36,7 +36,7 @@ type ProcessInstance struct {
 	ID             string
 	ProcessName    string
 	ProcessVersion int64
-	StepQueue      string
+	TaskQueue      string
 	ContextData    string
 	ParentID       string
 	CallStack      string
@@ -49,7 +49,7 @@ type ProcessInstance struct {
 	WorkerID       sql.NullString
 	LeaseExpiresAt sql.NullInt64
 	WaitState      string
-	SpawnStepID    string
+	SpawnTaskID    string
 }
 
 type ProcessLog struct {
@@ -57,7 +57,7 @@ type ProcessLog struct {
 	InstanceID string
 	Level      string
 	Event      string
-	StepID     string
+	TaskID     string
 	Message    string
 	Code       string
 	Detail     string

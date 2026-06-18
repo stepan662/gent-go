@@ -31,7 +31,7 @@ type DB struct {
 	// defCache memoises GetDefinition lookups, keyed by defKey → definition JSON.
 	// Definitions are write-once per (name, version) in normal operation, so the
 	// raw JSON is safe to cache; we re-unmarshal a fresh copy per call so callers
-	// never share mutable Step pointers. SaveDefinition invalidates the key on
+	// never share mutable Task pointers. SaveDefinition invalidates the key on
 	// write to cover the ON CONFLICT DO UPDATE overwrite path. This is the engine's
 	// hottest read (every spawn/goto/output resolves a definition) and on SQLite it
 	// otherwise contends with writes for the single connection.

@@ -19,8 +19,8 @@ async function getStatus(gent: GentProcess, id: string) {
   return data!;
 }
 
-// failed → retry → completes, without re-executing the step that already succeeded.
-test("retry failed instance — resumes from the failed step", async () => {
+// failed → retry → completes, without re-executing the task that already succeeded.
+test("retry failed instance — resumes from the failed task", async () => {
   const name = `retry_failed_${crypto.randomUUID()}`;
   const step1Mock = await startMockService(0, { response: { ok: true } });
   let step2Mock = await startMockService(0, { statusCode: 500 });
@@ -30,7 +30,7 @@ test("retry failed instance — resumes from the failed step", async () => {
     await client.PUT("/definitions", {
       body: {
         name,
-        steps: [
+        tasks: [
           {
             id: "step1",
             action: { type: "rest" as const, endpoint: `http://localhost:${step1Mock.port}/action` },
@@ -70,8 +70,8 @@ test("retry failed instance — resumes from the failed step", async () => {
   }
 }, 30_000);
 
-// cancelled → retry → completes; completed steps are not re-run.
-// Manual tick mode makes the cancel land deterministically between steps.
+// cancelled → retry → completes; completed tasks are not re-run.
+// Manual tick mode makes the cancel land deterministically between tasks.
 test("retry cancelled instance — resumes where the cancel interrupted", async () => {
   const name = `retry_cancelled_${crypto.randomUUID()}`;
   const db = join(tmpdir(), `gent_retry_${Date.now()}.db`);
@@ -84,7 +84,7 @@ test("retry cancelled instance — resumes where the cancel interrupted", async 
     await gent.client.PUT("/definitions", {
       body: {
         name,
-        steps: [
+        tasks: [
           {
             id: "step1",
             action: { type: "rest" as const, endpoint: `http://localhost:${step1Mock.port}/action` },
@@ -104,7 +104,7 @@ test("retry cancelled instance — resumes where the cancel interrupted", async 
     const { data: startData } = await gent.client.POST("/instances", { body: { process: name } });
     const id = startData!.id;
 
-    // Tick 1 — step1 executes; cancel lands between steps.
+    // Tick 1 — step1 executes; cancel lands between tasks.
     expect(await tick(gent.client)).toBe(1);
     expect(step1Mock.requestCount()).toBe(1);
     await gent.client.POST("/instances/{id}/cancel", { params: { path: { id } } });
@@ -146,7 +146,7 @@ test("retry during cancelling — rejected until the tree settles", async () => 
     await gent.client.PUT("/definitions", {
       body: {
         name,
-        steps: [
+        tasks: [
           {
             id: "step1",
             action: { type: "rest" as const, endpoint: `http://localhost:${step1Mock.port}/action` },
@@ -166,7 +166,7 @@ test("retry during cancelling — rejected until the tree settles", async () => 
     const { data: startData } = await gent.client.POST("/instances", { body: { process: name } });
     const id = startData!.id;
 
-    // Tick 1 — step1 executes; cancel lands between steps → 'cancelling'.
+    // Tick 1 — step1 executes; cancel lands between tasks → 'cancelling'.
     await tick(gent.client);
     await gent.client.POST("/instances/{id}/cancel", { params: { path: { id } } });
     expect((await getStatus(gent, id)).status).toBe("cancelling");
@@ -200,7 +200,7 @@ test("retry during cancelling — rejected until the tree settles", async () => 
 }, 30_000);
 
 // only_once → plain retry rejected, force retry succeeds.
-test("retry only_once step — rejected without force, allowed with force", async () => {
+test("retry only_once task — rejected without force, allowed with force", async () => {
   const name = `retry_only_once_${crypto.randomUUID()}`;
   let chargeMock = await startMockService(0, { statusCode: 500 });
   const chargePort = chargeMock.port;
@@ -209,7 +209,7 @@ test("retry only_once step — rejected without force, allowed with force", asyn
     await client.PUT("/definitions", {
       body: {
         name,
-        steps: [
+        tasks: [
           {
             id: "charge",
             only_once: true,
@@ -225,7 +225,7 @@ test("retry only_once step — rejected without force, allowed with force", asyn
     const id = startData!.id;
     expect(await waitForInstance(id, 15_000)).toBe("failed");
 
-    // Plain retry is rejected: the pending step is only_once.
+    // Plain retry is rejected: the pending task is only_once.
     const { error: plainErr } = await client.POST("/instances/{id}/retry", {
       params: { path: { id } },
     });
@@ -257,7 +257,7 @@ test("retry and cancel on non-root instance — rejected naming the root", async
     await client.PUT("/definitions", {
       body: {
         name: leafName,
-        steps: [
+        tasks: [
           {
             id: "work",
             action: { type: "rest" as const, endpoint: `http://localhost:${failMock.port}/action` },
@@ -270,7 +270,7 @@ test("retry and cancel on non-root instance — rejected naming the root", async
     await client.PUT("/definitions", {
       body: {
         name: rootName,
-        steps: [
+        tasks: [
           {
             id: "spawn",
             action: { type: "child" as const, name: leafName },
@@ -284,11 +284,11 @@ test("retry and cancel on non-root instance — rejected naming the root", async
     const rootId = startData!.id;
     expect(await waitForInstance(rootId, 15_000)).toBe("failed");
 
-    // The spawn placeholder in the root's context holds the child id.
+    // The spawn placeholder in the root's context (_children) holds the child id.
     const { data: rootData } = await client.GET("/instances/{id}", {
       params: { path: { id: rootId } },
     });
-    const childId = (rootData?.context?.outputs as any)?.spawn as string;
+    const childId = (rootData?.context as any)?._children?.spawn as string;
     expect(childId).toBeTruthy();
 
     const { error: retryErr } = await client.POST("/instances/{id}/retry", {
@@ -322,7 +322,7 @@ test("retry with parallel children — only the failed child re-runs", async () 
     await client.PUT("/definitions", {
       body: {
         name: goodName,
-        steps: [
+        tasks: [
           {
             id: "work",
             action: { type: "rest" as const, endpoint: `http://localhost:${goodMock.port}/action` },
@@ -335,7 +335,7 @@ test("retry with parallel children — only the failed child re-runs", async () 
     await client.PUT("/definitions", {
       body: {
         name: badName,
-        steps: [
+        tasks: [
           {
             id: "work",
             action: { type: "rest" as const, endpoint: `http://localhost:${badPort}/action` },
@@ -348,7 +348,7 @@ test("retry with parallel children — only the failed child re-runs", async () 
     await client.PUT("/definitions", {
       body: {
         name: rootName,
-        steps: [
+        tasks: [
           {
             id: "fanout",
             action: {

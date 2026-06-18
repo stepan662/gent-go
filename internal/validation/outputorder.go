@@ -10,19 +10,19 @@ import (
 	"gent/internal/template"
 )
 
-// inferOutputs infers the type of every output-map step's output and writes it to
-// defs (as <id>_output). Steps are processed in dependency order so a step that
-// reads another's output is inferred after it; mutually-recursive steps (a cycle
-// of outputs.<id> references, including a single step referencing itself) are
+// inferOutputs infers the type of every output-map task's output and writes it to
+// defs (as <id>_output). Tasks are processed in dependency order so a task that
+// reads another's output is inferred after it; mutually-recursive tasks (a cycle
+// of outputs.<id> references, including a single task referencing itself) are
 // resolved together by a joint fixpoint over the strongly-connected component.
-func inferOutputs(steps []*model.Step, tasks map[string]TaskSchemas, processInput *schema.SchemaNode,
+func inferOutputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, processInput *schema.SchemaNode,
 	defs map[string]*schema.SchemaNode, required, optional map[string][]string, mustErr, mayErr map[string]bool) error {
 
-	stepByID := make(map[string]*model.Step, len(steps))
+	taskByID := make(map[string]*model.Task, len(tasks))
 	isOutputMap := make(map[string]bool)
 	var omIDs []string
-	for _, s := range steps {
-		stepByID[s.ID] = s
+	for _, s := range tasks {
+		taskByID[s.ID] = s
 		if s.Output.Present() {
 			isOutputMap[s.ID] = true
 			omIDs = append(omIDs, s.ID)
@@ -33,15 +33,15 @@ func inferOutputs(steps []*model.Step, tasks map[string]TaskSchemas, processInpu
 	}
 
 	// Edges A -> B when A's output map reads outputs.B and B is itself an
-	// output-map step (static output_schema outputs are already in defs, so they
+	// output-map task (static result_schema outputs are already in defs, so they
 	// impose no ordering). A self-edge (A reads outputs.A) marks self-recursion.
 	graph := make(map[string][]string, len(omIDs))
 	for _, id := range omIDs {
 		refSet := map[string]bool{}
-		for _, expr := range stepByID[id].Output.Strings() {
+		for _, expr := range taskByID[id].Output.Strings() {
 			refs, err := template.OutputRefs(expr)
 			if err != nil {
-				return fmt.Errorf("step %q output: %w", id, err)
+				return fmt.Errorf("task %q output: %w", id, err)
 			}
 			for _, r := range refs {
 				if isOutputMap[r] {
@@ -61,15 +61,15 @@ func inferOutputs(steps []*model.Step, tasks map[string]TaskSchemas, processInpu
 	for _, scc := range tarjanSCC(graph, omIDs) {
 		members := make([]sccMember, 0, len(scc))
 		for _, id := range scc {
-			base := contextSchema(required[id], optional[id], tasks, processInput, mustErr[id], mayErr[id])
+			base := contextSchema(required[id], optional[id], taskSchemas, processInput, mustErr[id], mayErr[id])
 			if len(defs) > 0 {
 				base = withDefs(base, defs)
 			}
-			// The step loops iff it is its own predecessor: computeContextSets then
+			// The task loops iff it is its own predecessor: computeContextSets then
 			// lists its own output among its available (optional) outputs.
 			loops := slices.Contains(optional[id], id) || slices.Contains(required[id], id)
-			ctx := outputMapContext(base, actionResultType(stepByID[id]), id, loops)
-			members = append(members, sccMember{defName: id + "_output", node: stepByID[id].Output.Raw, ctx: ctx})
+			ctx := outputMapContext(base, actionResultType(taskByID[id]), id, loops)
+			members = append(members, sccMember{defName: id + "_output", node: taskByID[id].Output.Raw, ctx: ctx})
 		}
 		if err := inferOutputFixpoint(members, defs); err != nil {
 			return err

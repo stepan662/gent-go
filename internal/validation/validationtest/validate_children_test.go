@@ -58,7 +58,7 @@ func childDef(t *testing.T, name string, rawSchema string) *model.ProcessDefinit
 	t.Helper()
 	def := &model.ProcessDefinition{
 		Name: name,
-		Steps: []*model.Step{
+		Tasks: []*model.Task{
 			{ID: "noop", Switch: model.SwitchMap{{Goto: model.GotoEnd}}},
 		},
 	}
@@ -68,7 +68,7 @@ func childDef(t *testing.T, name string, rawSchema string) *model.ProcessDefinit
 	return def
 }
 
-// parentDef builds a ProcessDefinition with a child_parallel step, normalises
+// parentDef builds a ProcessDefinition with a child_parallel task, normalises
 // it (mirroring what Generate does), and returns it ready for
 // ValidateChildProcessRefs. Each entry gets a key "child0", "child1", etc.
 func parentDef(t *testing.T, inputSchemaRaw string, entries []model.ChildEntry) *model.ProcessDefinition {
@@ -79,7 +79,7 @@ func parentDef(t *testing.T, inputSchemaRaw string, entries []model.ChildEntry) 
 	}
 	def := &model.ProcessDefinition{
 		Name: "parent",
-		Steps: []*model.Step{
+		Tasks: []*model.Task{
 			{
 				ID: "spawn",
 				Action: &model.Action{
@@ -134,7 +134,7 @@ func assertValidateErr(t *testing.T, def *model.ProcessDefinition, getter valida
 func TestValidateChildProcessRefs_noChildProcessSteps(t *testing.T) {
 	def := &model.ProcessDefinition{
 		Name: "parent",
-		Steps: []*model.Step{
+		Tasks: []*model.Task{
 			{ID: "fetch", Action: &model.Action{Type: model.ActionTypeREST, Endpoint: "http://example.com"}},
 		},
 	}
@@ -363,7 +363,7 @@ func singleChildDef(t *testing.T, inputSchemaRaw string, entry model.ChildEntry)
 	t.Helper()
 	def := &model.ProcessDefinition{
 		Name: "parent",
-		Steps: []*model.Step{
+		Tasks: []*model.Task{
 			{
 				ID: "spawn",
 				Action: &model.Action{

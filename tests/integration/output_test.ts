@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 import { client, startMockService, waitForInstance } from "../helpers/client.ts";
 
-// The output map remaps an action's result: output_schema validates the full
-// response, but only the projection is exported to outputs.<step> (coupling
+// The output map remaps an action's result: result_schema validates the full
+// response, but only the projection is exported to outputs.<task> (coupling
 // reduction), and the switch routes on the remapped self.output.
 test("output map remaps an action result — only the projection is exported", async () => {
   const mock = await startMockService(0, {
@@ -13,13 +13,13 @@ test("output map remaps an action result — only the projection is exported", a
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "create",
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${mock.port}/action`,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: {
                 job_id: { type: "string" },
@@ -67,13 +67,13 @@ test("single-expression output passes the action result through", async () => {
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "create",
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${mock.port}/action`,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { job_id: { type: "string" }, queue: { type: "string" } },
               required: ["job_id", "queue"],
@@ -113,13 +113,13 @@ test("nested output shapes data with nested objects", async () => {
   await client.PUT("/definitions", {
     body: {
       name,
-      steps: [
+      tasks: [
         {
           id: "create",
           action: {
             type: "rest" as const,
             endpoint: `http://localhost:${mock.port}/action`,
-            output_schema: {
+            result_schema: {
               type: "object",
               properties: { job_id: { type: "string" }, queue: { type: "string" } },
               required: ["job_id", "queue"],

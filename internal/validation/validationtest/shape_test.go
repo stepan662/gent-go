@@ -3,15 +3,15 @@ package validationtest
 import "testing"
 
 // A single-expression output passes the action result through unchanged: the
-// inferred task output type equals the result (output_schema) type, with no
+// inferred task output type equals the result (result_schema) type, with no
 // object wrapper.
 func TestGenerate_OutputSingleExpressionPassthrough(t *testing.T) {
 	out := runGenerate(t, `{
 		"name": "p",
-		"steps": [
+		"tasks": [
 			{
 				"id": "charge",
-				"action": {"type":"rest","endpoint":"http://x","output_schema": {
+				"action": {"type":"rest","endpoint":"http://x","result_schema": {
 					"type":"object",
 					"properties":{"charged":{"type":"boolean"}},
 					"required":["charged"]
@@ -33,10 +33,10 @@ func TestGenerate_OutputSingleExpressionPassthrough(t *testing.T) {
 func TestGenerate_OutputNestedObject(t *testing.T) {
 	out := runGenerate(t, `{
 		"name": "p",
-		"steps": [
+		"tasks": [
 			{
 				"id": "charge",
-				"action": {"type":"rest","endpoint":"http://x","output_schema": {
+				"action": {"type":"rest","endpoint":"http://x","result_schema": {
 					"type":"object",
 					"properties":{"charged":{"type":"boolean"}},
 					"required":["charged"]
@@ -62,20 +62,31 @@ func TestGenerate_OutputNestedObject(t *testing.T) {
 // A single-expression process output may infer to a non-object type.
 func TestGenerate_ProcessOutputSingleExpressionScalar(t *testing.T) {
 	out := runGenerate(t, `{
-		"name": "p",
-		"steps": [
-			{
-				"id": "charge",
-				"action": {"type":"rest","endpoint":"http://x","output_schema": {
-					"type":"object",
-					"properties":{"charged":{"type":"boolean"}},
-					"required":["charged"]
-				}},
-				"switch": "end"
-			}
-		],
-		"output": "{{ outputs.charge.charged }}"
-	}`)
+  "name": "p",
+  "tasks": [
+    {
+      "id": "charge",
+      "action": {
+        "type": "rest",
+        "endpoint": "http://x",
+        "result_schema": {
+          "type": "object",
+          "properties": {
+            "charged": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "charged"
+          ]
+        }
+      },
+      "switch": "end",
+      "output": "{{ self.result }}"
+    }
+  ],
+  "output": "{{ outputs.charge.charged }}"
+}`)
 	assertJSON(t, out.ProcessOutput, `{"$ref": "#/$defs/output"}`)
 	assertJSON(t, out.Defs["output"], `{"type":"boolean"}`)
 }
@@ -86,7 +97,7 @@ func TestGenerate_OutputRecursiveSingleExpression(t *testing.T) {
 	out := runGenerate(t, `{
 		"name": "p",
 		"input_schema": {"type":"object","properties":{"seed":{"type":"integer"}},"required":["seed"]},
-		"steps": [
+		"tasks": [
 			{
 				"id": "loop",
 				"output": "{{ (self.previous ?? input.seed) + 1 }}",

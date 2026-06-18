@@ -22,9 +22,9 @@ func sobj(req []string, props map[string]*schema.SchemaNode) *schema.SchemaNode 
 }
 
 // recCtx builds the schema context exactly as the validation pipeline would have
-// it when inferring a self-referential step's output: both outputs.<selfID> and
+// it when inferring a self-referential task's output: both outputs.<selfID> and
 // self.previous are $refs to $defs[<selfID>_output] (the recursive placeholder),
-// and any sibling step outputs are always-available (required). This represents
+// and any sibling task outputs are always-available (required). This represents
 // the process "in that state" without standing up the whole pipeline.
 func recCtx(selfID string, siblings map[string]*schema.SchemaNode) (*schema.SchemaNode, string) {
 	selfDef := selfID + "_output"
