@@ -30,6 +30,7 @@ const (
 	ActionTypeChild         ActionType = "child"
 	ActionTypeChildParallel ActionType = "child_parallel"
 	ActionTypeDelay         ActionType = "delay"
+	ActionTypeExternal      ActionType = "external"
 )
 
 // ChildEntry describes a single named child process in a "child_parallel" call.
@@ -46,12 +47,17 @@ type ChildEntry struct {
 //   - "child":          Name (required), Input (optional), ResultSchema (optional) — single child process
 //   - "child_parallel": Children (required, keyed map) — concurrent named child processes
 //   - "delay":          Ms (required) — pauses the instance for a duration without holding a worker, then routes via switch
+//   - "external":       Input (optional), ResultSchema (optional) — parks the instance until an
+//     outside caller submits a result via the external-tasks API; no worker is held while waiting.
+//     An optional Task.TimeoutMs (0 = wait forever) raises a catchable "external.timeout" error.
 //
-// Input (rest/script/child): templated value evaluated against the current context to build the
-// action's input — the request body (rest), script input (script), or child's input payload (child).
+// Input (rest/script/child/external): templated value evaluated against the current context to build
+// the action's input — the request body (rest), script input (script), child's input payload (child),
+// or the snapshot exposed to the resolver via the external-tasks queue (external).
 //
-// ResultSchema (rest/script/child): when set, the response body is validated and stored in
-// context as outputs.taskID. Without it the body is available only as "self" in this task's switch.
+// ResultSchema (rest/script/child/external): when set, the result is validated before the instance
+// resumes (the submitted result, for external). Without it the result is available only as "self" in
+// this task's switch.
 //
 // AcceptedStatus (rest only): HTTP status patterns treated as non-errors. Defaults to any 2xx.
 type Action struct {
@@ -145,6 +151,17 @@ func (Action) JSONSchemaBytes() ([]byte, error) {
 					"ms":   {"type": "string", "description": "Milliseconds to pause, as an expression: a literal such as 30000 or a template such as {{ outputs.x.retry_after }}."}
 				},
 				"required": ["type", "ms"],
+				"additionalProperties": false
+			},
+			{
+				"type": "object",
+				"description": "External task — parks the instance until an outside caller submits a result via the external-tasks API; no worker is held while waiting. An optional task timeout_ms (0 = wait forever) raises a catchable external.timeout error.",
+				"properties": {
+					"type":          {"type": "string", "const": "external"},
+					"input":         {"$ref": "#/$defs/ModelShape", "description": "Templated value evaluated against the current context, snapshotted and exposed to the resolver via the queue (the only context the resolver sees)."},
+					"result_schema": {"type": "object", "additionalProperties": true, "description": "JSON Schema the submitted result is validated against before the instance resumes. Without it any JSON result is accepted, available as self.result."}
+				},
+				"required": ["type"],
 				"additionalProperties": false
 			}
 		],
@@ -521,8 +538,11 @@ func validateTask(s *Task, taskIDs map[string]struct{}, taskIdx, lastIdx int) er
 			if s.Action.Ms == "" {
 				return fmt.Errorf("task %q: action.ms is required for type %q", s.ID, s.Action.Type)
 			}
+		case ActionTypeExternal:
+			// No required action fields: input and result_schema are both optional
+			// (mirroring rest). The wait timeout is the task's timeout_ms (0 = forever).
 		default:
-			return fmt.Errorf("task %q: action.type must be one of: rest, script, child, child_parallel, delay", s.ID)
+			return fmt.Errorf("task %q: action.type must be one of: rest, script, child, child_parallel, delay, external", s.ID)
 		}
 	}
 

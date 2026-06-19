@@ -594,6 +594,69 @@ func (q *Queries) ListDefinitions(ctx context.Context) ([]ProcessDefinition, err
 	return items, nil
 }
 
+const listExternalTasks = `-- name: ListExternalTasks :many
+SELECT id, process_name, process_version, task_queue, context_data, parent_id,
+       call_stack, retry_count, wake_at, status, error,
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
+FROM process_instances
+WHERE wait_state = 'external'
+  AND (?1 = '' OR process_name = ?1)
+  AND (?2 = 0 OR process_version = ?2)
+ORDER BY updated_at ASC, id ASC
+LIMIT ?3
+`
+
+type ListExternalTasksParams struct {
+	ProcessName    interface{}
+	ProcessVersion interface{}
+	Lim            int64
+}
+
+// The queue of instances parked on an external task. Empty process_name lists every
+// process; process_version=0 lists every version. Ordered by park time (updated_at).
+// task_id cannot be filtered here (it lives in the JSON task queue, not a column), so
+// callers filter it in Go. Served by the partial idx_external_queue index.
+func (q *Queries) ListExternalTasks(ctx context.Context, arg ListExternalTasksParams) ([]ProcessInstance, error) {
+	rows, err := q.db.QueryContext(ctx, listExternalTasks, arg.ProcessName, arg.ProcessVersion, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProcessInstance
+	for rows.Next() {
+		var i ProcessInstance
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProcessName,
+			&i.ProcessVersion,
+			&i.TaskQueue,
+			&i.ContextData,
+			&i.ParentID,
+			&i.CallStack,
+			&i.RetryCount,
+			&i.WakeAt,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.WorkerID,
+			&i.LeaseExpiresAt,
+			&i.WaitState,
+			&i.SpawnTaskID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInstances = `-- name: ListInstances :many
 SELECT id, process_name, process_version, task_queue, context_data, parent_id,
        call_stack, retry_count, wake_at, status, error,

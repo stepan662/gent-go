@@ -467,6 +467,12 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 					return *done
 				}
 				// Timer fired: fall through to the switch with no action result.
+			case model.ActionTypeExternal:
+				out, done := e.runExternal(inst, task)
+				if done != nil {
+					return *done
+				}
+				actionResult = out
 			default: // rest, script
 				out, done := e.executeAction(ctx, inst, task)
 				if done != nil {
@@ -811,6 +817,72 @@ func (e *Engine) runDelay(inst *model.ProcessInstance, task *model.Task) *advanc
 		return stop(advanceOutcome{kind: outcomeProgress})
 	}
 	return nil
+}
+
+// runExternal implements the external (pull/callback) task. It has three entry
+// states, told apart by wait_state and the presence of a submitted result:
+//
+//  1. First arrival (wait_state none, no _external_result): evaluate and snapshot the
+//     input, mint a per-occurrence token, and park the instance (wait_state='external');
+//     if timeout_ms>0 also stamp wake_at as the timeout deadline. No worker is held while
+//     parked, and the claim will not return it again until the result arrives (which
+//     clears wait_state) or the timeout fires.
+//  2. Result submitted (wait_state none, _external_result present): the resolve API
+//     cleared wait_state and stored the validated result; consume it as self.result and
+//     continue to the task's output/switch.
+//  3. Timeout (wait_state still 'external'): the claim only returns a parked external
+//     instance once its wake_at deadline passed, so reaching here with wait_state still
+//     'external' means no result arrived in time → external.timeout via on_error. Retries
+//     on that code re-arm the wait with a fresh token.
+//
+// Returns (result, nil) to continue advancing, or (nil, outcome) to stop and persist.
+func (e *Engine) runExternal(inst *model.ProcessInstance, task *model.Task) (any, *advanceOutcome) {
+	// Phase 2: a result was submitted (the resolve API already un-parked us).
+	if res, ok := inst.ContextData[model.CtxExternalResult]; ok {
+		delete(inst.ContextData, model.CtxExternalResult)
+		delete(inst.ContextData, model.CtxExternal)
+		e.log.Info("external task resolved", "id", inst.ID, "task", task.ID)
+		e.audit(inst, model.LogInfo, model.EventExternalResolved, task.ID, "", "", nil)
+		return res, nil
+	}
+
+	// Phase 3: still parked at 'external' — the claim only returns us once the timeout
+	// deadline passed, so no result arrived in time.
+	if inst.WaitState == model.WaitStateExternal {
+		inst.WaitState = model.WaitStateNone
+		delete(inst.ContextData, model.CtxExternal)
+		e.log.Warn("external task timed out", "id", inst.ID, "task", task.ID)
+		e.audit(inst, model.LogWarn, model.EventExternalTimeout, task.ID, "external task timed out", "external.timeout", nil)
+		return nil, stop(e.handleCallError(inst, task, "external task timed out", "external.timeout"))
+	}
+
+	// Phase 1: first arrival — snapshot input, mint a per-occurrence token, and park.
+	// RetryCount is intentionally left untouched: a re-arm after an external.timeout
+	// retry must keep its counter so on_error retry budgeting terminates.
+	input, err := e.buildTaskData(inst, task)
+	if err != nil {
+		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q input: %v", task.ID, err)))
+	}
+	token := inst.ID + "." + idgen.New()
+	inst.ContextData[model.CtxExternal] = map[string]any{
+		"task_id": task.ID,
+		"token":   token,
+		"input":   input,
+	}
+	inst.WaitState = model.WaitStateExternal
+	if task.TimeoutMs > 0 {
+		wake := db.Now().Add(time.Duration(task.TimeoutMs) * time.Millisecond)
+		inst.WakeAt = &wake
+	} else {
+		inst.WakeAt = nil
+	}
+	e.log.Info("external task armed", "id", inst.ID, "task", task.ID, "timeout_ms", task.TimeoutMs)
+	detail := map[string]any{"token": token}
+	if task.TimeoutMs > 0 {
+		detail["timeout_ms"] = task.TimeoutMs
+	}
+	e.audit(inst, model.LogInfo, model.EventExternalArmed, task.ID, "", "", detail)
+	return nil, stop(advanceOutcome{kind: outcomeProgress})
 }
 
 // evalDurationMs evaluates a delay expression to a non-negative millisecond

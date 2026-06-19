@@ -359,6 +359,54 @@ var registry = func() []actionDef {
 			},
 		},
 		{
+			Name:    "list_external_tasks",
+			Method:  http.MethodGet,
+			Path:    "/external-tasks",
+			Summary: "List instances parked on an external task (the external-task queue); never exposes process context",
+			Tags:    []string{"External Tasks"},
+			PathQuery: struct {
+				Process string `query:"process" description:"Filter by process name"`
+				Version int    `query:"version" description:"Filter by process version (0 = any)"`
+				Task    string `query:"task" description:"Filter by task id"`
+				Limit   int    `query:"limit" description:"Page size (default 200, cap 1000)"`
+			}{},
+			Resp: []ExternalTaskResp{{
+				Token: "550e8400-e29b-41d4-a716-446655440000.6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+				Process: "order_pipeline", Version: 1, TaskID: "approval",
+				Input: map[string]any{"order_id": 42}, WaitingSince: "2026-06-19T12:00:00Z",
+			}},
+			fromHTTP: func(r *http.Request) (Envelope, error) {
+				q := r.URL.Query()
+				version, _ := strconv.Atoi(q.Get("version"))
+				limit, _ := strconv.Atoi(q.Get("limit"))
+				b, _ := json.Marshal(ListExternalTasksReq{
+					Process: q.Get("process"),
+					Version: version,
+					Task:    q.Get("task"),
+					Limit:   limit,
+				})
+				return Envelope{Action: "list_external_tasks", Payload: b}, nil
+			},
+			handle: func(h *Handlers, env Envelope) Reply {
+				return h.listExternalTasks(env.Payload)
+			},
+		},
+		{
+			Name:    "resolve_external_task",
+			Method:  http.MethodPost,
+			Path:    "/external-tasks/resolve",
+			Summary: "Submit a result for a waiting external task; validates it against the task's result_schema and resumes the process",
+			Tags:    []string{"External Tasks"},
+			Req: ResolveExternalTaskReq{
+				Token:  "550e8400-e29b-41d4-a716-446655440000.6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+				Result: map[string]any{"approved": true},
+			},
+			Resp: map[string]any{"resolved": true},
+			handle: func(h *Handlers, env Envelope) Reply {
+				return h.resolveExternalTask(env.Payload)
+			},
+		},
+		{
 			Name:    "tick",
 			Method:  http.MethodPost,
 			Path:    "/tick",

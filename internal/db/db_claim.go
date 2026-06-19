@@ -53,16 +53,25 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 
 	ctx := context.Background()
 
-	// Shared claimable predicate. The two `?` are both `now` (retry timer, lease expiry).
+	// Shared claimable predicate. The two `?` are both `now` (retry/delay/timeout timer,
+	// lease expiry).
 	//
 	// A doomed instance ('failing'/'cancelling') is drained immediately, ignoring
 	// wake_at: it will never run its pending task again, so there is no point
 	// waiting out a delay or retry-backoff timer before settling it. Only a healthy
 	// 'running' instance honours its timer. This is what lets a cancel take effect
 	// promptly on an instance parked in a delay, without mutating wake_at.
+	//
+	// wait_state='external' (parked on an external task) is claimable only when its
+	// timeout timer is due (`wake_at <= ?`): a no-timeout external wait has wake_at NULL
+	// and must NOT be claimed (it waits for the resolve API, which un-parks it by setting
+	// wait_state='' + wake_at=NULL — caught by the last branch). Normal runnable rows
+	// (any non-external wait_state) with no timer are always claimable.
 	const where = `status IN ('running', 'failing', 'cancelling')
 			  AND wait_state <> 'waiting'
-			  AND (status IN ('failing', 'cancelling') OR wake_at IS NULL OR wake_at <= ?)
+			  AND (status IN ('failing', 'cancelling')
+			       OR wake_at <= ?
+			       OR (wait_state <> 'external' AND wake_at IS NULL))
 			  AND (worker_id IS NULL OR lease_expires_at <= ?)`
 
 	if db.dialect == "postgres" {

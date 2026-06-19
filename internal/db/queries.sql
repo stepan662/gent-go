@@ -111,6 +111,21 @@ FROM process_instances
 WHERE (sqlc.arg(status) = '' OR status = sqlc.arg(status))
 ORDER BY created_at DESC;
 
+-- name: ListExternalTasks :many
+-- The queue of instances parked on an external task. Empty process_name lists every
+-- process; process_version=0 lists every version. Ordered by park time (updated_at).
+-- task_id cannot be filtered here (it lives in the JSON task queue, not a column), so
+-- callers filter it in Go. Served by the partial idx_external_queue index.
+SELECT id, process_name, process_version, task_queue, context_data, parent_id,
+       call_stack, retry_count, wake_at, status, error,
+       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
+FROM process_instances
+WHERE wait_state = 'external'
+  AND (sqlc.arg(process_name) = '' OR process_name = sqlc.arg(process_name))
+  AND (sqlc.arg(process_version) = 0 OR process_version = sqlc.arg(process_version))
+ORDER BY updated_at ASC, id ASC
+LIMIT sqlc.arg(lim);
+
 -- name: RenewWorkerLeasesChunk :execrows
 -- Renews up to chunk_size of this worker's leases, soonest-to-expire first, that
 -- are not already stamped to new_expiry. Called in a loop (one small transaction

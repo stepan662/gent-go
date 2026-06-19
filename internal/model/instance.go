@@ -26,6 +26,18 @@ const (
 	WaitStateNone       WaitState = ""           // not in a child-process wait cycle
 	WaitStateWaiting    WaitState = "waiting"    // children spawned, waiting for them
 	WaitStateCollecting WaitState = "collecting" // all children terminal, collect their outputs
+	WaitStateExternal   WaitState = "external"   // parked on an external task, waiting for a submitted result (or timeout)
+)
+
+// Private context_data keys used by the external-task lifecycle. Underscore-prefixed
+// like _children / _spawn_* so they are clearly engine-internal bookkeeping.
+const (
+	// CtxExternal holds the parked external task's metadata: {task_id, token, input}.
+	// The queue endpoint reads token+input from here; never exposed as process output.
+	CtxExternal = "_external"
+	// CtxExternalResult holds a submitted, validated result placed by the resolve API.
+	// Its presence is how the engine tells "result arrived" from "first arrival".
+	CtxExternalResult = "_external_result"
 )
 
 // ProcessInstance is a single running execution of a ProcessDefinition.

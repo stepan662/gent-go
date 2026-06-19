@@ -29,6 +29,9 @@ const (
 	EventChildrenSpawned = "children_spawned"
 	EventChildrenCollect = "children_collected"
 	EventDelayArmed      = "delay_armed"
+	EventExternalArmed   = "external_armed"
+	EventExternalResolved = "external_resolved"
+	EventExternalTimeout  = "external_timeout"
 )
 
 // LogEntry is one persisted line of an instance's execution audit trail.

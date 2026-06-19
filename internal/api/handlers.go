@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"strings"
 	"time"
 
 	"gent/internal/db"
 	"gent/internal/idgen"
 	"gent/internal/model"
+	"gent/internal/schema"
 	"gent/internal/validation"
 )
 
@@ -109,6 +111,31 @@ type ListInstancesReq struct {
 
 type RetryInstanceReq struct {
 	Force bool `json:"force"` // override only_once retry protection
+}
+
+type ListExternalTasksReq struct {
+	Process string `json:"process"` // optional: filter by process name
+	Version int    `json:"version"` // optional: filter by process version (0 = any)
+	Task    string `json:"task"`    // optional: filter by task id
+	Limit   int    `json:"limit"`   // page size (default 200, cap 1000)
+}
+
+// ExternalTaskResp is one entry in the external-task queue. It exposes only the task's
+// snapshotted input + the result_schema the resolver must satisfy, plus the resolve
+// token — never the process context.
+type ExternalTaskResp struct {
+	Token        string             `json:"token"`                   // pass back to /external-tasks/resolve
+	Process      string             `json:"process"`
+	Version      int                `json:"version"`
+	TaskID       string             `json:"task_id"`
+	Input        any                `json:"input"`                   // the task's evaluated input snapshot
+	ResultSchema *schema.SchemaNode `json:"result_schema,omitempty"` // JSON Schema the submitted result must satisfy
+	WaitingSince string             `json:"waiting_since"`           // RFC3339 park time
+}
+
+type ResolveExternalTaskReq struct {
+	Token  string `json:"token"`  // the token from the external-task queue
+	Result any    `json:"result"` // the result payload, validated against the task's result_schema
 }
 
 type ListLogsReq struct {
@@ -377,6 +404,98 @@ func (h *Handlers) retryInstance(id string, raw json.RawMessage) Reply {
 		return errReply(err)
 	}
 	return okReply(map[string]any{"retried": true})
+}
+
+func (h *Handlers) listExternalTasks(raw json.RawMessage) Reply {
+	var req ListExternalTasksReq
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &req)
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	instances, err := h.db.ListExternalTasks(req.Process, req.Version, limit)
+	if err != nil {
+		return errReply(err)
+	}
+	resp := make([]ExternalTaskResp, 0, len(instances))
+	for _, inst := range instances {
+		item, ok := externalTaskToResp(inst)
+		if !ok {
+			continue
+		}
+		// task_id is not a column (it lives in the task queue), so filter it here.
+		if req.Task != "" && item.TaskID != req.Task {
+			continue
+		}
+		resp = append(resp, item)
+	}
+	return okReply(resp)
+}
+
+// externalTaskToResp projects a parked external instance to a queue entry. ok is false
+// when the row is not actually a resolvable external task (no front task), which a
+// concurrent transition could momentarily produce.
+func externalTaskToResp(inst *model.ProcessInstance) (ExternalTaskResp, bool) {
+	if len(inst.TaskQueue) == 0 {
+		return ExternalTaskResp{}, false
+	}
+	task := inst.TaskQueue[0]
+	ext, _ := inst.ContextData[model.CtxExternal].(map[string]any)
+	token, _ := ext["token"].(string)
+	var resultSchema *schema.SchemaNode
+	if task.Action != nil {
+		resultSchema = task.Action.ResultSchema
+	}
+	return ExternalTaskResp{
+		Token:        token,
+		Process:      inst.ProcessName,
+		Version:      inst.ProcessVersion,
+		TaskID:       task.ID,
+		Input:        ext["input"],
+		ResultSchema: resultSchema,
+		WaitingSince: inst.UpdatedAt.Format(time.RFC3339),
+	}, true
+}
+
+func (h *Handlers) resolveExternalTask(raw json.RawMessage) Reply {
+	var req ResolveExternalTaskReq
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return errReply(fmt.Errorf("decode: %w", err))
+	}
+	if req.Token == "" {
+		return errReply(fmt.Errorf("token is required"))
+	}
+	// The token is instanceID.nonce; instance ids are UUIDs (no '.'), so the part before
+	// the first '.' is the instance id for a PK lookup. The exact-token check happens
+	// under lock in ResolveExternalTask.
+	instanceID, _, ok := strings.Cut(req.Token, ".")
+	if !ok || instanceID == "" {
+		return errReply(fmt.Errorf("invalid token"))
+	}
+	inst, err := h.db.GetInstance(instanceID)
+	if err != nil {
+		return errReply(err)
+	}
+	if inst.Status != model.StatusRunning || inst.WaitState != model.WaitStateExternal || len(inst.TaskQueue) == 0 {
+		return errReply(fmt.Errorf("task is not waiting for an external result"))
+	}
+	// Validate the submitted result against the parked task's result_schema (no-op when
+	// absent). The task definition is immutable, so validating the pre-lock snapshot is
+	// safe; ResolveExternalTask re-checks the parked state + token atomically.
+	if task := inst.TaskQueue[0]; task.Action != nil {
+		if err := task.Action.ValidateOutput(req.Result); err != nil {
+			return errReply(fmt.Errorf("result validation: %w", err))
+		}
+	}
+	if err := h.db.ResolveExternalTask(context.Background(), instanceID, req.Token, req.Result); err != nil {
+		return errReply(err)
+	}
+	return okReply(map[string]any{"resolved": true})
 }
 
 func (h *Handlers) tick(raw json.RawMessage) Reply {
