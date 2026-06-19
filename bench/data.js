@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781892540307,
+  "lastUpdate": 1781905809204,
   "repoUrl": "https://github.com/stepan662/gent-go",
   "entries": {
     "gent throughput": [
@@ -664,6 +664,54 @@ window.BENCHMARK_DATA = {
             "value": 416,
             "unit": "inst/s",
             "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "granat.stepan@gmail.com",
+            "name": "Štěpán Granát",
+            "username": "stepan662"
+          },
+          "committer": {
+            "email": "granat.stepan@gmail.com",
+            "name": "Štěpán Granát",
+            "username": "stepan662"
+          },
+          "distinct": true,
+          "id": "09ef0879677f7ea3a2f1172de8e6a8e326696c26",
+          "message": "feat: pagination for list endpoints",
+          "timestamp": "2026-06-19T23:47:25+02:00",
+          "tree_id": "d358ce1f0cbd9f8a58c0cafc131a808634868fb2",
+          "url": "https://github.com/stepan662/gent-go/commit/09ef0879677f7ea3a2f1172de8e6a8e326696c26"
+        },
+        "date": 1781905808933,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "spawn deep sqlite",
+            "value": 104,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn deep postgres",
+            "value": 290,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn recursive sqlite",
+            "value": 103,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 9V74 80-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn recursive postgres",
+            "value": 511,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 9V74 80-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
           }
         ]
       }
