@@ -88,19 +88,15 @@ type PageReq struct {
 
 // PageInfo is the navigation metadata returned alongside a page of items.
 // ItemsBefore/ItemsAfter are the counts outside the page in display order, so the
-// caller can render "showing N–M of total". HasBefore/HasAfter (= those counts
-// > 0) say whether following a cursor actually yields more rows: both cursors are
-// always present when the page has rows — NextCursor points past the last row even
-// on the final page so a client can poll it for newly appended items (PreviousCursor
-// likewise for items added before the first row) — so the has-flags are how a
-// caller distinguishes "more to page through" from "cursor kept only for polling".
+// caller can render "showing N–M of total". NextCursor/PreviousCursor are set only
+// in a direction that has more rows (NextCursor iff ItemsAfter>0, PreviousCursor
+// iff ItemsBefore>0), so cursor presence is itself the has-more signal and a
+// page-to-end loop terminates when the cursor is absent.
 type PageInfo struct {
 	Size           int    `json:"size"`
 	TotalItems     int64  `json:"total_items"`
 	ItemsBefore    int64  `json:"items_before"`
 	ItemsAfter     int64  `json:"items_after"`
-	HasBefore      bool   `json:"has_before"`
-	HasAfter       bool   `json:"has_after"`
 	NextCursor     string `json:"next_cursor,omitempty"`
 	PreviousCursor string `json:"previous_cursor,omitempty"`
 }

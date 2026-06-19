@@ -34,9 +34,9 @@ beforeAll(async () => {
 type Item = { id: string; process: string; created_at: string };
 type Query = { sort?: string; order?: "asc" | "desc"; limit?: number };
 
-// walk pages forward following page.next_cursor while page.has_after: until the
-// final page, until maxPages, or — when `until` is given — once every id in it has
-// been seen.
+// walk pages forward following page.next_cursor until it is absent: the final
+// page, until maxPages, or — when `until` is given — once every id in it has been
+// seen.
 async function walk(
   query: Query,
   opts: { maxPages?: number; until?: Set<string> } = {},
@@ -57,25 +57,23 @@ async function walk(
       remaining?.delete(it.id);
     }
     if (remaining && remaining.size === 0) break;
-    if (!data!.page.has_after) break; // next_cursor is always set; stop on has_after
+    if (!data!.page.next_cursor) break; // absent once no rows remain after
     after = data!.page.next_cursor;
   }
   return { items, pages };
 }
 
-test("page object reports total, position, and has-more flags", async () => {
+test("page object reports total and position", async () => {
   const { data, error } = await client.GET("/instances", { params: { query: { limit: 2 } } });
   expect(error).toBeUndefined();
   const page = data!.page;
   expect(page.size).toBe(2);
   expect(page.total_items).toBeGreaterThanOrEqual(N); // at least our instances
   expect(page.items_before).toBe(0); // first page
-  expect(page.has_before).toBe(false);
-  expect(page.has_after).toBe(true); // far more than 2 rows exist
-  expect(page.items_after).toBeGreaterThan(0);
-  // Both cursors are always present so the client can poll either end later.
+  expect(page.items_after).toBeGreaterThan(0); // far more than 2 rows exist
+  // Cursor present only in a direction with more rows: first page → next only.
   expect(page.next_cursor).toBeTruthy();
-  expect(page.previous_cursor).toBeTruthy();
+  expect(page.previous_cursor).toBeFalsy();
   expect((data!.items ?? []).length).toBeLessThanOrEqual(2);
 });
 
@@ -98,7 +96,7 @@ test("paging forward then backward returns the original page", async () => {
     params: { query: { limit: 2, after: p1.data!.page.next_cursor } },
   });
   expect(p2.error).toBeUndefined();
-  expect(p2.data!.page.has_before).toBe(true);
+  expect(p2.data!.page.previous_cursor).toBeTruthy();
 
   // Step back from page 2 → exactly page 1, in the same order.
   const back = await client.GET("/instances", {
