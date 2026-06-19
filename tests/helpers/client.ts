@@ -1,7 +1,7 @@
 import createClient from "openapi-fetch";
 import { createServer } from "http";
 import type { AddressInfo } from "net";
-import type { paths } from "../generated/api.ts";
+import type { components, paths } from "../generated/api.ts";
 import { BASE_URL } from "./constants.ts";
 
 export const client = createClient<paths>({ baseUrl: BASE_URL });
@@ -10,6 +10,29 @@ export const createClientTyped: typeof createClient<paths> = (options) =>
 
 type ApiClient = Pick<typeof client, "GET">;
 type PostClient = Pick<typeof client, "POST">;
+
+type InstanceQuery = NonNullable<paths["/instances"]["get"]["parameters"]["query"]>;
+
+// listAllInstances pages forward through GET /instances, following
+// page.next_cursor while page.has_after, and returns every matching instance.
+// List endpoints now cap a page (default/cap 1000), so callers that need the whole
+// set must page rather than read a single response.
+export async function listAllInstances(
+  apiClient: ApiClient = client,
+  query: Pick<InstanceQuery, "status"> = {},
+): Promise<components["schemas"]["ApiInstanceStatusResp"][]> {
+  const all: components["schemas"]["ApiInstanceStatusResp"][] = [];
+  let after: string | undefined;
+  for (;;) {
+    const { data, error } = await apiClient.GET("/instances", {
+      params: { query: { ...query, after, limit: 1000 } },
+    });
+    if (error) throw new Error(`list instances failed: ${JSON.stringify(error)}`);
+    all.push(...(data?.items ?? []));
+    if (!data?.page.has_after) return all;
+    after = data.page.next_cursor || undefined;
+  }
+}
 
 export async function waitForInstance(
   id: string,

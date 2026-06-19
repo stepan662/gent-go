@@ -24,9 +24,22 @@ test("PUT /definitions — registers a new definition", async () => {
 test("GET /definitions — lists registered definitions", async () => {
   await client.PUT("/definitions", { body: validDef });
 
-  const { data, error } = await client.GET("/definitions");
-  expect(error).toBeUndefined();
-  expect(data!.some((d) => d.name === validDef.name)).toBe(true);
+  // The list is paginated, so page through (following page.next_cursor) to find
+  // the freshly registered definition rather than assuming it's on the first page.
+  let found = false;
+  let after: string | undefined;
+  do {
+    const { data, error } = await client.GET("/definitions", {
+      params: { query: { limit: 1000, after } },
+    });
+    expect(error).toBeUndefined();
+    if ((data!.items ?? []).some((d) => d.name === validDef.name)) {
+      found = true;
+      break;
+    }
+    after = data!.page.next_cursor || undefined;
+  } while (after);
+  expect(found).toBe(true);
 });
 
 test("PUT /definitions — rejects rest call without endpoint", async () => {

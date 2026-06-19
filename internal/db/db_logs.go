@@ -9,25 +9,36 @@ import (
 	"gent/internal/model"
 )
 
-// LogQuery holds the optional filters shared by ListLogs and ListTreeLogs.
-// The zero value (empty Level, zero Since, empty AfterID) returns the first
-// page from the beginning. AfterTs/AfterID form a keyset cursor: pass the
-// CreatedAt/ID of the last row of the previous page to fetch the next.
+// LogQuery holds the optional filters shared by ListLogs and ListTreeLogs plus
+// the pagination request. The zero value (empty Level, zero Since, zero Page)
+// returns the first page from the beginning.
 type LogQuery struct {
-	Level   string
-	Since   int64 // unix millis; 0 = from the start
-	AfterTs int64
-	AfterID string
-	Limit   int
+	Level string
+	Since int64 // unix millis; 0 = from the start
+	Page  PageReq
 }
 
-const defaultLogLimit = 200
+// logPaginator is the pagination policy for logs. Only time order is offered: the
+// (created_at, id) keyset preserves insertion order because UUIDv7 ids are
+// monotonic within a millisecond, and is index-backed (idx_process_logs_instance
+// for the flat query, idx_process_logs_created for the subtree query). table +
+// columns are pl.-qualified so build() serves the flat query; the subtree-CTE
+// query supplies its own prefixes via buildSource.
+var logPaginator = paginator{
+	table:      "process_logs pl",
+	columns:    logColumns,
+	filterCols: []string{"pl.instance_id", "pl.level", "pl.created_at"},
+	sorts: map[string]sortMode{
+		"created": {{"pl.created_at", kindInt}, {"pl.id", kindText}},
+	},
+	defSort:  "created",
+	defDesc:  false, // oldest first
+	defLimit: 200,
+	maxLimit: 1000,
+}
 
-func (q LogQuery) limit() int64 {
-	if q.Limit <= 0 {
-		return defaultLogLimit
-	}
-	return int64(q.Limit)
+func logCursorVals(_ string, e *model.LogEntry) []any {
+	return []any{e.CreatedAt.UnixMilli(), e.ID}
 }
 
 // AppendLog writes one audit-trail row. It is best-effort by contract: callers
@@ -67,66 +78,106 @@ func (db *DB) AppendLog(entry *model.LogEntry) error {
 	})
 }
 
-// ListLogs returns one instance's audit trail oldest-first, applying the
-// filters and cursor in opts.
-func (db *DB) ListLogs(instanceID string, opts LogQuery) ([]*model.LogEntry, error) {
-	rows, err := db.q.ListLogs(context.Background(), dbgen.ListLogsParams{
-		InstanceID: instanceID,
-		Level:      opts.Level,
-		Since:      opts.Since,
-		AfterTs:    opts.AfterTs,
-		AfterID:    opts.AfterID,
-		Lim:        opts.limit(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return toLogEntries(rows)
-}
+// logColumns is the pl.-qualified SELECT list shared by both log queries (the
+// flat query aliases process_logs pl; the subtree query joins it as pl).
+const logColumns = `pl.id, pl.instance_id, pl.level, pl.event, pl.task_id, pl.message, pl.code, pl.detail, pl.created_at`
 
-// treeLogsQuery returns the logs for the subtree rooted at any instance, oldest
-// first. A recursive CTE walks process_instances.parent_id from the given id down
-// (the base row covers the node itself), then joins its logs — no denormalised
-// root_id and no closure table, so it adds zero write cost. The walk rides the
-// idx_instances_parent_task index. Hand-written (not sqlc) because sqlc's SQLite
-// grammar can't parse WITH RECURSIVE; both runtime drivers support it. The
-// cursor/level predicates mirror ListLogs.
-// The subtree CTE also carries each instance's depth relative to the queried
-// node (the node itself is depth 0), surfaced per log row so callers can render
-// the tree (e.g. gentctl indents by depth). Joining subtree (rather than
-// instance_id IN (subtree)) makes st.depth selectable.
-const treeLogsQuery = `
+// logSubtreeCTE walks process_instances.parent_id from a seed id (the single ?
+// placeholder) down, tagging each node with its depth from the seed. Hand-written
+// because sqlc's SQLite grammar can't parse WITH RECURSIVE; both runtime drivers
+// support it. treeLogsPrefix is the page SELECT; treeLogsCountLeading/From are the
+// count's two halves (the agg list is spliced between them by countQuery).
+const logSubtreeCTE = `
 WITH RECURSIVE subtree(id, depth) AS (
     SELECT id, 0 FROM process_instances WHERE id = ?
     UNION ALL
     SELECT pi.id, s.depth + 1 FROM process_instances pi JOIN subtree s ON pi.parent_id = s.id
-)
-SELECT pl.id, pl.instance_id, pl.level, pl.event, pl.task_id, pl.message, pl.code, pl.detail, pl.created_at, st.depth
-FROM process_logs pl
-JOIN subtree st ON st.id = pl.instance_id
-WHERE (? = '' OR pl.level = ?)
-  AND pl.created_at >= ?
-  AND (pl.created_at > ? OR (pl.created_at = ? AND pl.id > ?))
-ORDER BY pl.created_at, pl.id
-LIMIT ?`
+)`
 
-// ListTreeLogs returns every log for the subtree rooted at the given instance
-// (the node itself and all descendants), oldest-first. rootID may be any node.
-// Each entry's Depth is its instance's distance from rootID (rootID = 0).
-func (db *DB) ListTreeLogs(rootID string, opts LogQuery) ([]*model.LogEntry, error) {
-	rows, err := db.exec.QueryContext(context.Background(), treeLogsQuery,
-		rootID, opts.Level, opts.Level, opts.Since,
-		opts.AfterTs, opts.AfterTs, opts.AfterID, opts.limit())
+const treeLogsJoin = `
+FROM process_logs pl
+JOIN subtree st ON st.id = pl.instance_id`
+
+const treeLogsPrefix = logSubtreeCTE + `
+SELECT ` + logColumns + `, st.depth` + treeLogsJoin
+
+const treeLogsCountLeading = logSubtreeCTE + `
+SELECT `
+
+// ListLogs returns a page of one instance's audit trail, applying the filters and
+// pagination in opts, plus the navigation metadata.
+func (db *DB) ListLogs(instanceID string, opts LogQuery) ([]*model.LogEntry, PageInfo, error) {
+	b, err := logPaginator.query(opts.Page).
+		Eq("pl.instance_id", instanceID).
+		EqIf("pl.level", opts.Level, opts.Level != "").
+		GteIf("pl.created_at", opts.Since, opts.Since > 0).
+		build()
 	if err != nil {
-		return nil, err
+		return nil, PageInfo{}, err
 	}
+	rows, err := db.exec.QueryContext(context.Background(), b.pageSQL, b.pageArgs...)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	out, err := scanLogPage(rows, false)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	items, first, last := orient(b, out, logCursorVals)
+	info, err := db.pageInfo(b, first, last)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	return items, info, nil
+}
+
+// ListTreeLogs returns a page of every log for the subtree rooted at the given
+// instance (the node itself and all descendants). rootID may be any node. Each
+// entry's Depth is its instance's distance from rootID (rootID = 0), plus the
+// navigation metadata. The CTE prefixes are trusted constants; the filters/cursor
+// and ORDER BY are generated by the shared paginator via buildSource.
+func (db *DB) ListTreeLogs(rootID string, opts LogQuery) ([]*model.LogEntry, PageInfo, error) {
+	b, err := logPaginator.query(opts.Page).
+		EqIf("pl.level", opts.Level, opts.Level != "").
+		GteIf("pl.created_at", opts.Since, opts.Since > 0).
+		buildSource(treeLogsPrefix, treeLogsCountLeading, treeLogsJoin, []any{rootID})
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	rows, err := db.exec.QueryContext(context.Background(), b.pageSQL, b.pageArgs...)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	out, err := scanLogPage(rows, true)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	items, first, last := orient(b, out, logCursorVals)
+	info, err := db.pageInfo(b, first, last)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	return items, info, nil
+}
+
+// scanLogPage scans a log page. When withDepth, each row carries a trailing
+// st.depth column (the subtree query); otherwise it is the flat column list.
+func scanLogPage(rows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+	Close() error
+}, withDepth bool) ([]*model.LogEntry, error) {
 	defer rows.Close()
 	var out []*model.LogEntry
 	for rows.Next() {
 		var r dbgen.ProcessLog
 		var depth int64
-		if err := rows.Scan(&r.ID, &r.InstanceID, &r.Level, &r.Event,
-			&r.TaskID, &r.Message, &r.Code, &r.Detail, &r.CreatedAt, &depth); err != nil {
+		dest := []any{&r.ID, &r.InstanceID, &r.Level, &r.Event, &r.TaskID, &r.Message, &r.Code, &r.Detail, &r.CreatedAt}
+		if withDepth {
+			dest = append(dest, &depth)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, err
 		}
 		e, err := toLogEntry(r)
@@ -136,28 +187,13 @@ func (db *DB) ListTreeLogs(rootID string, opts LogQuery) ([]*model.LogEntry, err
 		e.Depth = int(depth)
 		out = append(out, e)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // PruneLogs deletes every log older than the given cutoff (unix millis) and
 // returns how many rows were removed.
 func (db *DB) PruneLogs(before int64) (int64, error) {
 	return db.q.DeleteLogsBefore(context.Background(), before)
-}
-
-func toLogEntries(rows []dbgen.ProcessLog) ([]*model.LogEntry, error) {
-	out := make([]*model.LogEntry, len(rows))
-	for i, r := range rows {
-		e, err := toLogEntry(r)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = e
-	}
-	return out, nil
 }
 
 func toLogEntry(r dbgen.ProcessLog) (*model.LogEntry, error) {

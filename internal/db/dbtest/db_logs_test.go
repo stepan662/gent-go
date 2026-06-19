@@ -53,7 +53,7 @@ func TestListLogs_OrderAndFilters(t *testing.T) {
 			// A different instance must not leak into inst-1's logs.
 			appendLog(t, b.db, "inst-2", model.LogInfo, model.EventTaskStarted, 1500)
 
-			all, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{})
+			all, _, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{})
 			if err != nil {
 				t.Fatalf("ListLogs: %v", err)
 			}
@@ -75,7 +75,7 @@ func TestListLogs_OrderAndFilters(t *testing.T) {
 			}
 
 			// Level filter.
-			warns, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{Level: string(model.LogWarn)})
+			warns, _, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{Level: string(model.LogWarn)})
 			if err != nil {
 				t.Fatalf("ListLogs(level): %v", err)
 			}
@@ -84,7 +84,7 @@ func TestListLogs_OrderAndFilters(t *testing.T) {
 			}
 
 			// Since filter (inclusive).
-			recent, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{Since: 3000})
+			recent, _, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{Since: 3000})
 			if err != nil {
 				t.Fatalf("ListLogs(since): %v", err)
 			}
@@ -102,18 +102,26 @@ func TestListLogs_CursorPagination(t *testing.T) {
 				appendLog(t, b.db, "inst-1", model.LogInfo, model.EventTaskCompleted, i*1000)
 			}
 
-			page1, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{Limit: 2})
+			page1, info1, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{Page: dbpkg.PageReq{Limit: 2}})
 			if err != nil {
 				t.Fatalf("page1: %v", err)
 			}
 			if len(page1) != 2 {
 				t.Fatalf("page1: want 2, got %d", len(page1))
 			}
+			if info1.TotalItems != 5 {
+				t.Errorf("total_items = %d, want 5", info1.TotalItems)
+			}
+			// 5 total, page of 2: 0 before, 3 after.
+			if info1.ItemsBefore != 0 || info1.ItemsAfter != 3 {
+				t.Errorf("page1 position: before=%d after=%d, want 0/3", info1.ItemsBefore, info1.ItemsAfter)
+			}
+			if info1.NextCursor == "" {
+				t.Fatal("page1: expected a next cursor")
+			}
 			last := page1[len(page1)-1]
-			page2, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{
-				Limit:   2,
-				AfterTs: last.CreatedAt.UnixMilli(),
-				AfterID: last.ID,
+			page2, info2, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{
+				Page: dbpkg.PageReq{Limit: 2, After: info1.NextCursor},
 			})
 			if err != nil {
 				t.Fatalf("page2: %v", err)
@@ -125,6 +133,72 @@ func TestListLogs_CursorPagination(t *testing.T) {
 			if !page2[0].CreatedAt.After(last.CreatedAt) {
 				t.Errorf("cursor did not advance: page1 last=%v page2 first=%v",
 					last.CreatedAt, page2[0].CreatedAt)
+			}
+			if info2.ItemsBefore != 2 {
+				t.Errorf("page2 items_before = %d, want 2", info2.ItemsBefore)
+			}
+			// Page backward from page2 returns page1's rows again.
+			back, _, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{
+				Page: dbpkg.PageReq{Limit: 2, Before: info2.PreviousCursor},
+			})
+			if err != nil {
+				t.Fatalf("back: %v", err)
+			}
+			if len(back) != 2 || back[0].ID != page1[0].ID || back[1].ID != page1[1].ID {
+				t.Errorf("backward page did not return page1: got %d rows", len(back))
+			}
+		})
+	}
+}
+
+// TestListLogs_CursorTiebreaker pages through rows that all share one timestamp,
+// forcing the id tiebreaker to carry the keyset. It must return every row exactly
+// once, in order, on both engines — the property that distinguishes keyset
+// pagination from a naive ORDER BY created_at LIMIT/OFFSET.
+func TestListLogs_CursorTiebreaker(t *testing.T) {
+	for _, b := range testBackends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			const n = 5
+			for i := 0; i < n; i++ {
+				// Same created_at for all; UUIDv7 ids stay monotonic, so the (created_at,
+				// id) keyset is a total order with insertion == id order.
+				appendLog(t, b.db, "inst-1", model.LogInfo, model.EventTaskCompleted, 1000)
+			}
+
+			var collected []string
+			seen := map[string]bool{}
+			after := ""
+			for pages := 0; ; pages++ {
+				if pages > n+2 {
+					t.Fatal("pagination did not terminate")
+				}
+				logs, info, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{
+					Page: dbpkg.PageReq{Limit: 2, After: after},
+				})
+				if err != nil {
+					t.Fatalf("page %d: %v", pages, err)
+				}
+				for _, l := range logs {
+					if seen[l.ID] {
+						t.Fatalf("duplicate id %s across pages", l.ID)
+					}
+					seen[l.ID] = true
+					collected = append(collected, l.ID)
+				}
+				// next_cursor is always set now (it points past the last row even on the
+				// final page), so terminate on items_after instead.
+				if info.ItemsAfter == 0 {
+					break
+				}
+				after = info.NextCursor
+			}
+			if len(collected) != n {
+				t.Fatalf("collected %d ids, want %d (no skips/dupes)", len(collected), n)
+			}
+			for i := 1; i < len(collected); i++ {
+				if collected[i-1] >= collected[i] {
+					t.Errorf("ids not strictly ascending at %d: %s >= %s", i, collected[i-1], collected[i])
+				}
 			}
 		})
 	}
@@ -150,7 +224,7 @@ func TestListTreeLogs_AggregatesSubtree(t *testing.T) {
 			appendLog(t, b.db, "other", model.LogInfo, model.EventTaskStarted, 2500)
 
 			// Subtree from the root: root + a + b + grandchild = 4 (not "other").
-			fromRoot, err := b.db.ListTreeLogs("root", dbpkg.LogQuery{})
+			fromRoot, _, err := b.db.ListTreeLogs("root", dbpkg.LogQuery{})
 			if err != nil {
 				t.Fatalf("ListTreeLogs(root): %v", err)
 			}
@@ -167,7 +241,7 @@ func TestListTreeLogs_AggregatesSubtree(t *testing.T) {
 
 			// Subtree from a mid-tree node: child-a + grandchild = 2. Works from any
 			// node, not just the root — the win over the old root_id column.
-			fromChildA, err := b.db.ListTreeLogs("child-a", dbpkg.LogQuery{})
+			fromChildA, _, err := b.db.ListTreeLogs("child-a", dbpkg.LogQuery{})
 			if err != nil {
 				t.Fatalf("ListTreeLogs(child-a): %v", err)
 			}
@@ -183,7 +257,7 @@ func TestListTreeLogs_AggregatesSubtree(t *testing.T) {
 			}
 
 			// Per-instance view stays scoped to one instance.
-			single, err := b.db.ListLogs("child-a", dbpkg.LogQuery{})
+			single, _, err := b.db.ListLogs("child-a", dbpkg.LogQuery{})
 			if err != nil {
 				t.Fatalf("ListLogs(child-a): %v", err)
 			}
@@ -208,7 +282,7 @@ func TestPruneLogs_DeletesOlderThanCutoff(t *testing.T) {
 			if n != 2 {
 				t.Fatalf("PruneLogs: want 2 deleted, got %d", n)
 			}
-			remaining, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{})
+			remaining, _, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{})
 			if err != nil {
 				t.Fatalf("ListLogs: %v", err)
 			}

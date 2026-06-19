@@ -347,7 +347,7 @@ test("child_parallel — recursive spawn completes with correct aggregated outpu
 
   // ttl=2: 1 root + 2 children (ttl=1) + 4 grandchildren (ttl=0) = 7 instances
   const { data: allInstances } = await client.GET("/instances");
-  const spawned = (allInstances ?? []).filter((i) => i.process === processName);
+  const spawned = (allInstances?.items ?? []).filter((i) => i.process === processName);
   expect(spawned).toHaveLength(7);
   expect(spawned.every((i) => i.status === "completed")).toBe(true);
 

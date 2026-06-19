@@ -134,20 +134,59 @@ func (db *DB) LatestVersion(name string) (int, error) {
 	return int(v.(int64)), nil
 }
 
-func (db *DB) ListDefinitions() ([]VersionedDef, error) {
-	rows, err := db.q.ListDefinitions(context.Background())
+// definitionPaginator is the pagination policy for ListDefinitions. Sort is by
+// name, keyed on the (name, version) PRIMARY KEY (its unique tiebreaker), so the
+// keyset rides the PK index.
+var definitionPaginator = paginator{
+	table:   "process_definitions",
+	columns: "name, version, definition",
+	sorts: map[string]sortMode{
+		"name": {{"name", kindText}, {"version", kindInt}},
+	},
+	defSort:  "name",
+	defDesc:  false,
+	defLimit: 200,
+	maxLimit: 1000,
+}
+
+func definitionCursorVals(sort string, vd VersionedDef) []any {
+	return []any{vd.Def.Name, int64(vd.Version)}
+}
+
+// ListDefinitions returns a page of registered definitions, sorted and paged per
+// req, plus the navigation metadata.
+func (db *DB) ListDefinitions(req PageReq) ([]VersionedDef, PageInfo, error) {
+	b, err := definitionPaginator.query(req).build()
 	if err != nil {
-		return nil, err
+		return nil, PageInfo{}, err
 	}
-	out := make([]VersionedDef, len(rows))
-	for i, r := range rows {
-		var def model.ProcessDefinition
-		if err := json.Unmarshal([]byte(r.Definition), &def); err != nil {
-			return nil, err
+	rows, err := db.exec.QueryContext(context.Background(), b.pageSQL, b.pageArgs...)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	defer rows.Close()
+	var out []VersionedDef
+	for rows.Next() {
+		var name, definition string
+		var version int64
+		if err := rows.Scan(&name, &version, &definition); err != nil {
+			return nil, PageInfo{}, err
 		}
-		out[i] = VersionedDef{Version: int(r.Version), Def: &def}
+		var def model.ProcessDefinition
+		if err := json.Unmarshal([]byte(definition), &def); err != nil {
+			return nil, PageInfo{}, err
+		}
+		out = append(out, VersionedDef{Version: int(version), Def: &def})
 	}
-	return out, nil
+	if err := rows.Err(); err != nil {
+		return nil, PageInfo{}, err
+	}
+	items, first, last := orient(b, out, definitionCursorVals)
+	info, err := db.pageInfo(b, first, last)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	return items, info, nil
 }
 
 func (db *DB) FindVersionByHash(name, hash string) (int, error) {
@@ -277,16 +316,65 @@ func (db *DB) DeleteChannel(name, channel string) error {
 	return db.q.DeleteChannel(context.Background(), dbgen.DeleteChannelParams{Name: name, Channel: channel})
 }
 
-func (db *DB) ListChannels(name string) (map[string]int, error) {
-	rows, err := db.q.ListChannels(context.Background(), name)
+// ChannelRow is one (channel → version) mapping for a process, returned ordered
+// by ListChannels.
+type ChannelRow struct {
+	Channel string
+	Version int
+}
+
+// channelPaginator is the pagination policy for ListChannels. It is always scoped
+// to one process name (a required filter); within that name the channel is unique,
+// so it is both the sort key and its own tiebreaker — and (name, channel) is the
+// PRIMARY KEY, so the keyset rides the PK index.
+var channelPaginator = paginator{
+	table:      "process_channels",
+	columns:    "channel, version",
+	filterCols: []string{"name"},
+	sorts: map[string]sortMode{
+		"channel": {{"channel", kindText}},
+	},
+	defSort:  "channel",
+	defDesc:  false,
+	defLimit: 200,
+	maxLimit: 1000,
+}
+
+func channelCursorVals(sort string, r ChannelRow) []any {
+	return []any{r.Channel}
+}
+
+// ListChannels returns a page of the channels defined for a process, sorted and
+// paged per req, plus the navigation metadata.
+func (db *DB) ListChannels(name string, req PageReq) ([]ChannelRow, PageInfo, error) {
+	b, err := channelPaginator.query(req).Eq("name", name).build()
 	if err != nil {
-		return nil, err
+		return nil, PageInfo{}, err
 	}
-	out := make(map[string]int, len(rows))
-	for _, r := range rows {
-		out[r.Channel] = int(r.Version)
+	rows, err := db.exec.QueryContext(context.Background(), b.pageSQL, b.pageArgs...)
+	if err != nil {
+		return nil, PageInfo{}, err
 	}
-	return out, nil
+	defer rows.Close()
+	var out []ChannelRow
+	for rows.Next() {
+		var r ChannelRow
+		var version int64
+		if err := rows.Scan(&r.Channel, &version); err != nil {
+			return nil, PageInfo{}, err
+		}
+		r.Version = int(version)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, PageInfo{}, err
+	}
+	items, first, last := orient(b, out, channelCursorVals)
+	info, err := db.pageInfo(b, first, last)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	return items, info, nil
 }
 
 func (db *DB) LoadDefinitionsOnChannel(channel string) ([]VersionedDef, error) {

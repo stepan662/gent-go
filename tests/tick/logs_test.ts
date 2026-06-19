@@ -94,7 +94,7 @@ async function getLogs(
     params: { path: { id }, query },
   });
   if (error) throw new Error(`get logs failed: ${JSON.stringify(error)}`);
-  return data!;
+  return data!.items ?? [];
 }
 
 test("successful run records task and completion events with response snippet", async () => {

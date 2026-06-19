@@ -38,6 +38,40 @@ func NewHandlers(database *db.DB, eng tickProvider) *Handlers {
 
 // --- Request / Response types ---
 
+// Pagination is the common sort/cursor query surface embedded in every list
+// request. Order is "asc"|"desc"|"" (empty = the endpoint's default direction).
+// after/before are opaque cursors from a previous page's page object; before pages
+// backward. Empty after+before = the first page.
+type Pagination struct {
+	Sort   string `json:"sort,omitempty"`
+	Order  string `json:"order,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+	After  string `json:"after,omitempty"`
+	Before string `json:"before,omitempty"`
+}
+
+// page maps the request surface to a db.PageReq. Order "" leaves Desc nil so the
+// listing's default direction applies.
+func (p Pagination) page() db.PageReq {
+	req := db.PageReq{Sort: p.Sort, Limit: p.Limit, After: p.After, Before: p.Before}
+	switch p.Order {
+	case "asc":
+		desc := false
+		req.Desc = &desc
+	case "desc":
+		desc := true
+		req.Desc = &desc
+	}
+	return req
+}
+
+// PageResp is the envelope every list endpoint returns: a page of items plus the
+// page object (total, has-next/prev, and the cursors to move either way).
+type PageResp[T any] struct {
+	Items []T         `json:"items"`
+	Page  db.PageInfo `json:"page"`
+}
+
 type PutDefinitionReq struct {
 	model.ProcessDefinition
 }
@@ -73,6 +107,7 @@ type DeleteChannelReq struct {
 
 type ListChannelsReq struct {
 	Name string `json:"name"`
+	Pagination
 }
 
 type PromoteChannelReq struct {
@@ -105,8 +140,13 @@ type StartInstanceResp struct {
 	Status  model.Status `json:"status"`
 }
 
+type ListDefinitionsReq struct {
+	Pagination
+}
+
 type ListInstancesReq struct {
 	Status string `json:"status"` // optional filter: running, completed, failing, failed, cancelling, cancelled
+	Pagination
 }
 
 type RetryInstanceReq struct {
@@ -117,7 +157,7 @@ type ListExternalTasksReq struct {
 	Process string `json:"process"` // optional: filter by process name
 	Version int    `json:"version"` // optional: filter by process version (0 = any)
 	Task    string `json:"task"`    // optional: filter by task id
-	Limit   int    `json:"limit"`   // page size (default 200, cap 1000)
+	Pagination
 }
 
 // ExternalTaskResp is one entry in the external-task queue. It exposes only the task's
@@ -144,12 +184,10 @@ type SignalInstanceReq struct {
 }
 
 type ListLogsReq struct {
-	Level   string `json:"level"`    // optional filter: debug, info, warn, error
-	Since   int64  `json:"since"`    // optional: only logs at/after this unix-millis timestamp
-	Limit   int    `json:"limit"`    // page size (default 200)
-	AfterTs int64  `json:"after_ts"` // keyset cursor: created_at of the previous page's last row
-	AfterID string `json:"after_id"` // keyset cursor: id of the previous page's last row
-	Tree    bool   `json:"tree"`     // include the whole process subtree, keyed on the root instance
+	Level string `json:"level"` // optional filter: debug, info, warn, error
+	Since int64  `json:"since"` // optional: only logs at/after this unix-millis timestamp
+	Tree  bool   `json:"tree"`  // include the whole process subtree, keyed on the root instance
+	Pagination
 }
 
 type TickReq struct {
@@ -304,8 +342,12 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 	})
 }
 
-func (h *Handlers) listDefinitions() Reply {
-	defs, err := h.db.ListDefinitions()
+func (h *Handlers) listDefinitions(raw json.RawMessage) Reply {
+	var req ListDefinitionsReq
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &req)
+	}
+	defs, info, err := h.db.ListDefinitions(req.page())
 	if err != nil {
 		return errReply(err)
 	}
@@ -313,7 +355,7 @@ func (h *Handlers) listDefinitions() Reply {
 	for i, d := range defs {
 		summaries[i] = DefinitionSummary{Name: d.Def.Name, Version: d.Version}
 	}
-	return okReply(summaries)
+	return okReply(PageResp[DefinitionSummary]{Items: summaries, Page: info})
 }
 
 func (h *Handlers) listInstances(raw json.RawMessage) Reply {
@@ -321,7 +363,7 @@ func (h *Handlers) listInstances(raw json.RawMessage) Reply {
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &req)
 	}
-	instances, err := h.db.ListInstances(req.Status)
+	instances, info, err := h.db.ListInstances(req.Status, req.page())
 	if err != nil {
 		return errReply(err)
 	}
@@ -329,7 +371,7 @@ func (h *Handlers) listInstances(raw json.RawMessage) Reply {
 	for i, inst := range instances {
 		resp[i] = instanceToResp(inst)
 	}
-	return okReply(resp)
+	return okReply(PageResp[InstanceStatusResp]{Items: resp, Page: info})
 }
 
 func (h *Handlers) getInstance(id string) Reply {
@@ -352,20 +394,19 @@ func (h *Handlers) listInstanceLogs(id string, raw json.RawMessage) Reply {
 		_ = json.Unmarshal(raw, &req)
 	}
 	opts := db.LogQuery{
-		Level:   req.Level,
-		Since:   req.Since,
-		AfterTs: req.AfterTs,
-		AfterID: req.AfterID,
-		Limit:   req.Limit,
+		Level: req.Level,
+		Since: req.Since,
+		Page:  req.page(),
 	}
 	var (
 		logs []*model.LogEntry
+		info db.PageInfo
 		err  error
 	)
 	if req.Tree {
-		logs, err = h.db.ListTreeLogs(id, opts)
+		logs, info, err = h.db.ListTreeLogs(id, opts)
 	} else {
-		logs, err = h.db.ListLogs(id, opts)
+		logs, info, err = h.db.ListLogs(id, opts)
 	}
 	if err != nil {
 		return errReply(err)
@@ -384,7 +425,7 @@ func (h *Handlers) listInstanceLogs(id string, raw json.RawMessage) Reply {
 			Detail:   l.Detail,
 		}
 	}
-	return okReply(resp)
+	return okReply(PageResp[LogEntryResp]{Items: resp, Page: info})
 }
 
 func (h *Handlers) cancelInstance(id string) Reply {
@@ -416,14 +457,7 @@ func (h *Handlers) listExternalTasks(raw json.RawMessage) Reply {
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &req)
 	}
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 200
-	}
-	if limit > 1000 {
-		limit = 1000
-	}
-	instances, err := h.db.ListExternalTasks(req.Process, req.Version, limit)
+	instances, info, err := h.db.ListExternalTasks(req.Process, req.Version, req.page())
 	if err != nil {
 		return errReply(err)
 	}
@@ -439,7 +473,7 @@ func (h *Handlers) listExternalTasks(raw json.RawMessage) Reply {
 		}
 		resp = append(resp, item)
 	}
-	return okReply(resp)
+	return okReply(PageResp[ExternalTaskResp]{Items: resp, Page: info})
 }
 
 // externalTaskToResp projects a parked external instance to a queue entry. ok is false
@@ -1029,15 +1063,15 @@ func (h *Handlers) listChannels(raw json.RawMessage) Reply {
 	if req.Name == "" {
 		return errReply(fmt.Errorf("name is required"))
 	}
-	channels, err := h.db.ListChannels(req.Name)
+	channels, info, err := h.db.ListChannels(req.Name, req.page())
 	if err != nil {
 		return errReply(err)
 	}
-	entries := make([]ChannelEntry, 0, len(channels))
-	for ch, v := range channels {
-		entries = append(entries, ChannelEntry{Channel: ch, Version: v})
+	entries := make([]ChannelEntry, len(channels))
+	for i, c := range channels {
+		entries[i] = ChannelEntry{Channel: c.Channel, Version: c.Version}
 	}
-	return okReply(entries)
+	return okReply(PageResp[ChannelEntry]{Items: entries, Page: info})
 }
 
 func (h *Handlers) promoteChannel(raw json.RawMessage) Reply {

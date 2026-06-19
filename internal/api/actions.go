@@ -36,6 +36,29 @@ type actionDef struct {
 	handle func(h *Handlers, env Envelope) Reply
 }
 
+// pageQuery is the common sort/cursor query-parameter surface embedded in every
+// list action's PathQuery, so the OpenAPI spec documents them uniformly.
+type pageQuery struct {
+	Sort   string `query:"sort" description:"Sort key (per-endpoint whitelist; omit for the default)"`
+	Order  string `query:"order" enum:"asc,desc" description:"Sort direction (omit for the endpoint default)"`
+	Limit  int    `query:"limit" description:"Page size (default 200, cap 1000)"`
+	After  string `query:"after" description:"Cursor from a previous page's page.next_cursor — fetch the next page"`
+	Before string `query:"before" description:"Cursor from a previous page's page.previous_cursor — fetch the previous page"`
+}
+
+// paginationFrom reads the common sort/cursor query parameters from a request.
+func paginationFrom(r *http.Request) Pagination {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	return Pagination{
+		Sort:   q.Get("sort"),
+		Order:  q.Get("order"),
+		Limit:  limit,
+		After:  q.Get("after"),
+		Before: q.Get("before"),
+	}
+}
+
 // envelope builds an Envelope from an HTTP request using the action's fromHTTP func.
 func (a actionDef) envelope(r *http.Request) (Envelope, error) {
 	if a.fromHTTP != nil {
@@ -109,17 +132,19 @@ var registry = func() []actionDef {
 			},
 		},
 		{
-			Name:    "list_definitions",
-			Method:  http.MethodGet,
-			Path:    "/definitions",
-			Summary: "List all registered process definitions",
-			Tags:    []string{"Definitions"},
-			Resp:    []DefinitionSummary{{Name: "order_pipeline", Version: 1}},
-			fromHTTP: func(_ *http.Request) (Envelope, error) {
-				return Envelope{Action: "list_definitions"}, nil
+			Name:      "list_definitions",
+			Method:    http.MethodGet,
+			Path:      "/definitions",
+			Summary:   "List all registered process definitions",
+			Tags:      []string{"Definitions"},
+			PathQuery: struct{ pageQuery }{},
+			Resp:      PageResp[DefinitionSummary]{},
+			fromHTTP: func(r *http.Request) (Envelope, error) {
+				b, _ := json.Marshal(ListDefinitionsReq{Pagination: paginationFrom(r)})
+				return Envelope{Action: "list_definitions", Payload: b}, nil
 			},
-			handle: func(h *Handlers, _ Envelope) Reply {
-				return h.listDefinitions()
+			handle: func(h *Handlers, env Envelope) Reply {
+				return h.listDefinitions(env.Payload)
 			},
 		},
 		{
@@ -148,10 +173,14 @@ var registry = func() []actionDef {
 			Tags:    []string{"Instances"},
 			PathQuery: struct {
 				Status string `query:"status" enum:"running,completed,failing,failed,cancelling,cancelled" description:"Filter by status"`
+				pageQuery
 			}{},
-			Resp: []InstanceStatusResp{},
+			Resp: PageResp[InstanceStatusResp]{},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
-				b, _ := json.Marshal(ListInstancesReq{Status: r.URL.Query().Get("status")})
+				b, _ := json.Marshal(ListInstancesReq{
+					Status:     r.URL.Query().Get("status"),
+					Pagination: paginationFrom(r),
+				})
 				return Envelope{Action: "list_instances", Payload: b}, nil
 			},
 			handle: func(h *Handlers, env Envelope) Reply {
@@ -211,10 +240,14 @@ var registry = func() []actionDef {
 			Tags:    []string{"Channels"},
 			PathQuery: struct {
 				Name string `query:"name" description:"Process name"`
+				pageQuery
 			}{},
-			Resp: []ChannelEntry{{Channel: "latest", Version: 2}, {Channel: "stable", Version: 1}},
+			Resp: PageResp[ChannelEntry]{},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
-				b, _ := json.Marshal(ListChannelsReq{Name: r.URL.Query().Get("name")})
+				b, _ := json.Marshal(ListChannelsReq{
+					Name:       r.URL.Query().Get("name"),
+					Pagination: paginationFrom(r),
+				})
 				return Envelope{Action: "list_channels", Payload: b}, nil
 			},
 			handle: func(h *Handlers, env Envelope) Reply {
@@ -290,30 +323,22 @@ var registry = func() []actionDef {
 			Summary: "Get the execution audit trail for a process instance (oldest first)",
 			Tags:    []string{"Instances"},
 			PathQuery: struct {
-				ID      string `path:"id" format:"uuid"`
-				Level   string `query:"level" enum:"debug,info,warn,error" description:"Filter by log level"`
-				Since   int64  `query:"since" description:"Only logs at/after this unix-millis timestamp"`
-				Limit   int    `query:"limit" description:"Page size (default 200)"`
-				AfterTs int64  `query:"after_ts" description:"Keyset cursor: created_at of the previous page's last row"`
-				AfterID string `query:"after_id" description:"Keyset cursor: id of the previous page's last row"`
-				Tree    bool   `query:"tree" description:"Include the whole process subtree, keyed on the root instance"`
+				ID    string `path:"id" format:"uuid"`
+				Level string `query:"level" enum:"debug,info,warn,error" description:"Filter by log level"`
+				Since int64  `query:"since" description:"Only logs at/after this unix-millis timestamp"`
+				Tree  bool   `query:"tree" description:"Include the whole process subtree, keyed on the root instance"`
+				pageQuery
 			}{},
-			Resp: []LogEntryResp{{
-				Time: "2026-06-14T12:00:00Z", Level: model.LogInfo, Event: model.EventTaskSucceeded, Task: "charge",
-			}},
+			Resp: PageResp[LogEntryResp]{},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
 				q := r.URL.Query()
 				since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
-				limit, _ := strconv.Atoi(q.Get("limit"))
-				afterTs, _ := strconv.ParseInt(q.Get("after_ts"), 10, 64)
 				tree, _ := strconv.ParseBool(q.Get("tree"))
 				b, _ := json.Marshal(ListLogsReq{
-					Level:   q.Get("level"),
-					Since:   since,
-					Limit:   limit,
-					AfterTs: afterTs,
-					AfterID: q.Get("after_id"),
-					Tree:    tree,
+					Level:      q.Get("level"),
+					Since:      since,
+					Tree:       tree,
+					Pagination: paginationFrom(r),
 				})
 				return Envelope{Action: "list_instance_logs", ID: r.PathValue("id"), Payload: b}, nil
 			},
@@ -368,22 +393,17 @@ var registry = func() []actionDef {
 				Process string `query:"process" description:"Filter by process name"`
 				Version int    `query:"version" description:"Filter by process version (0 = any)"`
 				Task    string `query:"task" description:"Filter by task id"`
-				Limit   int    `query:"limit" description:"Page size (default 200, cap 1000)"`
+				pageQuery
 			}{},
-			Resp: []ExternalTaskResp{{
-				Token: "550e8400-e29b-41d4-a716-446655440000.6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-				Process: "order_pipeline", Version: 1, TaskID: "approval",
-				Input: map[string]any{"order_id": 42}, WaitingSince: "2026-06-19T12:00:00Z",
-			}},
+			Resp: PageResp[ExternalTaskResp]{},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
 				q := r.URL.Query()
 				version, _ := strconv.Atoi(q.Get("version"))
-				limit, _ := strconv.Atoi(q.Get("limit"))
 				b, _ := json.Marshal(ListExternalTasksReq{
-					Process: q.Get("process"),
-					Version: version,
-					Task:    q.Get("task"),
-					Limit:   limit,
+					Process:    q.Get("process"),
+					Version:    version,
+					Task:       q.Get("task"),
+					Pagination: paginationFrom(r),
 				})
 				return Envelope{Action: "list_external_tasks", Payload: b}, nil
 			},

@@ -68,7 +68,7 @@ test("GET /instances/{id} — returns error for unknown ID", async () => {
 test("GET /instances — lists instances", async () => {
   const { data, error } = await client.GET("/instances");
   expect(error).toBeUndefined();
-  expect(Array.isArray(data)).toBe(true);
+  expect(Array.isArray(data!.items)).toBe(true);
 });
 
 test("POST /instances — fails when input is invalid", async () => {

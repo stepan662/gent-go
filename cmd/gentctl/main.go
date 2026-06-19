@@ -169,12 +169,13 @@ func runChannelCmd(server string, args []string) {
 		if len(rest) < 1 {
 			fatal("usage: gentctl channel list <process>")
 		}
-		var resp []struct {
+		type channelRow struct {
 			Channel string `json:"channel"`
 			Version int    `json:"version"`
 		}
 		listURL := *serverFlag + "/channels?name=" + url.QueryEscape(rest[0])
-		if err := callGet(listURL, &resp); err != nil {
+		resp, err := listAll[channelRow](listURL)
+		if err != nil {
 			fatal("%v", err)
 		}
 		for _, e := range resp {
@@ -288,14 +289,15 @@ func runInstancesCmd(server string, args []string) {
 	if *statusFlag != "" {
 		u += "?status=" + url.QueryEscape(*statusFlag)
 	}
-	var resp []struct {
+	type instanceRow struct {
 		ID      string `json:"id"`
 		Process string `json:"process"`
 		Version int    `json:"version"`
 		Status  string `json:"status"`
 		Error   string `json:"error"`
 	}
-	if err := callGet(u, &resp); err != nil {
+	resp, err := listAll[instanceRow](u)
+	if err != nil {
 		fatal("%v", err)
 	}
 	for _, inst := range resp {
@@ -342,7 +344,7 @@ func runLogsCmd(server string, args []string) {
 		u += "?" + enc
 	}
 
-	var resp []struct {
+	type logRow struct {
 		Time     string `json:"time"`
 		Instance string `json:"instance"`
 		Depth    int    `json:"depth"`
@@ -352,10 +354,14 @@ func runLogsCmd(server string, args []string) {
 		Message  string `json:"message"`
 		Code     string `json:"code"`
 	}
+	// A single page, bounded by --limit (the server caps it at 1000). Unlike
+	// instances/channels we don't follow next_cursor here: --limit is a deliberate
+	// cap on how much trail to print.
+	var resp page[logRow]
 	if err := callGet(u, &resp); err != nil {
 		fatal("%v", err)
 	}
-	for _, l := range resp {
+	for _, l := range resp.Items {
 		// In tree mode, indent by the instance's depth in the subtree and tag the
 		// line with a short instance id, so the chronological stream still reads as
 		// a tree. Cap the indent so a deep subtree doesn't run off-screen.
@@ -451,6 +457,44 @@ func callGet(url string, out any) error {
 		return json.Unmarshal(raw, out)
 	}
 	return nil
+}
+
+// page is the {items, page:{...}} envelope every list endpoint now returns.
+type page[T any] struct {
+	Items []T `json:"items"`
+	Page  struct {
+		NextCursor string `json:"next_cursor"`
+		HasAfter   bool   `json:"has_after"`
+	} `json:"page"`
+}
+
+// listAll fetches every page of a list endpoint, following page.next_cursor while
+// page.has_after is true, and returns the concatenated items. base is the request
+// URL without an after cursor (it may already carry other query params). It stops
+// on has_after (not an empty cursor): next_cursor is always set so a client can
+// poll the end for new rows.
+func listAll[T any](base string) ([]T, error) {
+	var all []T
+	after := ""
+	for {
+		u := base
+		if after != "" {
+			sep := "?"
+			if strings.Contains(u, "?") {
+				sep = "&"
+			}
+			u += sep + "after=" + url.QueryEscape(after)
+		}
+		var p page[T]
+		if err := callGet(u, &p); err != nil {
+			return nil, err
+		}
+		all = append(all, p.Items...)
+		if !p.Page.HasAfter {
+			return all, nil
+		}
+		after = p.Page.NextCursor
+	}
 }
 
 // call sends body as JSON to url and decodes the response into out.

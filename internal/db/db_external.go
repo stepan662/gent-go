@@ -10,27 +10,41 @@ import (
 	"gent/internal/model"
 )
 
-// ListExternalTasks returns instances parked on an external task, filtered by process
-// name/version (empty/0 = any) and capped at limit, ordered by park time. task_id
-// filtering is left to the caller (it lives in the JSON task queue, not a column).
-func (db *DB) ListExternalTasks(processName string, processVersion, limit int) ([]*model.ProcessInstance, error) {
-	rows, err := db.q.ListExternalTasks(context.Background(), dbgen.ListExternalTasksParams{
-		ProcessName:    processName,
-		ProcessVersion: int64(processVersion),
-		Lim:            int64(limit),
-	})
+// externalPaginator is the pagination policy for the external-task queue.
+// baseWhere keeps wait_state='external' a literal so Postgres matches the partial
+// idx_external_queue index (a bound parameter would not); that index's trailing
+// updated_at column also backs the sort. Keys on park time (updated_at) with the
+// UUIDv7 id tiebreaker, oldest first.
+var externalPaginator = paginator{
+	table:      "process_instances",
+	columns:    instanceColumns,
+	baseWhere:  "wait_state = 'external'",
+	filterCols: []string{"process_name", "process_version"},
+	sorts: map[string]sortMode{
+		"updated": {{"updated_at", kindInt}, {"id", kindText}},
+	},
+	defSort:  "updated",
+	defDesc:  false,
+	defLimit: 200,
+	maxLimit: 1000,
+}
+
+// ListExternalTasks returns a page of instances parked on an external task,
+// filtered by process name/version (empty/0 = any), sorted and paged per pg. It
+// returns the page and the cursor for the next page ("" on the final page).
+//
+// task_id filtering is left to the caller (it lives in the JSON task queue, not a
+// column), so a caller post-filtering task_id may see fewer than the page size
+// even when more rows match — the returned cursor still advances correctly.
+func (db *DB) ListExternalTasks(processName string, processVersion int, req PageReq) ([]*model.ProcessInstance, PageInfo, error) {
+	b, err := externalPaginator.query(req).
+		EqIf("process_name", processName, processName != "").
+		EqIf("process_version", int64(processVersion), processVersion != 0).
+		build()
 	if err != nil {
-		return nil, err
+		return nil, PageInfo{}, err
 	}
-	out := make([]*model.ProcessInstance, len(rows))
-	for i, r := range rows {
-		inst, err := toInstance(r)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = inst
-	}
-	return out, nil
+	return db.queryInstancePage(b)
 }
 
 // ResolveExternalTask atomically delivers a submitted result to an instance parked on

@@ -61,6 +61,7 @@ func (q *Queries) DeleteChannel(ctx context.Context, arg DeleteChannelParams) er
 }
 
 const deleteDependencies = `-- name: DeleteDependencies :exec
+
 DELETE FROM process_dependencies
 WHERE parent_name = ?1 AND parent_version = ?2
 `
@@ -70,6 +71,8 @@ type DeleteDependenciesParams struct {
 	ParentVersion int64
 }
 
+// ListDefinitions is hand-written in db_registry.go (dynamic ORDER BY + keyset
+// cursor; see paginate.go).
 func (q *Queries) DeleteDependencies(ctx context.Context, arg DeleteDependenciesParams) error {
 	_, err := q.db.ExecContext(ctx, deleteDependencies, arg.ParentName, arg.ParentVersion)
 	return err
@@ -80,9 +83,11 @@ const deleteLogsBefore = `-- name: DeleteLogsBefore :execrows
 DELETE FROM process_logs WHERE created_at < ?1
 `
 
-// Subtree log view ("logs for X and all its descendants") is hand-written in
-// db_logs.go (ListTreeLogs): a WITH RECURSIVE walk over process_instances.parent_id
-// that sqlc's SQLite grammar can't parse. Both runtime drivers support it.
+// ListLogs (per-instance) and ListTreeLogs (subtree) are hand-written in
+// db_logs.go: both take a dynamic ORDER BY + keyset cursor (see paginate.go), and
+// the subtree view additionally needs a WITH RECURSIVE walk over
+// process_instances.parent_id that sqlc's SQLite grammar can't parse. Both runtime
+// drivers support it.
 func (q *Queries) DeleteLogsBefore(ctx context.Context, before int64) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteLogsBefore, before)
 	if err != nil {
@@ -532,6 +537,7 @@ func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
 }
 
 const insertSignal = `-- name: InsertSignal :exec
+
 INSERT INTO process_signals (id, instance_id, task_id, payload, created_at)
 VALUES (?1, ?2, ?3, ?4, ?5)
 `
@@ -544,6 +550,9 @@ type InsertSignalParams struct {
 	CreatedAt  int64
 }
 
+// ListInstances is hand-written in db_instances.go and ListExternalTasks in
+// db_external.go (dynamic ORDER BY + keyset cursor; see paginate.go). The
+// external-task queue is still served by the partial idx_external_queue index.
 func (q *Queries) InsertSignal(ctx context.Context, arg InsertSignalParams) error {
 	_, err := q.db.ExecContext(ctx, insertSignal,
 		arg.ID,
@@ -566,254 +575,8 @@ func (q *Queries) LatestVersion(ctx context.Context, name string) (interface{}, 
 	return max, err
 }
 
-const listChannels = `-- name: ListChannels :many
-SELECT channel, version FROM process_channels
-WHERE name = ?1
-ORDER BY channel
-`
-
-type ListChannelsRow struct {
-	Channel string
-	Version int64
-}
-
-func (q *Queries) ListChannels(ctx context.Context, name string) ([]ListChannelsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listChannels, name)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListChannelsRow
-	for rows.Next() {
-		var i ListChannelsRow
-		if err := rows.Scan(&i.Channel, &i.Version); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listDefinitions = `-- name: ListDefinitions :many
-SELECT name, version, definition, content_hash, created_at
-FROM process_definitions
-ORDER BY name, version
-`
-
-func (q *Queries) ListDefinitions(ctx context.Context) ([]ProcessDefinition, error) {
-	rows, err := q.db.QueryContext(ctx, listDefinitions)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProcessDefinition
-	for rows.Next() {
-		var i ProcessDefinition
-		if err := rows.Scan(
-			&i.Name,
-			&i.Version,
-			&i.Definition,
-			&i.ContentHash,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listExternalTasks = `-- name: ListExternalTasks :many
-SELECT id, process_name, process_version, task_queue, context_data, parent_id,
-       call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
-FROM process_instances
-WHERE wait_state = 'external'
-  AND (?1 = '' OR process_name = ?1)
-  AND (?2 = 0 OR process_version = ?2)
-ORDER BY updated_at ASC, id ASC
-LIMIT ?3
-`
-
-type ListExternalTasksParams struct {
-	ProcessName    interface{}
-	ProcessVersion interface{}
-	Lim            int64
-}
-
-// The queue of instances parked on an external task. Empty process_name lists every
-// process; process_version=0 lists every version. Ordered by park time (updated_at).
-// task_id cannot be filtered here (it lives in the JSON task queue, not a column), so
-// callers filter it in Go. Served by the partial idx_external_queue index.
-func (q *Queries) ListExternalTasks(ctx context.Context, arg ListExternalTasksParams) ([]ProcessInstance, error) {
-	rows, err := q.db.QueryContext(ctx, listExternalTasks, arg.ProcessName, arg.ProcessVersion, arg.Lim)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProcessInstance
-	for rows.Next() {
-		var i ProcessInstance
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProcessName,
-			&i.ProcessVersion,
-			&i.TaskQueue,
-			&i.ContextData,
-			&i.ParentID,
-			&i.CallStack,
-			&i.RetryCount,
-			&i.WakeAt,
-			&i.Status,
-			&i.Error,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.WorkerID,
-			&i.LeaseExpiresAt,
-			&i.WaitState,
-			&i.SpawnTaskID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listInstances = `-- name: ListInstances :many
-SELECT id, process_name, process_version, task_queue, context_data, parent_id,
-       call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
-FROM process_instances
-WHERE (?1 = '' OR status = ?1)
-ORDER BY created_at DESC
-`
-
-// Empty status lists every instance; a non-empty status filters to it.
-func (q *Queries) ListInstances(ctx context.Context, status interface{}) ([]ProcessInstance, error) {
-	rows, err := q.db.QueryContext(ctx, listInstances, status)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProcessInstance
-	for rows.Next() {
-		var i ProcessInstance
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProcessName,
-			&i.ProcessVersion,
-			&i.TaskQueue,
-			&i.ContextData,
-			&i.ParentID,
-			&i.CallStack,
-			&i.RetryCount,
-			&i.WakeAt,
-			&i.Status,
-			&i.Error,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.WorkerID,
-			&i.LeaseExpiresAt,
-			&i.WaitState,
-			&i.SpawnTaskID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLogs = `-- name: ListLogs :many
-SELECT id, instance_id, level, event, task_id, message, code, detail, created_at
-FROM process_logs
-WHERE instance_id = ?1
-  AND (?2 = '' OR level = ?2)
-  AND created_at >= ?3
-  AND (created_at > ?4
-       OR (created_at = ?4 AND id > ?5))
-ORDER BY created_at, id
-LIMIT ?6
-`
-
-type ListLogsParams struct {
-	InstanceID string
-	Level      interface{}
-	Since      int64
-	AfterTs    int64
-	AfterID    string
-	Lim        int64
-}
-
-// Empty level lists every level. since=0 lists from the start. The (after_ts,
-// after_id) pair is a keyset cursor: pass (0, ”) for the first page. The tuple
-// comparison is spelled out (not row-value syntax) so it runs on SQLite too.
-func (q *Queries) ListLogs(ctx context.Context, arg ListLogsParams) ([]ProcessLog, error) {
-	rows, err := q.db.QueryContext(ctx, listLogs,
-		arg.InstanceID,
-		arg.Level,
-		arg.Since,
-		arg.AfterTs,
-		arg.AfterID,
-		arg.Lim,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProcessLog
-	for rows.Next() {
-		var i ProcessLog
-		if err := rows.Scan(
-			&i.ID,
-			&i.InstanceID,
-			&i.Level,
-			&i.Event,
-			&i.TaskID,
-			&i.Message,
-			&i.Code,
-			&i.Detail,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const loadDefinitionsOnChannel = `-- name: LoadDefinitionsOnChannel :many
+
 SELECT pc.version, pd.definition
 FROM process_channels pc
 JOIN process_definitions pd ON pd.name = pc.name AND pd.version = pc.version
@@ -826,6 +589,8 @@ type LoadDefinitionsOnChannelRow struct {
 	Definition string
 }
 
+// ListChannels is hand-written in db_registry.go (dynamic ORDER BY + keyset
+// cursor; see paginate.go).
 func (q *Queries) LoadDefinitionsOnChannel(ctx context.Context, channel string) ([]LoadDefinitionsOnChannelRow, error) {
 	rows, err := q.db.QueryContext(ctx, loadDefinitionsOnChannel, channel)
 	if err != nil {

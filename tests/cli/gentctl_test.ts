@@ -65,9 +65,7 @@ test("apply --channel sets the named channel", async () => {
   expect(r.stdout).toContain(`saved: ${name}@v1`);
 
   const { data } = await client.GET("/channels", { params: { query: { name } } });
-  const entry = (data as Array<{ channel: string; version: number }>).find(
-    (e) => e.channel === "stable",
-  );
+  const entry = (data?.items ?? []).find((e) => e.channel === "stable");
   expect(entry?.version).toBe(1);
 });
 

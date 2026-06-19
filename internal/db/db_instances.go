@@ -10,6 +10,34 @@ import (
 	"gent/internal/model"
 )
 
+// instancePaginator is the pagination policy for ListInstances. Only index-backed
+// sorts are offered: created keys on (created_at, id) — backed by
+// idx_instances_status_created_at and the UUIDv7 PK tiebreaker. Add more sort keys
+// here (with a matching index) to extend.
+var instancePaginator = paginator{
+	table:   "process_instances",
+	columns: instanceColumns,
+	sorts: map[string]sortMode{
+		"created": {{"created_at", kindInt}, {"id", kindText}},
+	},
+	filterCols: []string{"status"},
+	defSort:    "created",
+	defDesc:    true, // newest first, preserving the previous fixed order
+	defLimit:   200,
+	maxLimit:   1000,
+}
+
+// instanceCursorVals returns the active sort mode's key-column values for inst,
+// matching instancePaginator's column order for that mode.
+func instanceCursorVals(sort string, inst *model.ProcessInstance) []any {
+	switch sort {
+	case "updated": // external-task queue
+		return []any{inst.UpdatedAt.UnixMilli(), inst.ID}
+	default: // created
+		return []any{inst.CreatedAt.UnixMilli(), inst.ID}
+	}
+}
+
 // instanceColumns is the full process_instances column list, in the order
 // scanInstance reads them. Shared by the hand-written ClaimInstances and
 // RetryProcess queries so adding a column touches one place.
@@ -147,20 +175,47 @@ func (db *DB) GetInstance(id string) (*model.ProcessInstance, error) {
 	return toInstance(r)
 }
 
-func (db *DB) ListInstances(status string) ([]*model.ProcessInstance, error) {
-	rows, err := db.q.ListInstances(context.Background(), status)
+// ListInstances returns a page of instances, optionally filtered by status
+// (empty = all), sorted and paged per req. It returns the page items and the
+// navigation metadata (total, has-next/prev, cursors).
+func (db *DB) ListInstances(status string, req PageReq) ([]*model.ProcessInstance, PageInfo, error) {
+	b, err := instancePaginator.query(req).EqIf("status", status, status != "").build()
 	if err != nil {
-		return nil, err
+		return nil, PageInfo{}, err
 	}
-	out := make([]*model.ProcessInstance, len(rows))
-	for i, r := range rows {
+	return db.queryInstancePage(b)
+}
+
+// queryInstancePage runs a built instance-listing query (page + count) and returns
+// the scanned page plus its PageInfo. Shared by ListInstances and
+// ListExternalTasks, which select the same columns and cursor on the same keys.
+func (db *DB) queryInstancePage(b built) ([]*model.ProcessInstance, PageInfo, error) {
+	rows, err := db.exec.QueryContext(context.Background(), b.pageSQL, b.pageArgs...)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	defer rows.Close()
+	var out []*model.ProcessInstance
+	for rows.Next() {
+		r, err := scanInstance(rows)
+		if err != nil {
+			return nil, PageInfo{}, err
+		}
 		inst, err := toInstance(r)
 		if err != nil {
-			return nil, err
+			return nil, PageInfo{}, err
 		}
-		out[i] = inst
+		out = append(out, inst)
 	}
-	return out, nil
+	if err := rows.Err(); err != nil {
+		return nil, PageInfo{}, err
+	}
+	items, first, last := orient(b, out, instanceCursorVals)
+	info, err := db.pageInfo(b, first, last)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	return items, info, nil
 }
 
 // ChildrenForTask returns all child instances spawned by the given task of a

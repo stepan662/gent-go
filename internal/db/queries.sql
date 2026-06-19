@@ -15,10 +15,8 @@ SELECT MAX(version) FROM process_definitions WHERE name = sqlc.arg(name);
 SELECT MAX(version) FROM process_definitions
 WHERE name = sqlc.arg(name) AND content_hash = sqlc.arg(content_hash);
 
--- name: ListDefinitions :many
-SELECT name, version, definition, content_hash, created_at
-FROM process_definitions
-ORDER BY name, version;
+-- ListDefinitions is hand-written in db_registry.go (dynamic ORDER BY + keyset
+-- cursor; see paginate.go).
 
 -- name: DeleteDependencies :exec
 DELETE FROM process_dependencies
@@ -47,10 +45,8 @@ WHERE name = sqlc.arg(name) AND channel = sqlc.arg(channel);
 -- name: DeleteChannel :exec
 DELETE FROM process_channels WHERE name = sqlc.arg(name) AND channel = sqlc.arg(channel);
 
--- name: ListChannels :many
-SELECT channel, version FROM process_channels
-WHERE name = sqlc.arg(name)
-ORDER BY channel;
+-- ListChannels is hand-written in db_registry.go (dynamic ORDER BY + keyset
+-- cursor; see paginate.go).
 
 -- name: LoadDefinitionsOnChannel :many
 SELECT pc.version, pd.definition
@@ -102,29 +98,9 @@ SELECT id, process_name, process_version, task_queue, context_data, parent_id,
 FROM process_instances
 WHERE id = sqlc.arg(id);
 
--- name: ListInstances :many
--- Empty status lists every instance; a non-empty status filters to it.
-SELECT id, process_name, process_version, task_queue, context_data, parent_id,
-       call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
-FROM process_instances
-WHERE (sqlc.arg(status) = '' OR status = sqlc.arg(status))
-ORDER BY created_at DESC;
-
--- name: ListExternalTasks :many
--- The queue of instances parked on an external task. Empty process_name lists every
--- process; process_version=0 lists every version. Ordered by park time (updated_at).
--- task_id cannot be filtered here (it lives in the JSON task queue, not a column), so
--- callers filter it in Go. Served by the partial idx_external_queue index.
-SELECT id, process_name, process_version, task_queue, context_data, parent_id,
-       call_stack, retry_count, wake_at, status, error,
-       created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id
-FROM process_instances
-WHERE wait_state = 'external'
-  AND (sqlc.arg(process_name) = '' OR process_name = sqlc.arg(process_name))
-  AND (sqlc.arg(process_version) = 0 OR process_version = sqlc.arg(process_version))
-ORDER BY updated_at ASC, id ASC
-LIMIT sqlc.arg(lim);
+-- ListInstances is hand-written in db_instances.go and ListExternalTasks in
+-- db_external.go (dynamic ORDER BY + keyset cursor; see paginate.go). The
+-- external-task queue is still served by the partial idx_external_queue index.
 
 -- name: InsertSignal :exec
 INSERT INTO process_signals (id, instance_id, task_id, payload, created_at)
@@ -228,23 +204,11 @@ VALUES
     (sqlc.arg(id), sqlc.arg(instance_id), sqlc.arg(level), sqlc.arg(event),
      sqlc.arg(task_id), sqlc.arg(message), sqlc.arg(code), sqlc.arg(detail), sqlc.arg(created_at));
 
--- name: ListLogs :many
--- Empty level lists every level. since=0 lists from the start. The (after_ts,
--- after_id) pair is a keyset cursor: pass (0, '') for the first page. The tuple
--- comparison is spelled out (not row-value syntax) so it runs on SQLite too.
-SELECT id, instance_id, level, event, task_id, message, code, detail, created_at
-FROM process_logs
-WHERE instance_id = sqlc.arg(instance_id)
-  AND (sqlc.arg(level) = '' OR level = sqlc.arg(level))
-  AND created_at >= sqlc.arg(since)
-  AND (created_at > sqlc.arg(after_ts)
-       OR (created_at = sqlc.arg(after_ts) AND id > sqlc.arg(after_id)))
-ORDER BY created_at, id
-LIMIT sqlc.arg(lim);
-
--- Subtree log view ("logs for X and all its descendants") is hand-written in
--- db_logs.go (ListTreeLogs): a WITH RECURSIVE walk over process_instances.parent_id
--- that sqlc's SQLite grammar can't parse. Both runtime drivers support it.
+-- ListLogs (per-instance) and ListTreeLogs (subtree) are hand-written in
+-- db_logs.go: both take a dynamic ORDER BY + keyset cursor (see paginate.go), and
+-- the subtree view additionally needs a WITH RECURSIVE walk over
+-- process_instances.parent_id that sqlc's SQLite grammar can't parse. Both runtime
+-- drivers support it.
 
 -- name: DeleteLogsBefore :execrows
 DELETE FROM process_logs WHERE created_at < sqlc.arg(before);

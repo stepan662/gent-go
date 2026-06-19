@@ -20,7 +20,9 @@ async function queueEntryFor(id: string): Promise<any | undefined> {
   const { data, error } = await ctx.env.client.GET("/external-tasks", {});
   if (error) throw new Error(`list external tasks failed: ${JSON.stringify(error)}`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (data as any[]).find((t) => typeof t.token === "string" && t.token.startsWith(`${id}.`));
+  return ((data?.items ?? []) as any[]).find(
+    (t) => typeof t.token === "string" && t.token.startsWith(`${id}.`),
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

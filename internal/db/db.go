@@ -110,6 +110,33 @@ func open(sqldb *sql.DB, dialect string) (*DB, error) {
 
 func (db *DB) Close() error { return db.sqldb.Close() }
 
+// pageInfo runs the paginator's combined count for a page whose boundary key
+// values are first/last (in display order; nil for an empty page) and assembles
+// the PageInfo: total/before/after counts plus both boundary cursors (always set
+// when the page has rows, so a client can poll either end for newly added items).
+func (db *DB) pageInfo(b built, first, last []any) (PageInfo, error) {
+	query, args := b.countQuery(first, last)
+	var total, before, after int64
+	if err := db.exec.QueryRowContext(context.Background(), query, args...).Scan(&total, &before, &after); err != nil {
+		return PageInfo{}, err
+	}
+	info := PageInfo{
+		Size: b.limit, TotalItems: total,
+		ItemsBefore: before, ItemsAfter: after,
+		HasBefore: before > 0, HasAfter: after > 0,
+	}
+	if len(first) > 0 {
+		var err error
+		if info.PreviousCursor, err = encodeCursor(b.sort, b.desc, b.mode, first); err != nil {
+			return PageInfo{}, err
+		}
+		if info.NextCursor, err = encodeCursor(b.sort, b.desc, b.mode, last); err != nil {
+			return PageInfo{}, err
+		}
+	}
+	return info, nil
+}
+
 // ── time helpers ─────────────────────────────────────────────────────────────
 
 // All DB timestamps are unix milliseconds (BIGINT columns).

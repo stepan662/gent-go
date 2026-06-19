@@ -67,9 +67,7 @@ test("channels — apply sets channel pointer and deduplicates unchanged content
   const { data: channels } = await client.GET("/channels", {
     params: { query: { name } },
   });
-  const stable = (channels as Array<{ channel: string; version: number }>).find(
-    (e) => e.channel === "stable",
-  );
+  const stable = (channels?.items ?? []).find((e) => e.channel === "stable");
   expect(stable?.version).toBe(1);
 });
 
@@ -165,9 +163,7 @@ test("channels — auto-update-parents does not touch other channels", async () 
   const { data: channels } = await client.GET("/channels", {
     params: { query: { name: parentName } },
   });
-  const stable = (channels as Array<{ channel: string; version: number }>).find(
-    (e) => e.channel === "stable",
-  );
+  const stable = (channels?.items ?? []).find((e) => e.channel === "stable");
   expect(stable?.version).toBe(1);
 });
 
@@ -258,9 +254,7 @@ test("channels — promote copies all pointers from source to target channel", a
     const { data: channels } = await client.GET("/channels", {
       params: { query: { name } },
     });
-    const entry = (
-      channels as Array<{ channel: string; version: number }>
-    ).find((e) => e.channel === "promoted");
+    const entry = (channels?.items ?? []).find((e) => e.channel === "promoted");
     expect(entry?.version).toBe(1);
   }
 });
@@ -283,14 +277,12 @@ test("channels — promote subtree only touches the process and its dependencies
     body: { from: "staging", to: "subtree-target", process: parentName },
   });
 
-  const parentChannels = (
-    await client.GET("/channels", { params: { query: { name: parentName } } })
-  ).data as Array<{ channel: string }>;
+  const parentChannels =
+    (await client.GET("/channels", { params: { query: { name: parentName } } })).data?.items ?? [];
   expect(parentChannels.map((e) => e.channel)).toContain("subtree-target");
 
-  const unrelatedChannels = (
-    await client.GET("/channels", { params: { query: { name: unrelated } } })
-  ).data as Array<{ channel: string }>;
+  const unrelatedChannels =
+    (await client.GET("/channels", { params: { query: { name: unrelated } } })).data?.items ?? [];
   expect(unrelatedChannels.map((e) => e.channel)).not.toContain(
     "subtree-target",
   );
@@ -314,11 +306,9 @@ test("channels — process started by channel runs and completes", async () => {
 
 // ── content dedup / versioning ──────────────────────────────────────────────────
 
-type ChannelEntry = { channel: string; version: number };
-
 async function channelVersion(name: string, channel: string) {
   const { data } = await client.GET("/channels", { params: { query: { name } } });
-  return (data as ChannelEntry[]).find((e) => e.channel === channel)?.version;
+  return (data?.items ?? []).find((e) => e.channel === channel)?.version;
 }
 
 // A child whose tasks differ from switchDef so it produces a new content hash.

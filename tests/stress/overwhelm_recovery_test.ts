@@ -5,6 +5,7 @@ import {
   startSupervisedWorker,
   type GentProcess,
 } from "../helpers/server.ts";
+import { listAllInstances } from "../helpers/client.ts";
 
 // Single-worker overwhelm + recovery, against real Postgres processes.
 //
@@ -160,8 +161,7 @@ describe.runIf(!!DSN)("single-worker overwhelm recovery — postgres", () => {
       const deadline = Date.now() + SETTLE_MS;
       let allDone = false;
       while (Date.now() < deadline) {
-        const { data } = await api.GET("/instances");
-        const insts = (data ?? []).filter(byProcess);
+        const insts = (await listAllInstances(api)).filter(byProcess);
         const byId = new Map(insts.map((i) => [i.id, i]));
 
         let rootsCompleted = true;

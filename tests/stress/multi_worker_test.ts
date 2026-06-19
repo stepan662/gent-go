@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { buildGentBinary, startGent, type GentProcess } from "../helpers/server.ts";
+import { listAllInstances } from "../helpers/client.ts";
 
 // Multi-worker collision stress. Several independent `gent` processes — each its
 // own OS process and its own connection pool/handle — poll the same database
@@ -204,8 +205,7 @@ for (const backend of backends) {
         const deadline = Date.now() + SETTLE_MS;
         let allDone = false;
         while (Date.now() < deadline) {
-          const { data } = await api.GET("/instances");
-          const insts = (data ?? []).filter(byProcess);
+          const insts = (await listAllInstances(api)).filter(byProcess);
           const byId = new Map(insts.map((i) => [i.id, i]));
 
           let rootsCompleted = true;
@@ -231,8 +231,7 @@ for (const backend of backends) {
 
         // Final state: no instance stuck, every root green, every surviving tree
         // aggregated to its exact size (exactly-once under contention).
-        const { data: finalAll } = await api.GET("/instances");
-        const finalInsts = (finalAll ?? []).filter(byProcess);
+        const finalInsts = (await listAllInstances(api)).filter(byProcess);
         expect(finalInsts.every((i) => isTerminal(i.status))).toBe(true);
 
         for (const id of rootIds) {
