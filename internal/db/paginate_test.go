@@ -60,26 +60,25 @@ func TestBuildSQL(t *testing.T) {
 	if want := "SELECT " + cols + " FROM process_instances ORDER BY created_at DESC, id DESC LIMIT ?"; b.pageSQL != want {
 		t.Errorf("pageSQL:\n got %q\nwant %q", b.pageSQL, want)
 	}
-	if !argsEqual(b.pageArgs, []any{int64(200)}) {
-		t.Errorf("pageArgs = %v, want [200]", b.pageArgs)
+	if !argsEqual(b.pageArgs, []any{int64(20)}) {
+		t.Errorf("pageArgs = %v, want [20]", b.pageArgs)
 	}
 
-	// Count with no page boundaries (empty page): total + two zero columns.
+	// Count with no page boundaries (empty page): both sides are literal 0.
 	csql, cargs := b.countQuery(nil, nil)
-	if csql != "SELECT COUNT(*), 0, 0 FROM process_instances" {
+	if csql != "SELECT 0, 0" {
 		t.Errorf("countQuery (no bounds) = %q", csql)
 	}
 	if !argsEqual(cargs, nil) {
 		t.Errorf("count args = %v, want []", cargs)
 	}
 
-	// Count with boundaries: before-the-first / after-the-last CASE sums (desc
-	// display → before uses >, after uses <), args before-then-after.
+	// Count with boundaries: two bounded subqueries — before-the-first (desc → >)
+	// and after-the-last (desc → <), each capped via LIMIT; args before-then-after.
 	csql, cargs = b.countQuery([]any{int64(1000), "a"}, []any{int64(500), "b"})
-	wantCount := "SELECT COUNT(*), " +
-		"COALESCE(SUM(CASE WHEN ((created_at > ?) OR (created_at = ? AND id > ?)) THEN 1 ELSE 0 END), 0), " +
-		"COALESCE(SUM(CASE WHEN ((created_at < ?) OR (created_at = ? AND id < ?)) THEN 1 ELSE 0 END), 0) " +
-		"FROM process_instances"
+	wantCount := "SELECT " +
+		"(SELECT COUNT(*) FROM (SELECT 1 FROM process_instances WHERE ((created_at > ?) OR (created_at = ? AND id > ?)) LIMIT 1001) c), " +
+		"(SELECT COUNT(*) FROM (SELECT 1 FROM process_instances WHERE ((created_at < ?) OR (created_at = ? AND id < ?)) LIMIT 1001) c)"
 	if csql != wantCount {
 		t.Errorf("countQuery:\n got %q\nwant %q", csql, wantCount)
 	}
@@ -105,12 +104,14 @@ func TestBuildSQL(t *testing.T) {
 	if !argsEqual(b.pageArgs, []any{"running", int64(1000), int64(1000), "id-x", int64(10)}) {
 		t.Errorf("pageArgs = %v", b.pageArgs)
 	}
-	csql, cargs = b.countQuery(nil, nil)
-	if csql != "SELECT COUNT(*), 0, 0 FROM process_instances WHERE status = ?" {
-		t.Errorf("count = %q", csql)
+	// The count's inner keeps the filter and prepends it before the keyset args.
+	csql, cargs = b.countQuery([]any{int64(5), "z"}, nil)
+	if csql != "SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM process_instances "+
+		"WHERE status = ? AND ((created_at > ?) OR (created_at = ? AND id > ?)) LIMIT 1001) c), 0" {
+		t.Errorf("filtered count = %q", csql)
 	}
-	if !argsEqual(cargs, []any{"running"}) {
-		t.Errorf("count args = %v, want [running]", cargs)
+	if !argsEqual(cargs, []any{"running", int64(5), int64(5), "z"}) {
+		t.Errorf("filtered count args = %v", cargs)
 	}
 
 	// baseWhere stays a literal so Postgres matches the partial index.
@@ -118,8 +119,9 @@ func TestBuildSQL(t *testing.T) {
 	if !strings.Contains(b.pageSQL, "WHERE wait_state = 'external'") {
 		t.Errorf("external pageSQL missing literal baseWhere: %q", b.pageSQL)
 	}
-	if !strings.Contains(b.countSource, "WHERE wait_state = 'external'") {
-		t.Errorf("external countSource missing literal baseWhere: %q", b.countSource)
+	ecount, _ := b.countQuery([]any{int64(1), "x"}, nil)
+	if !strings.Contains(ecount, "wait_state = 'external' AND") {
+		t.Errorf("external count missing literal baseWhere: %q", ecount)
 	}
 
 	// Backward paging flips the scan to ASC (orient reverses the slice back).

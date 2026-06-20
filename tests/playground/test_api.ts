@@ -11,7 +11,7 @@ async function getAll() {
     response.data?.items?.forEach(({ id, created_at }) =>
       console.log(id, created_at),
     );
-    cursor = response.data?.page.next_cursor;
+    cursor = response.data?.page.after;
   } while (cursor);
 }
 

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { client, startMockService, waitForInstance } from "../helpers/client.ts";
+import { client, listAllInstances, startMockService, waitForInstance } from "../helpers/client.ts";
 
 test("child — task without result_schema after a task with one does not fail", async () => {
   const id = crypto.randomUUID();
@@ -345,9 +345,9 @@ test("child_parallel — recursive spawn completes with correct aggregated outpu
 
   expect(await waitForInstance(id, 10_000)).toBe("completed");
 
-  // ttl=2: 1 root + 2 children (ttl=1) + 4 grandchildren (ttl=0) = 7 instances
-  const { data: allInstances } = await client.GET("/instances");
-  const spawned = (allInstances?.items ?? []).filter((i) => i.process === processName);
+  // ttl=2: 1 root + 2 children (ttl=1) + 4 grandchildren (ttl=0) = 7 instances.
+  // Page through (default limit is now 20 and other tests add instances concurrently).
+  const spawned = (await listAllInstances()).filter((i) => i.process === processName);
   expect(spawned).toHaveLength(7);
   expect(spawned.every((i) => i.status === "completed")).toBe(true);
 

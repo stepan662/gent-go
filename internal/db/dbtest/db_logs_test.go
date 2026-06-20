@@ -109,19 +109,16 @@ func TestListLogs_CursorPagination(t *testing.T) {
 			if len(page1) != 2 {
 				t.Fatalf("page1: want 2, got %d", len(page1))
 			}
-			if info1.TotalItems != 5 {
-				t.Errorf("total_items = %d, want 5", info1.TotalItems)
-			}
-			// 5 total, page of 2: 0 before, 3 after.
+			// 5 rows total, page of 2: 0 before, 3 after.
 			if info1.ItemsBefore != 0 || info1.ItemsAfter != 3 {
 				t.Errorf("page1 position: before=%d after=%d, want 0/3", info1.ItemsBefore, info1.ItemsAfter)
 			}
-			if info1.NextCursor == "" {
-				t.Fatal("page1: expected a next cursor")
+			if info1.After == "" {
+				t.Fatal("page1: expected an after cursor")
 			}
 			last := page1[len(page1)-1]
 			page2, info2, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{
-				Page: dbpkg.PageReq{Limit: 2, After: info1.NextCursor},
+				Page: dbpkg.PageReq{Limit: 2, After: info1.After},
 			})
 			if err != nil {
 				t.Fatalf("page2: %v", err)
@@ -139,7 +136,7 @@ func TestListLogs_CursorPagination(t *testing.T) {
 			}
 			// Page backward from page2 returns page1's rows again.
 			back, _, err := b.db.ListLogs("inst-1", dbpkg.LogQuery{
-				Page: dbpkg.PageReq{Limit: 2, Before: info2.PreviousCursor},
+				Page: dbpkg.PageReq{Limit: 2, Before: info2.Before},
 			})
 			if err != nil {
 				t.Fatalf("back: %v", err)
@@ -190,7 +187,7 @@ func TestListLogs_CursorTiebreaker(t *testing.T) {
 				if info.ItemsAfter == 0 {
 					break
 				}
-				after = info.NextCursor
+				after = info.After
 			}
 			if len(collected) != n {
 				t.Fatalf("collected %d ids, want %d (no skips/dupes)", len(collected), n)

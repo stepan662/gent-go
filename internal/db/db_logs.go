@@ -33,8 +33,8 @@ var logPaginator = paginator{
 	},
 	defSort:  "created",
 	defDesc:  false, // oldest first
-	defLimit: 200,
-	maxLimit: 1000,
+	defLimit: 20,
+	maxLimit: 100,
 }
 
 func logCursorVals(_ string, e *model.LogEntry) []any {
@@ -85,8 +85,8 @@ const logColumns = `pl.id, pl.instance_id, pl.level, pl.event, pl.task_id, pl.me
 // logSubtreeCTE walks process_instances.parent_id from a seed id (the single ?
 // placeholder) down, tagging each node with its depth from the seed. Hand-written
 // because sqlc's SQLite grammar can't parse WITH RECURSIVE; both runtime drivers
-// support it. treeLogsPrefix is the page SELECT; treeLogsCountLeading/From are the
-// count's two halves (the agg list is spliced between them by countQuery).
+// support it. treeLogsPrefix is the page SELECT; treeLogsCountInner is the count's
+// inner row source (one row per matching log) the paginator wraps in COUNT(*).
 const logSubtreeCTE = `
 WITH RECURSIVE subtree(id, depth) AS (
     SELECT id, 0 FROM process_instances WHERE id = ?
@@ -101,8 +101,8 @@ JOIN subtree st ON st.id = pl.instance_id`
 const treeLogsPrefix = logSubtreeCTE + `
 SELECT ` + logColumns + `, st.depth` + treeLogsJoin
 
-const treeLogsCountLeading = logSubtreeCTE + `
-SELECT `
+const treeLogsCountInner = logSubtreeCTE + `
+SELECT 1` + treeLogsJoin
 
 // ListLogs returns a page of one instance's audit trail, applying the filters and
 // pagination in opts, plus the navigation metadata.
@@ -140,7 +140,7 @@ func (db *DB) ListTreeLogs(rootID string, opts LogQuery) ([]*model.LogEntry, Pag
 	b, err := logPaginator.query(opts.Page).
 		EqIf("pl.level", opts.Level, opts.Level != "").
 		GteIf("pl.created_at", opts.Since, opts.Since > 0).
-		buildSource(treeLogsPrefix, treeLogsCountLeading, treeLogsJoin, []any{rootID})
+		buildSource(treeLogsPrefix, treeLogsCountInner, []any{rootID})
 	if err != nil {
 		return nil, PageInfo{}, err
 	}

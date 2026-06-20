@@ -13,10 +13,10 @@ type PostClient = Pick<typeof client, "POST">;
 
 type InstanceQuery = NonNullable<paths["/instances"]["get"]["parameters"]["query"]>;
 
-// listAllInstances pages forward through GET /instances, following
-// page.next_cursor until it is absent, and returns every matching instance.
-// List endpoints now cap a page (default/cap 1000), so callers that need the whole
-// set must page rather than read a single response.
+// listAllInstances pages forward through GET /instances, following page.after
+// until it is absent, and returns every matching instance. List endpoints now cap
+// a page (default/cap 1000), so callers that need the whole set must page rather
+// than read a single response.
 export async function listAllInstances(
   apiClient: ApiClient = client,
   query: Pick<InstanceQuery, "status"> = {},
@@ -29,7 +29,7 @@ export async function listAllInstances(
     });
     if (error) throw new Error(`list instances failed: ${JSON.stringify(error)}`);
     all.push(...(data?.items ?? []));
-    after = data?.page.next_cursor || undefined;
+    after = data?.page.after || undefined;
     if (!after) return all;
   }
 }

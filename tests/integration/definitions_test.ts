@@ -24,8 +24,8 @@ test("PUT /definitions — registers a new definition", async () => {
 test("GET /definitions — lists registered definitions", async () => {
   await client.PUT("/definitions", { body: validDef });
 
-  // The list is paginated, so page through (following page.next_cursor) to find
-  // the freshly registered definition rather than assuming it's on the first page.
+  // The list is paginated, so page through (following page.after) to find the
+  // freshly registered definition rather than assuming it's on the first page.
   let found = false;
   let after: string | undefined;
   do {
@@ -37,7 +37,7 @@ test("GET /definitions — lists registered definitions", async () => {
       found = true;
       break;
     }
-    after = data!.page.next_cursor || undefined;
+    after = data!.page.after || undefined;
   } while (after);
   expect(found).toBe(true);
 });

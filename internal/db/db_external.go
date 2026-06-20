@@ -25,8 +25,8 @@ var externalPaginator = paginator{
 	},
 	defSort:  "updated",
 	defDesc:  false,
-	defLimit: 200,
-	maxLimit: 1000,
+	defLimit: 20,
+	maxLimit: 100,
 }
 
 // ListExternalTasks returns a page of instances parked on an external task,

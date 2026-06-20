@@ -463,14 +463,14 @@ func callGet(url string, out any) error {
 type page[T any] struct {
 	Items []T `json:"items"`
 	Page  struct {
-		NextCursor string `json:"next_cursor"`
+		After string `json:"after"`
 	} `json:"page"`
 }
 
-// listAll fetches every page of a list endpoint, following page.next_cursor until
-// it is absent (set only while more rows remain), and returns the concatenated
-// items. base is the request URL without an after cursor (it may already carry
-// other query params).
+// listAll fetches every page of a list endpoint, following page.after until it is
+// absent (set only while more rows remain), and returns the concatenated items.
+// base is the request URL without an after cursor (it may already carry other
+// query params).
 func listAll[T any](base string) ([]T, error) {
 	var all []T
 	after := ""
@@ -488,10 +488,10 @@ func listAll[T any](base string) ([]T, error) {
 			return nil, err
 		}
 		all = append(all, p.Items...)
-		if p.Page.NextCursor == "" {
+		if p.Page.After == "" {
 			return all, nil
 		}
-		after = p.Page.NextCursor
+		after = p.Page.After
 	}
 }
 

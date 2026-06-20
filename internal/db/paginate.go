@@ -5,8 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
+
+// pageCountCap bounds how far the before/after counts scan: each is counted up to
+// pageCountCap+1 rows, so the work per count is bounded regardless of table size. A
+// reported count of pageCountCap+1 therefore means "more than pageCountCap" (the UI
+// renders it as e.g. "1000+").
+const pageCountCap = 1000
 
 // Bidirectional keyset (cursor) pagination shared by every list endpoint.
 //
@@ -16,15 +23,15 @@ import (
 // columns, the index-backed sortable columns, and the filterable columns), adds
 // filters by column+value through typed methods, and calls build(). The builder
 // emits the whole page query (`SELECT … FROM … WHERE … ORDER BY … LIMIT ?`) plus a
-// matching `SELECT COUNT(*)` for the total. Column names and operators come only
-// from the paginator's whitelists; every caller value is a bound ? placeholder, so
-// there is no injection surface. ? runs through db.exec, which rewrites it to $N on
-// Postgres, so one statement works on both engines with no dialect branch.
+// cheap count of the rows before / after the page (two subqueries each bounded by
+// LIMIT pageCountCap+1). Column names and operators come only from the paginator's
+// whitelists; every caller value is a bound ? placeholder, so there is no injection
+// surface. ? runs through db.exec, which rewrites it to $N on Postgres, so one
+// statement works on both engines with no dialect branch.
 //
 // Navigation is bidirectional: `After` pages forward, `Before` pages backward
-// (scanned in reverse, then flipped back to display order). Each page reports
-// total_items (a separate COUNT), has_next/has_previous, and the cursors to move
-// either way.
+// (scanned in reverse, then flipped back to display order). Each page reports the
+// (capped) items_before/items_after counts and the cursors to move either way.
 
 // colKind tells the cursor codec how to decode a key column's value.
 type colKind int
@@ -86,36 +93,40 @@ type PageReq struct {
 	Before string
 }
 
-// PageInfo is the navigation metadata returned alongside a page of items.
-// ItemsBefore/ItemsAfter are the counts outside the page in display order, so the
-// caller can render "showing N–M of total". NextCursor/PreviousCursor are set only
-// in a direction that has more rows (NextCursor iff ItemsAfter>0, PreviousCursor
-// iff ItemsBefore>0), so cursor presence is itself the has-more signal and a
-// page-to-end loop terminates when the cursor is absent.
+// PageInfo is the navigation metadata returned alongside a page of items. Sort and
+// Order echo the effective sort key and direction (so a caller sees what the
+// defaults resolved to). ItemsBefore/ItemsAfter are how many rows fall outside the
+// page in display order, each counted up to pageCountCap+1 — a value of
+// pageCountCap+1 means "more than that" (render as "1000+"). After/Before are the
+// cursors to pass back as ?after / ?before; each is set only in a direction that
+// has more rows (After iff ItemsAfter>0, Before iff ItemsBefore>0), so cursor
+// presence is itself the has-more signal and a page-to-end loop ends when After is
+// absent.
 type PageInfo struct {
-	Size           int    `json:"size"`
-	TotalItems     int64  `json:"total_items"`
-	ItemsBefore    int64  `json:"items_before"`
-	ItemsAfter     int64  `json:"items_after"`
-	NextCursor     string `json:"next_cursor,omitempty"`
-	PreviousCursor string `json:"previous_cursor,omitempty"`
+	Size        int    `json:"size"`
+	ItemsBefore int64  `json:"items_before"`
+	ItemsAfter  int64  `json:"items_after"`
+	Sort        string `json:"sort"`
+	Order       string `json:"order"`
+	After       string `json:"after,omitempty"`
+	Before      string `json:"before,omitempty"`
 }
 
 // built is the assembled, ready-to-run plan for one request: the page statement
-// plus the scaffolding countQuery needs to assemble the combined count (the agg
-// list is injected between countLeading and countSource once the page's boundary
-// rows are known) and the context orient needs to flip a backward page.
+// plus the scaffolding countQuery needs to assemble the two capped before/after
+// counts (once the page's boundary rows are known) and the context orient needs to
+// flip a backward page.
 type built struct {
 	pageSQL  string
 	pageArgs []any
 
-	// Count scaffolding. The final count is:
-	//   countLeading + "<aggs>" + countSource
-	// with args countPrefixArgs + <agg args> + countFilterArgs (matching the
-	// placeholder order: any CTE seed in countLeading, then the agg CASE values in
-	// the SELECT list, then the filter values in countSource's WHERE).
-	countLeading    string // "[<CTE>] SELECT " — everything up to the agg list
-	countSource     string // " FROM <source> [WHERE <filters>]" — after the agg list
+	// Count scaffolding. Each side's count is a bounded subquery:
+	//   SELECT COUNT(*) FROM (countInner WHERE <countConds AND keyset> LIMIT cap+1)
+	// countInner is "[<CTE>] SELECT 1 FROM <source>"; countConds is baseWhere +
+	// filters (the cursor keyset is appended per direction). Args order per side:
+	// countPrefixArgs (CTE seed), countFilterArgs (the filters), then keyset args.
+	countInner      string
+	countConds      []string
 	countPrefixArgs []any
 	countFilterArgs []any
 
@@ -178,28 +189,25 @@ func (q *listQuery) cond(col, op string, value any) *listQuery {
 }
 
 // build assembles the page + count plan for the paginator's own table:
-// "SELECT <columns> FROM <table>" for the page and "SELECT <aggs> FROM <table>"
-// for the count.
+// "SELECT <columns> FROM <table>" for the page and "SELECT 1 FROM <table>" as the
+// count inner source.
 func (q *listQuery) build() (built, error) {
 	return q.buildSource(
 		"SELECT "+q.pg.columns+" FROM "+q.pg.table,
-		"SELECT ",
-		" FROM "+q.pg.table,
+		"SELECT 1 FROM "+q.pg.table,
 		nil,
 	)
 }
 
 // buildSource is build for callers needing a custom static prefix (e.g. a
-// recursive CTE). All three fragments are TRUSTED constants:
-//   - pagePrefix:   "[<CTE>] SELECT <cols> FROM <source>" (the page query, before WHERE)
-//   - countLeading: "[<CTE>] SELECT " (the count, up to its agg list)
-//   - countFrom:    " FROM <source>" (the count, after its agg list, before WHERE)
+// recursive CTE). Both source fragments are TRUSTED constants:
+//   - pagePrefix: "[<CTE>] SELECT <cols> FROM <source>" (the page query, before WHERE)
+//   - countInner: "[<CTE>] SELECT 1 FROM <source>"      (one row per match, for counting)
 //
-// prefixArgs bind any ? in the CTE (shared by both queries) and are placed first.
-// The generated WHERE / ORDER BY / LIMIT is appended to the page; the count's
-// WHERE (filters only, never the cursor predicate) is baked into countSource so
-// countQuery can later splice the agg list in the middle.
-func (q *listQuery) buildSource(pagePrefix, countLeading, countFrom string, prefixArgs []any) (built, error) {
+// prefixArgs bind any ? in the CTE (shared by the page and both count subqueries)
+// and are placed first. The page gets WHERE/ORDER BY/LIMIT appended; the count
+// scaffolding (countInner + the shared filter conds) is stashed for countQuery.
+func (q *listQuery) buildSource(pagePrefix, countInner string, prefixArgs []any) (built, error) {
 	if q.err != nil {
 		return built{}, q.err
 	}
@@ -242,8 +250,8 @@ func (q *listQuery) buildSource(pagePrefix, countLeading, countFrom string, pref
 		cmp, dir = "<", "DESC"
 	}
 
-	// WHERE: baseWhere + filters (shared by count), then the cursor predicate (page
-	// only — the count must reflect the grand total, not the post-cursor remainder).
+	// WHERE: baseWhere + filters (shared by the count subqueries), then the cursor
+	// predicate (page only — the count's own keyset is added per direction).
 	conds := make([]string, 0, len(q.conds)+2)
 	if pg.baseWhere != "" {
 		conds = append(conds, pg.baseWhere)
@@ -278,8 +286,8 @@ func (q *listQuery) buildSource(pagePrefix, countLeading, countFrom string, pref
 	return built{
 		pageSQL:         pageSQL,
 		pageArgs:        pageArgs,
-		countLeading:    countLeading,
-		countSource:     countFrom + whereClause(countConds),
+		countInner:      countInner,
+		countConds:      countConds,
 		countPrefixArgs: prefixArgs,
 		countFilterArgs: q.args,
 		mode:            mode,
@@ -290,35 +298,36 @@ func (q *listQuery) buildSource(pagePrefix, countLeading, countFrom string, pref
 	}, nil
 }
 
-// countQuery assembles the combined count over the filtered set: the grand total,
-// the number of rows strictly before the first row, and strictly after the last
-// row — both in display order. first/last are the page's boundary key values (nil
-// for an empty page → only the total is counted). One scan yields all three.
+// countQuery assembles the before/after counts as two bounded subqueries — how
+// many rows fall strictly before the first row and strictly after the last row, in
+// display order, each counted up to pageCountCap+1 (the LIMIT bounds the scan). It
+// returns one statement yielding (before, after). first/last are the page's
+// boundary key values; nil (empty page) makes that side a literal 0.
 func (b built) countQuery(first, last []any) (string, []any) {
 	// "before the first row" / "after the last row" in display order.
 	beforeCmp, afterCmp := "<", ">"
 	if b.desc {
 		beforeCmp, afterCmp = ">", "<"
 	}
-	aggs := []string{"COUNT(*)"}
-	var aggArgs []any
-	addAgg := func(vals []any, cmp string) {
+	cap1 := strconv.Itoa(pageCountCap + 1)
+	side := func(vals []any, cmp string) (string, []any) {
 		if len(vals) == 0 {
-			aggs = append(aggs, "0")
-			return
+			return "0", nil
 		}
-		pred, args := keysetPredicate(b.mode, cmp, vals)
-		aggs = append(aggs, "COALESCE(SUM(CASE WHEN "+pred+" THEN 1 ELSE 0 END), 0)")
-		aggArgs = append(aggArgs, args...)
+		pred, predArgs := keysetPredicate(b.mode, cmp, vals)
+		conds := append(append([]string(nil), b.countConds...), pred)
+		inner := b.countInner + whereClause(conds) + " LIMIT " + cap1
+		args := make([]any, 0, len(b.countPrefixArgs)+len(b.countFilterArgs)+len(predArgs))
+		args = append(args, b.countPrefixArgs...)
+		args = append(args, b.countFilterArgs...)
+		args = append(args, predArgs...)
+		return "(SELECT COUNT(*) FROM (" + inner + ") c)", args
 	}
-	addAgg(first, beforeCmp)
-	addAgg(last, afterCmp)
+	beforeExpr, beforeArgs := side(first, beforeCmp)
+	afterExpr, afterArgs := side(last, afterCmp)
 
-	sql := b.countLeading + strings.Join(aggs, ", ") + b.countSource
-	args := make([]any, 0, len(b.countPrefixArgs)+len(aggArgs)+len(b.countFilterArgs))
-	args = append(args, b.countPrefixArgs...)
-	args = append(args, aggArgs...)
-	args = append(args, b.countFilterArgs...)
+	sql := "SELECT " + beforeExpr + ", " + afterExpr
+	args := append(beforeArgs, afterArgs...)
 	return sql, args
 }
 

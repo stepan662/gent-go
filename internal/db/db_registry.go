@@ -145,8 +145,8 @@ var definitionPaginator = paginator{
 	},
 	defSort:  "name",
 	defDesc:  false,
-	defLimit: 200,
-	maxLimit: 1000,
+	defLimit: 20,
+	maxLimit: 100,
 }
 
 func definitionCursorVals(sort string, vd VersionedDef) []any {
@@ -336,8 +336,8 @@ var channelPaginator = paginator{
 	},
 	defSort:  "channel",
 	defDesc:  false,
-	defLimit: 200,
-	maxLimit: 1000,
+	defLimit: 20,
+	maxLimit: 100,
 }
 
 func channelCursorVals(sort string, r ChannelRow) []any {

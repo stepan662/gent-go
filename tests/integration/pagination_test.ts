@@ -34,7 +34,7 @@ beforeAll(async () => {
 type Item = { id: string; process: string; created_at: string };
 type Query = { sort?: string; order?: "asc" | "desc"; limit?: number };
 
-// walk pages forward following page.next_cursor until it is absent: the final
+// walk pages forward following page.after until it is absent: the final
 // page, until maxPages, or — when `until` is given — once every id in it has been
 // seen.
 async function walk(
@@ -57,23 +57,25 @@ async function walk(
       remaining?.delete(it.id);
     }
     if (remaining && remaining.size === 0) break;
-    if (!data!.page.next_cursor) break; // absent once no rows remain after
-    after = data!.page.next_cursor;
+    if (!data!.page.after) break; // absent once no rows remain after
+    after = data!.page.after;
   }
   return { items, pages };
 }
 
-test("page object reports total and position", async () => {
+test("page object reports position", async () => {
   const { data, error } = await client.GET("/instances", { params: { query: { limit: 2 } } });
   expect(error).toBeUndefined();
   const page = data!.page;
   expect(page.size).toBe(2);
-  expect(page.total_items).toBeGreaterThanOrEqual(N); // at least our instances
   expect(page.items_before).toBe(0); // first page
   expect(page.items_after).toBeGreaterThan(0); // far more than 2 rows exist
-  // Cursor present only in a direction with more rows: first page → next only.
-  expect(page.next_cursor).toBeTruthy();
-  expect(page.previous_cursor).toBeFalsy();
+  // The effective sort/order is echoed back (resolved from the endpoint defaults).
+  expect(page.sort).toBe("created");
+  expect(page.order).toBe("desc");
+  // Cursor present only in a direction with more rows: first page → after only.
+  expect(page.after).toBeTruthy();
+  expect(page.before).toBeFalsy();
   expect((data!.items ?? []).length).toBeLessThanOrEqual(2);
 });
 
@@ -93,14 +95,14 @@ test("paging forward then backward returns the original page", async () => {
   const firstIds = (p1.data!.items ?? []).map((i) => i.id);
 
   const p2 = await client.GET("/instances", {
-    params: { query: { limit: 2, after: p1.data!.page.next_cursor } },
+    params: { query: { limit: 2, after: p1.data!.page.after } },
   });
   expect(p2.error).toBeUndefined();
-  expect(p2.data!.page.previous_cursor).toBeTruthy();
+  expect(p2.data!.page.before).toBeTruthy();
 
   // Step back from page 2 → exactly page 1, in the same order.
   const back = await client.GET("/instances", {
-    params: { query: { limit: 2, before: p2.data!.page.previous_cursor } },
+    params: { query: { limit: 2, before: p2.data!.page.before } },
   });
   expect(back.error).toBeUndefined();
   expect((back.data!.items ?? []).map((i) => i.id)).toEqual(firstIds);
@@ -124,7 +126,7 @@ test("a cursor is rejected when reused under a different direction", async () =>
   // rejected — the cursor carries the sort+direction it was issued for.
   const first = await client.GET("/instances", { params: { query: { limit: 1 } } });
   expect(first.error).toBeUndefined();
-  const after = first.data!.page.next_cursor;
+  const after = first.data!.page.after;
   expect(after).toBeTruthy();
 
   const reused = await client.GET("/instances", {

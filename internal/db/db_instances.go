@@ -23,8 +23,8 @@ var instancePaginator = paginator{
 	filterCols: []string{"status"},
 	defSort:    "created",
 	defDesc:    true, // newest first, preserving the previous fixed order
-	defLimit:   200,
-	maxLimit:   1000,
+	defLimit:   20,
+	maxLimit:   100,
 }
 
 // instanceCursorVals returns the active sort mode's key-column values for inst,
@@ -177,7 +177,7 @@ func (db *DB) GetInstance(id string) (*model.ProcessInstance, error) {
 
 // ListInstances returns a page of instances, optionally filtered by status
 // (empty = all), sorted and paged per req. It returns the page items and the
-// navigation metadata (total, has-next/prev, cursors).
+// navigation metadata (before/after counts and cursors).
 func (db *DB) ListInstances(status string, req PageReq) ([]*model.ProcessInstance, PageInfo, error) {
 	b, err := instancePaginator.query(req).EqIf("status", status, status != "").build()
 	if err != nil {

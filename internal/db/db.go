@@ -110,27 +110,37 @@ func open(sqldb *sql.DB, dialect string) (*DB, error) {
 
 func (db *DB) Close() error { return db.sqldb.Close() }
 
-// pageInfo runs the paginator's combined count for a page whose boundary key
+// pageInfo runs the paginator's before/after counts for a page whose boundary key
 // values are first/last (in display order; nil for an empty page) and assembles
-// the PageInfo: total/before/after counts plus a cursor for each direction that
-// actually has more rows (PreviousCursor only when there are rows before,
-// NextCursor only when there are rows after — so cursor presence is the has-more
-// signal).
+// the PageInfo: the effective sort/order, the (capped) before/after counts, and a
+// cursor for each direction that actually has more rows (Before only when there
+// are rows before, After only when there are rows after — so cursor presence is
+// the has-more signal).
 func (db *DB) pageInfo(b built, first, last []any) (PageInfo, error) {
 	query, args := b.countQuery(first, last)
-	var total, before, after int64
-	if err := db.exec.QueryRowContext(context.Background(), query, args...).Scan(&total, &before, &after); err != nil {
+	var before, after int64
+	if err := db.exec.QueryRowContext(context.Background(), query, args...).Scan(&before, &after); err != nil {
 		return PageInfo{}, err
 	}
-	info := PageInfo{Size: b.limit, TotalItems: total, ItemsBefore: before, ItemsAfter: after}
+	order := "asc"
+	if b.desc {
+		order = "desc"
+	}
+	info := PageInfo{
+		Size:        b.limit,
+		ItemsBefore: before,
+		ItemsAfter:  after,
+		Sort:        b.sort,
+		Order:       order,
+	}
 	var err error
 	if before > 0 {
-		if info.PreviousCursor, err = encodeCursor(b.sort, b.desc, b.mode, first); err != nil {
+		if info.Before, err = encodeCursor(b.sort, b.desc, b.mode, first); err != nil {
 			return PageInfo{}, err
 		}
 	}
 	if after > 0 {
-		if info.NextCursor, err = encodeCursor(b.sort, b.desc, b.mode, last); err != nil {
+		if info.After, err = encodeCursor(b.sort, b.desc, b.mode, last); err != nil {
 			return PageInfo{}, err
 		}
 	}
