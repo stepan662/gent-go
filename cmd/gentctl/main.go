@@ -9,7 +9,7 @@
 //	gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...]
 //	gentctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
 //	gentctl get      <instance-id> [--json]
-//	gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] [--payload-chars <n>] <instance-id>
+//	gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] [--mode basic|detail|json] <instance-id>
 //	gentctl cancel   <instance-id>
 //	gentctl retry    [--force] <instance-id>
 //	gentctl channel list   <process>
@@ -33,12 +33,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"gent/internal/logview"
 	"gopkg.in/yaml.v3"
 )
 
@@ -472,16 +472,20 @@ func runInstancesCmd(server string, args []string) {
 func runLogsCmd(server string, args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
-	levelFlag := fs.String("level", "", "filter by level (debug, info, warn, error)")
+	levelFlag := fs.String("level", "", "filter by level (debug, info, warn, error); empty = all")
 	sinceFlag := fs.Int64("since", 0, "only logs at/after this unix-millis timestamp")
 	limitFlag := fs.Int("limit", 200, "max entries to return")
 	treeFlag := fs.Bool("tree", false, "include the whole process subtree (root instance id)")
-	payloadCharsFlag := fs.Int("payload-chars", 120, "max chars of task input/result shown per line (0 = no limit, -1 = hide)")
+	modeFlag := fs.String("mode", "detail", "output: basic (no data body), detail (+ data), or json (one JSON object per line, untruncated)")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		fatal("usage: gentctl logs [--level L] [--since MS] [--limit N] [--tree] [--payload-chars N] <instance-id>")
+		fatal("usage: gentctl logs [--level L] [--since MS] [--limit N] [--tree] [--mode basic|detail|json] <instance-id>")
 	}
 	id := fs.Arg(0)
+	mode, err := logview.ParseMode(*modeFlag)
+	if err != nil {
+		fatal("%v", err)
+	}
 
 	q := url.Values{}
 	if *levelFlag != "" {
@@ -501,10 +505,25 @@ func runLogsCmd(server string, args []string) {
 		u += "?" + enc
 	}
 
+	// json mode dumps each entry as the server's JSON, one per line (JSONL):
+	// everything, untruncated, pipe-friendly (jq).
+	if mode == logview.ModeJSON {
+		var raw struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		if err := callGet(u, &raw); err != nil {
+			fatal("%v", err)
+		}
+		for _, it := range raw.Items {
+			os.Stdout.Write(it)
+			os.Stdout.Write([]byte("\n"))
+		}
+		return
+	}
+
 	type logRow struct {
 		Time     string         `json:"time"`
 		Instance string         `json:"instance"`
-		Depth    int            `json:"depth"`
 		Level    string         `json:"level"`
 		Event    string         `json:"event"`
 		Task     string         `json:"task"`
@@ -520,56 +539,24 @@ func runLogsCmd(server string, args []string) {
 	if err := callGet(u, &resp); err != nil {
 		fatal("%v", err)
 	}
-	// Render as aligned columns: TIME · LEVEL · EVENT · TASK · [ID] · MESSAGE ·
-	// DATA. tabwriter pads each column to its widest cell, so even with tree
-	// indentation (folded into the first cell) every later column lines up; the
-	// payload (DATA) is last and the only unpadded cell, so a long value never pushes
-	// the columns around. Trailing empty cells are dropped so rows end cleanly.
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	for _, l := range resp.Items {
-		// In tree mode, indent the first cell by the instance's depth in the subtree
-		// (capped) and tag the row with a short, distinguishing instance id so the
-		// chronological stream still reads as a tree.
-		indent := ""
-		if *treeFlag {
-			depth := l.Depth
-			if depth > 12 {
-				depth = 12
-			}
-			indent = strings.Repeat("  ", depth)
-		}
-		task := ""
-		if l.Task != "" {
-			task = "task=" + l.Task
-		}
-		// Fold the small classifiers — code (errors) and the structured meta (url /
-		// status) — into the message cell rather than spend columns that are empty on
-		// most rows. data (the body) stays its own trailing column.
-		msg := l.Message
-		if l.Code != "" {
-			msg = strings.TrimSpace(msg + " code=" + l.Code)
-		}
-		if m := formatMeta(l.Meta); m != "" {
-			msg = strings.TrimSpace(msg + " " + m)
-		}
-		data := ""
-		if *payloadCharsFlag >= 0 && l.Data != "" {
-			data = payloadLabel(l.Event) + "=" + clip(l.Data, *payloadCharsFlag)
-		}
-
-		cells := []string{indent + logTime(l.Time), strings.ToUpper(l.Level), l.Event, task}
-		if *treeFlag {
-			cells = append(cells, "["+shortID(l.Instance)+"]")
-		}
-		cells = append(cells, msg, data)
-		// Drop trailing empties so a row without a message/payload ends at its last
-		// real cell (tabwriter only pads tab-terminated cells, keeping columns aligned).
-		for len(cells) > 0 && cells[len(cells)-1] == "" {
-			cells = cells[:len(cells)-1]
-		}
-		fmt.Fprintln(w, strings.Join(cells, "\t"))
+	if len(resp.Items) == 0 {
+		return
 	}
-	w.Flush()
+
+	// Render via the shared logview column layout — the same one the server console
+	// uses, so a row reads identically in either place. The CLI adds a header (it has
+	// the whole page) and shows the ID column only with --tree (a single-instance view
+	// repeats one id). The data body is shown only in detail mode.
+	fmt.Println(logview.Header(*treeFlag))
+	for _, l := range resp.Items {
+		t, _ := parseTime(l.Time)
+		rec := logview.Record{Event: l.Event, Task: l.Task, Msg: l.Message, Code: l.Code, Data: l.Data, Meta: l.Meta}
+		idTag := ""
+		if *treeFlag {
+			idTag = shortID(l.Instance)
+		}
+		fmt.Println(logview.RenderEvent(t, l.Level, idTag, l.Event, l.Task, rec.Detail(mode), *treeFlag))
+	}
 }
 
 // shortID returns a compact, distinguishing tag for an instance id in tree-log
@@ -581,74 +568,6 @@ func shortID(id string) string {
 		return id[len(id)-6:]
 	}
 	return id
-}
-
-// payloadLabel names a log entry's data field for display, based on the event that
-// produced it: a process/task input, a task result, or the process output. The
-// value itself is a (possibly truncation-cropped) JSON string stored raw.
-func payloadLabel(event string) string {
-	switch event {
-	case "instance_created":
-		return "input"
-	case "action_started":
-		return "request" // the request body sent to the action
-	case "action_succeeded":
-		return "result" // the action's response body
-	case "action_failed":
-		return "error" // the action's error body
-	case "instance_completed":
-		return "output"
-	default:
-		return "data"
-	}
-}
-
-// formatMeta renders a log entry's structured meta as space-joined key=value pairs
-// (keys sorted for stable output), e.g. "url=http://x" or "status=200".
-func formatMeta(meta map[string]any) string {
-	if len(meta) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(meta))
-	for k := range meta {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+formatMetaVal(meta[k]))
-	}
-	return strings.Join(parts, " ")
-}
-
-// formatMetaVal renders a JSON-decoded meta value compactly: integers without a
-// decimal point (status 200, not 200.0), strings bare, anything else as JSON.
-func formatMetaVal(v any) string {
-	switch n := v.(type) {
-	case float64:
-		if n == float64(int64(n)) {
-			return strconv.FormatInt(int64(n), 10)
-		}
-		return strconv.FormatFloat(n, 'g', -1, 64)
-	case string:
-		return n
-	default:
-		b, _ := json.Marshal(v)
-		return string(b)
-	}
-}
-
-// clip shortens s to at most max runes (rune-safe so multibyte JSON isn't split),
-// appending an ellipsis when truncated. max <= 0 returns s unchanged.
-func clip(s string, max int) string {
-	if max <= 0 {
-		return s
-	}
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max]) + "…"
 }
 
 // ── input assembly (gentctl run) ────────────────────────────────────────────────
@@ -838,20 +757,6 @@ func longTime(rfc string) string {
 	return fmt.Sprintf("%s  (%s)", t.Format("2006-01-02 15:04:05"), relAge(t))
 }
 
-// logTime renders a log timestamp as a clock time ("15:04:05"), prefixing the date
-// ("01-02 15:04:05") when the entry is not from today, so a chronological stream
-// stays compact but still unambiguous across days.
-func logTime(rfc string) string {
-	t, ok := parseTime(rfc)
-	if !ok {
-		return rfc
-	}
-	now := time.Now()
-	if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
-		return t.Format("15:04:05")
-	}
-	return t.Format("01-02 15:04:05")
-}
 
 func runCancelCmd(server string, args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
@@ -1144,7 +1049,7 @@ func usage() {
   gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...]
   gentctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
   gentctl get      <instance-id> [--json]
-  gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] [--payload-chars <n>] <instance-id>
+  gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] [--mode basic|detail|json] <instance-id>
   gentctl cancel   <instance-id>
   gentctl retry    [--force] <instance-id>
   gentctl channel list   <process>

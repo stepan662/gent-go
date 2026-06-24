@@ -15,6 +15,7 @@ import (
 	"gent/internal/api"
 	"gent/internal/db"
 	"gent/internal/engine"
+	"gent/internal/logview"
 )
 
 func main() {
@@ -30,13 +31,19 @@ func main() {
 	leaseDuration := flag.Duration("lease-duration", 10*time.Second, "How long a claimed instance is leased to a worker before another worker may reclaim it on crash")
 	leaseRenewInterval := flag.Duration("lease-renew-interval", 3*time.Second, "How often a worker re-stamps its leases; must be comfortably shorter than --lease-duration")
 	pprofAddr := flag.String("pprof", "", "pprof listen address, e.g. localhost:6060 (empty to disable)")
-	logLevel := flag.String("log", "debug", "Log level: debug, info, warn, error")
+	logLevel := flag.String("log", "info", "Log level: debug, info, warn, error")
+	logMode := flag.String("log-mode", "basic", "Console output: basic (no data body), detail (+ data body), or json (one JSON object per line); same modes as gentctl logs")
 	logPayloads := flag.Bool("log-payloads", true, "Capture truncated request/response snippets in per-instance audit logs")
 	logPayloadBytes := flag.Int("log-payload-bytes", 2048, "Max bytes per captured request/response snippet in audit logs")
 	logRetention := flag.Duration("log-retention", 168*time.Hour, "Delete per-instance audit logs older than this; 0 = keep forever")
 	flag.Parse()
 
-	log := newLogger(*logLevel)
+	mode, err := logview.ParseMode(*logMode)
+	if err != nil {
+		newLogger("error", logview.ModeBasic).Error("invalid --log-mode", "err", err)
+		os.Exit(1)
+	}
+	log := newLogger(*logLevel, mode)
 
 	if *leaseRenewInterval >= *leaseDuration {
 		log.Error("--lease-renew-interval must be shorter than --lease-duration",
@@ -63,6 +70,7 @@ func main() {
 		Payloads:     *logPayloads,
 		PayloadBytes: *logPayloadBytes,
 		Retention:    *logRetention,
+		Mode:         mode,
 	}
 	eng := engine.New(database, time.Duration(*pollMs)*time.Millisecond, *maxConcurrent, *immediateRetries, *leaseDuration, *leaseRenewInterval, logCfg, log)
 	handlers := api.NewHandlers(database, eng)
@@ -136,7 +144,12 @@ func main() {
 	}
 }
 
-func newLogger(level string) *slog.Logger {
+// newLogger builds the server console logger via the shared logview handler, so its
+// rows are the same layout gentctl logs prints. The level is the orthogonal severity
+// threshold; mode picks the layout (basic/detail columns, or json one object per
+// line). The engine's emit decides which fields each record carries (basic omits the
+// data body) and whether it's a columnar audit event or a free-form operational line.
+func newLogger(level string, mode logview.Mode) *slog.Logger {
 	var l slog.Level
 	switch level {
 	case "debug":
@@ -148,5 +161,5 @@ func newLogger(level string) *slog.Logger {
 	default:
 		l = slog.LevelInfo
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l}))
+	return slog.New(logview.NewHandler(os.Stderr, l, mode))
 }

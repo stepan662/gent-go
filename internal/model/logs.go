@@ -15,25 +15,26 @@ const (
 // Log event kinds emitted by the engine as it advances an instance. These are
 // the stable machine-readable identifiers; the human message lives in Message.
 const (
-	EventInstanceCreated = "instance_created"
+	EventInstanceCreated = "inst_created"
+	EventTaskStarted     = "task_started"      // a worker picked the instance up and began advancing it
 	EventActionStarted   = "action_started"   // an action call is about to be sent (request)
 	EventActionSucceeded = "action_succeeded" // an action call returned successfully (response)
 	EventActionFailed    = "action_failed"    // an action call returned an error (status + error body)
 	EventTaskCompleted   = "task_completed"
 	EventRetryScheduled  = "retry_scheduled"
-	EventErrorRoute      = "routing_to_error_handler"
-	EventErrorCompleted  = "error_route_completed"
-	EventCancelSkipRetry = "cancel_skip_retry"
-	EventInstanceDone    = "instance_completed"
-	EventInstanceFailed  = "instance_failed"
-	EventInstanceSettled = "instance_settled_failed"
-	EventCancelled       = "instance_cancelled"
-	EventChildrenSpawned = "children_spawned"
-	EventChildrenCollect = "children_collected"
+	EventErrorRoute      = "error_routed"
+	EventErrorCompleted  = "error_handled"
+	EventCancelSkipRetry = "cancel_skipped"
+	EventInstanceDone    = "inst_completed"
+	EventInstanceFailed  = "inst_failed"
+	EventInstanceSettled = "inst_settled"
+	EventCancelled       = "inst_cancelled"
+	EventChildrenSpawned = "child_spawned"
+	EventChildrenCollect = "child_collected"
 	EventDelayArmed      = "delay_armed"
-	EventExternalArmed   = "external_armed"
-	EventExternalResolved = "external_resolved"
-	EventExternalTimeout  = "external_timeout"
+	EventExternalArmed   = "extern_armed"
+	EventExternalResolved = "extern_resolved"
+	EventExternalTimeout  = "extern_timeout"
 )
 
 // LogEntry is one persisted line of an instance's execution audit trail.

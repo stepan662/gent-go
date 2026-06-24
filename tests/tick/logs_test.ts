@@ -6,9 +6,9 @@
  * are claimable on the very next tick with no backoff wait.
  *
  * Covers:
- *   1. A successful run records action_started → action_succeeded → task_completed
- *      → instance_completed; action_succeeded carries the response body in data and
- *      the HTTP status in meta.
+ *   1. A successful run records task_started → action_started → action_succeeded →
+ *      task_completed → inst_completed; action_succeeded carries the response
+ *      body in data and the HTTP status in meta, task_started names the worker.
  *   2. A failing task with one retry records retry_scheduled (warn) then
  *      instance_failed; the level filter narrows to just the warn entry.
  *   3. Time-based pruning: advancing the clock past the retention window drops
@@ -106,18 +106,27 @@ test("successful run records task and completion events with response snippet", 
   const logs = await getLogs(id);
   const events = logs.map((l) => l.event);
 
-  // Oldest-first ordering, full lifecycle of a two-task run: instance_created
-  // bookends the start, instance_completed the end. The action request/response are
-  // action_started/action_succeeded; task_completed is the per-task routing.
+  // Oldest-first ordering, full lifecycle of a two-task run. task_started marks a
+  // worker picking the instance up (one per task, since a call checkpoints and
+  // yields); action_started/action_succeeded are the request/response;
+  // task_completed is the per-task routing; inst_created/completed bookend.
   expect(events).toEqual([
-    "instance_created",
+    "inst_created",
+    "task_started",
     "action_started",
     "action_succeeded",
     "task_completed",
+    "task_started",
     "action_started",
     "action_succeeded",
-    "instance_completed",
+    "inst_completed",
   ]);
+
+  // task_started is info and names the worker that picked it up.
+  const started = logs.find((l) => l.event === "task_started");
+  expect(started?.level).toBe("info");
+  expect(started?.task).toBe("first");
+  expect(String(started?.meta?.worker ?? "")).not.toBe("");
 
   // action_succeeded carries the raw (capped) response body in data and the HTTP
   // status in the structured meta.
@@ -141,7 +150,7 @@ test("failing task records retry_scheduled then instance_failed; level filter na
   const logs = await getLogs(id);
   const events = logs.map((l) => l.event);
   expect(events).toContain("retry_scheduled");
-  expect(events).toContain("instance_failed");
+  expect(events).toContain("inst_failed");
 
   const retry = logs.find((l) => l.event === "retry_scheduled");
   expect(retry?.level).toBe("warn");

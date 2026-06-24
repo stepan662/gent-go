@@ -14,6 +14,7 @@ import (
 
 	"gent/internal/db"
 	"gent/internal/idgen"
+	"gent/internal/logview"
 	"gent/internal/model"
 	"gent/internal/transport"
 )
@@ -25,11 +26,12 @@ const (
 )
 
 // LogConfig controls how much the engine persists to each instance's audit log
-// and for how long.
+// and for how long, plus the verbosity of the unified server console.
 type LogConfig struct {
 	Payloads     bool          // capture truncated request/response snippets on task events
 	PayloadBytes int           // max bytes per captured snippet (<=0 → defaultPayloadBytes)
 	Retention    time.Duration // prune audit logs older than this; 0 = keep forever
+	Mode         logview.Mode  // console verbosity: basic omits the data body, detail includes it
 }
 
 const logPruneInterval = time.Minute
@@ -110,7 +112,7 @@ func (e *Engine) retryDelay(attempt int) time.Duration {
 // not keep up with its leases (in-flight work is drained before it returns either way).
 // When pollEvery is zero the engine does not auto-tick; call Tick explicitly.
 func (e *Engine) Run(ctx context.Context) error {
-	e.log.Info("engine started", "poll_interval", e.pollEvery, "max_concurrent", cap(e.sem), "worker_id", e.workerID)
+	e.logOnly(logEvent{Level: model.LogInfo, Msg: "engine started", Meta: map[string]any{"poll_interval": e.pollEvery, "max_concurrent": cap(e.sem), "worker": e.workerID}})
 
 	go e.leaseRenewer(ctx)
 
@@ -119,17 +121,17 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 
 	if e.pollEvery == 0 {
-		e.log.Info("engine in manual tick mode")
+		e.logOnly(logEvent{Level: model.LogInfo, Msg: "engine in manual tick mode"})
 		<-ctx.Done()
-		e.log.Info("engine stopped")
+		e.logOnly(logEvent{Level: model.LogInfo, Msg: "engine stopped"})
 		return nil
 	}
 
 	err := e.runPump(ctx)
 	if err != nil {
-		e.log.Error("engine stopped after draining in-flight work", "err", err)
+		e.logOnly(logEvent{Level: model.LogError, Msg: err.Error()})
 	} else {
-		e.log.Info("engine stopped")
+		e.logOnly(logEvent{Level: model.LogInfo, Msg: "engine stopped"})
 	}
 	return err
 }
@@ -183,7 +185,7 @@ func (e *Engine) runPump(ctx context.Context) error {
 		}
 		if err != nil || len(insts) == 0 {
 			if err != nil {
-				e.log.Error("claim instances", "err", err)
+				e.logOnly(logEvent{Level: model.LogError, Msg: "claim instances: " + err.Error()})
 			}
 			select {
 			case <-ctx.Done():
@@ -235,7 +237,7 @@ func (e *Engine) dispatch(ctx context.Context, wg *sync.WaitGroup, inst *model.P
 		defer func() { <-e.sem }()
 		// runAdvance drops the inflight marker (stored above) before persisting.
 		if err := e.runAdvance(ctx, inst); err != nil {
-			e.log.Error("advance instance", "id", inst.ID, "err", err)
+			e.logOnly(logEvent{Level: model.LogError, ID: inst.ID, Msg: "advance instance: " + err.Error()})
 		}
 	}()
 	return nil
@@ -253,7 +255,7 @@ func (e *Engine) leaseRenewer(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := e.db.RenewWorkerLeases(e.workerID, e.leaseDuration); err != nil {
-				e.log.Error("renew worker leases", "err", err)
+				e.logOnly(logEvent{Level: model.LogError, Msg: "renew worker leases: " + err.Error()})
 			}
 		}
 	}
@@ -283,9 +285,9 @@ func (e *Engine) pruneLogs() {
 	}
 	cutoff := db.Now().Add(-e.logCfg.Retention).UnixMilli()
 	if n, err := e.db.PruneLogs(cutoff); err != nil {
-		e.log.Error("prune logs", "err", err)
+		e.logOnly(logEvent{Level: model.LogError, Msg: "prune logs: " + err.Error()})
 	} else if n > 0 {
-		e.log.Debug("pruned audit logs", "count", n, "older_than", e.logCfg.Retention)
+		e.logOnly(logEvent{Level: model.LogDebug, Msg: "pruned audit logs", Meta: map[string]any{"count": n, "older_than": e.logCfg.Retention}})
 	}
 }
 
@@ -303,7 +305,7 @@ func (e *Engine) Tick(ctx context.Context) (int, error) {
 	e.pruneLogs()
 	instances, err := e.db.ClaimInstances(e.workerID, e.leaseDuration, cap(e.sem))
 	if err != nil {
-		e.log.Error("claim instances", "err", err)
+		e.logOnly(logEvent{Level: model.LogError, Msg: "claim instances: " + err.Error()})
 		return 0, err
 	}
 	var wg sync.WaitGroup
@@ -319,7 +321,7 @@ func (e *Engine) Tick(ctx context.Context) (int, error) {
 			defer wg.Done()
 			defer func() { <-e.sem }()
 			if err := e.runAdvance(ctx, inst); err != nil {
-				e.log.Error("advance instance", "id", inst.ID, "err", err)
+				e.logOnly(logEvent{Level: model.LogError, ID: inst.ID, Msg: "advance instance: " + err.Error()})
 			}
 		}(inst)
 	}
@@ -404,8 +406,9 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 		if len(inst.TaskQueue) > 0 {
 			taskID = inst.TaskQueue[0].ID
 		}
-		e.log.Warn("reclaimed instance with expired lease; previous owner crashed or stalled mid-task",
-			"id", inst.ID, "process", inst.ProcessName, "task", taskID)
+		e.logOnly(logEvent{Level: model.LogWarn, ID: inst.ID,
+			Msg: "reclaimed expired lease; previous owner crashed or stalled mid-task",
+			Meta: map[string]any{"task": taskID, "process": inst.ProcessName}})
 		if len(inst.TaskQueue) > 0 {
 			s := inst.TaskQueue[0]
 			if s.Action != nil && s.OnlyOnce != nil && *s.OnlyOnce {
@@ -413,6 +416,13 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 					"task %q is only_once and was interrupted by a lease takeover; cannot re-execute", s.ID))
 			}
 		}
+	}
+
+	// task_started: a worker has picked this instance up and is about to work its
+	// current task. One per work session (a resume after parking emits it again),
+	// tagged with the worker so the unified log shows who is doing what.
+	if len(inst.TaskQueue) > 0 {
+		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventTaskStarted, Task: inst.TaskQueue[0].ID, Meta: map[string]any{"worker": e.workerID}})
 	}
 
 	// Process tasks in a loop. A call-less task (pure switch/routing) has no
@@ -436,8 +446,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 			if err := e.computeOutput(inst); err != nil {
 				return e.failInstance(inst, err.Error())
 			}
-			e.log.Info("instance completed", "id", inst.ID, "process", inst.ProcessName)
-			e.audit(inst, model.LogInfo, model.EventInstanceDone, "", "", "", e.outputData(inst))
+			e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventInstanceDone, Data: e.outputData(inst)})
 			return advanceOutcome{kind: outcomeTerminal}
 		}
 
@@ -520,8 +529,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 			if err := e.computeOutput(inst); err != nil {
 				return e.failInstance(inst, err.Error())
 			}
-			e.log.Info("instance completed", "id", inst.ID, "task", task.ID)
-			e.audit(inst, model.LogInfo, model.EventInstanceDone, task.ID, "", "", e.outputData(inst))
+			e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventInstanceDone, Task: task.ID, Data: e.outputData(inst)})
 			return advanceOutcome{kind: outcomeTerminal}
 		}
 
@@ -538,8 +546,7 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 
 		inst.RetryCount = 0
 		inst.WakeAt = nil
-		e.log.Info("task completed", "id", inst.ID, "task", task.ID)
-		e.audit(inst, model.LogInfo, model.EventTaskCompleted, task.ID, "→ "+gotoID, "", "")
+		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventTaskCompleted, Task: task.ID, Msg: "→ " + gotoID})
 
 		// A task with a call has just executed a side effect — checkpoint and yield.
 		// A call-less routing task had none, so continue in-memory to the next task
@@ -574,7 +581,6 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		Data:       data,
 	}
 
-	e.log.Debug("executing task", "id", inst.ID, "task", task.ID, "action_type", task.Action.Type)
 	// action_started (debug): message = the action type (rest/script/…); data = the
 	// request body; and for a REST call meta = {url} so the trail shows which endpoint
 	// was hit. Headers are intentionally omitted — they routinely carry secrets and
@@ -583,7 +589,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	if task.Action.Type == model.ActionTypeREST {
 		startMeta = map[string]any{"url": task.Action.Endpoint}
 	}
-	e.auditMeta(inst, model.LogDebug, model.EventActionStarted, task.ID, string(task.Action.Type), "", e.snippet(data), startMeta)
+	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionStarted, Task: task.ID, Msg: string(task.Action.Type), Data: e.snippet(data), Meta: startMeta})
 
 	resolvedHeaders, err := e.resolveHeaders(inst, task.Action)
 	if err != nil {
@@ -599,7 +605,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		// action_failed (debug) records the raw call failure — error detail in data,
 		// code in code — separate from the operational retry/route event that follows.
 		// A transport error has no HTTP status, so meta stays absent.
-		e.auditMeta(inst, model.LogDebug, model.EventActionFailed, task.ID, "", code, e.snippetRaw(err.Error()), nil)
+		e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionFailed, Task: task.ID, Code: code, Data: e.snippetRaw(err.Error())})
 		return nil, stop(e.handleCallError(inst, task, err.Error(), code))
 	}
 	if resp.ErrorCode != "" {
@@ -608,7 +614,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 			msg = resp.ErrorCode
 		}
 		// action_failed (debug): error body in data, status in meta, code in code.
-		e.auditMeta(inst, model.LogDebug, model.EventActionFailed, task.ID, "", resp.ErrorCode, e.snippetRaw(resp.ErrorMessage), statusMeta(resp.Status))
+		e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionFailed, Task: task.ID, Code: resp.ErrorCode, Data: e.snippetRaw(resp.ErrorMessage), Meta: statusMeta(resp.Status)})
 		return nil, stop(e.handleCallError(inst, task, msg, resp.ErrorCode))
 	}
 
@@ -623,7 +629,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	// action_succeeded (debug): the response body in data, the HTTP status in meta.
 	// Like action_started it carries an action payload, so it is gated behind
 	// --level debug rather than cluttering the default info trail.
-	e.auditMeta(inst, model.LogDebug, model.EventActionSucceeded, task.ID, "", "", e.snippet(resp.Body), statusMeta(resp.Status))
+	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionSucceeded, Task: task.ID, Data: e.snippet(resp.Body), Meta: statusMeta(resp.Status)})
 
 	return resp.Body, nil
 }
@@ -740,9 +746,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, 
 		matched := matchOnError(task, errCode)
 		if matched != nil && inst.RetryCount < matched.Retries && isRetryAllowed(task, errCode, matched) {
 			// Retries remain but we're cancelling — skip the retry and cancel cleanly.
-			e.log.Info("task failed during cancellation, skipping retry",
-				"id", inst.ID, "task", task.ID, "code", errCode)
-			e.audit(inst, model.LogInfo, model.EventCancelSkipRetry, task.ID, errMsg, errCode, "")
+			e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventCancelSkipRetry, Task: task.ID, Msg: errMsg, Code: errCode})
 			return e.cancelInstance(inst)
 		}
 		// No retries available — error takes precedence over cancellation.
@@ -755,14 +759,8 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, 
 		inst.RetryCount++
 		next := db.Now().Add(e.retryDelay(inst.RetryCount))
 		inst.WakeAt = &next
-		e.log.Warn("task failed, scheduling retry",
-			"id", inst.ID, "task", task.ID,
-			"attempt", inst.RetryCount, "max", matched.Retries,
-			"next_retry", next.Format(time.RFC3339),
-			"code", errCode, "err", errMsg,
-		)
 		retryMsg := fmt.Sprintf("%s (attempt %d/%d)", errMsg, inst.RetryCount, matched.Retries)
-		e.audit(inst, model.LogWarn, model.EventRetryScheduled, task.ID, retryMsg, errCode, "")
+		e.audit(inst, logEvent{Level: model.LogWarn, Event: model.EventRetryScheduled, Task: task.ID, Msg: retryMsg, Code: errCode})
 		return advanceOutcome{kind: outcomeUpdate}
 	}
 
@@ -776,8 +774,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, 
 		if matched.Goto == model.GotoEnd {
 			inst.Status = model.StatusCompleted
 			inst.WakeAt = nil
-			e.log.Info("instance completed via error route", "id", inst.ID, "task", task.ID, "code", errCode)
-			e.audit(inst, model.LogInfo, model.EventErrorCompleted, task.ID, errMsg, errCode, "")
+			e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventErrorCompleted, Task: task.ID, Msg: errMsg, Code: errCode})
 			return advanceOutcome{kind: outcomeTerminal}
 		}
 		newQueue, err := e.queueFromTask(inst, matched.Goto)
@@ -787,9 +784,7 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, 
 		inst.TaskQueue = newQueue
 		inst.RetryCount = 0
 		inst.WakeAt = nil
-		e.log.Info("routing to error handler",
-			"id", inst.ID, "task", task.ID, "goto", matched.Goto, "code", errCode)
-		e.audit(inst, model.LogInfo, model.EventErrorRoute, task.ID, errMsg+" → "+matched.Goto, errCode, "")
+		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventErrorRoute, Task: task.ID, Msg: errMsg + " → " + matched.Goto, Code: errCode})
 		return advanceOutcome{kind: outcomeUpdate}
 	}
 
@@ -818,8 +813,7 @@ func (e *Engine) runDelay(inst *model.ProcessInstance, task *model.Task) *advanc
 		}
 		wake := db.Now().Add(time.Duration(ms) * time.Millisecond)
 		inst.WakeAt = &wake
-		e.log.Info("instance delaying", "id", inst.ID, "task", task.ID, "ms", ms)
-		e.audit(inst, model.LogInfo, model.EventDelayArmed, task.ID, fmt.Sprintf("%dms", ms), "", "")
+		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventDelayArmed, Task: task.ID, Msg: fmt.Sprintf("%dms", ms)})
 		return stop(advanceOutcome{kind: outcomeProgress})
 	}
 	return nil
@@ -848,8 +842,7 @@ func (e *Engine) runExternal(ctx context.Context, inst *model.ProcessInstance, t
 	if res, ok := inst.ContextData[model.CtxExternalResult]; ok {
 		delete(inst.ContextData, model.CtxExternalResult)
 		delete(inst.ContextData, model.CtxExternal)
-		e.log.Info("external task resolved", "id", inst.ID, "task", task.ID)
-		e.audit(inst, model.LogInfo, model.EventExternalResolved, task.ID, "", "", "")
+		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventExternalResolved, Task: task.ID})
 		return res, nil
 	}
 
@@ -858,8 +851,7 @@ func (e *Engine) runExternal(ctx context.Context, inst *model.ProcessInstance, t
 	if inst.WaitState == model.WaitStateExternal {
 		inst.WaitState = model.WaitStateNone
 		delete(inst.ContextData, model.CtxExternal)
-		e.log.Warn("external task timed out", "id", inst.ID, "task", task.ID)
-		e.audit(inst, model.LogWarn, model.EventExternalTimeout, task.ID, "external task timed out", "external.timeout", "")
+		e.audit(inst, logEvent{Level: model.LogWarn, Event: model.EventExternalTimeout, Task: task.ID, Msg: "external task timed out", Code: "external.timeout"})
 		return nil, stop(e.handleCallError(inst, task, "external task timed out", "external.timeout"))
 	}
 
@@ -886,18 +878,16 @@ func (e *Engine) runExternal(ctx context.Context, inst *model.ProcessInstance, t
 		// result; ArmExternalOrConsumeSignal kept this worker's lease, so the normal
 		// progress/terminal write at the end of advance releases it — the instance never
 		// sits claimable while still in flight.
-		e.log.Info("external task resolved from buffered signal", "id", inst.ID, "task", task.ID)
-		e.audit(inst, model.LogInfo, model.EventExternalResolved, task.ID, "buffered", "", "")
+		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventExternalResolved, Task: task.ID, Msg: "buffered"})
 		return payload, nil
 	}
 	// Parked. ArmExternalOrConsumeSignal persisted the parked state and released the lease,
 	// so (like a child spawn) advance returns noop and writes nothing further.
-	e.log.Info("external task armed", "id", inst.ID, "task", task.ID, "timeout_ms", task.TimeoutMs)
 	armedMsg := "token=" + token
 	if task.TimeoutMs > 0 {
 		armedMsg += fmt.Sprintf(" timeout=%dms", task.TimeoutMs)
 	}
-	e.audit(inst, model.LogInfo, model.EventExternalArmed, task.ID, armedMsg, "", "")
+	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventExternalArmed, Task: task.ID, Msg: armedMsg})
 	return nil, stop(advanceOutcome{kind: outcomeNoop})
 }
 
@@ -932,29 +922,107 @@ func evalDurationMs(expr string, ctx map[string]any) (int64, error) {
 	return ms, nil
 }
 
-// audit appends one event to the instance's persistent execution log. It is
-// best-effort: a write failure is logged and swallowed so audit logging can
-// never abort an advance. The structured slog output at each call site is left
-// intact for operational logging; this is the durable, queryable trail.
-func (e *Engine) audit(inst *model.ProcessInstance, level model.LogLevel, event, task, msg, code, data string) {
-	e.auditMeta(inst, level, event, task, msg, code, data, nil)
+// logEvent is the structured payload of one log line. Level and Event are
+// required; the rest are optional. It is shared by audit (console + durable DB
+// trail) and logOnly (console only), so both render identically — only persistence
+// differs.
+type logEvent struct {
+	Level model.LogLevel
+	Event string
+	ID    string // instance id; audit fills this from the instance
+	Task  string
+	Msg   string // human note (rendered as note=…, since slog uses msg for the event)
+	Code  string
+	Data  string // body (request/response/input/output/…); shown under its event Label
+	Meta  map[string]any
 }
 
-// auditMeta is audit with structured metadata (meta) attached — small, complete
-// JSON like {"url":…} / {"status":200}, distinct from the raw (truncatable) data
-// body. Most events have no meta and use audit.
-func (e *Engine) auditMeta(inst *model.ProcessInstance, level model.LogLevel, event, task, msg, code, data string, meta map[string]any) {
+// audit records an instance event to the unified console (slog) and the durable
+// per-instance trail (the DB). Best-effort on the DB write: a failure is logged and
+// swallowed so audit logging can never abort an advance.
+func (e *Engine) audit(inst *model.ProcessInstance, ev logEvent) {
+	ev.ID = inst.ID
+	e.emit(ev)
 	if err := e.db.AppendLog(&model.LogEntry{
-		InstanceID: inst.ID,
-		Level:      level,
-		Event:      event,
-		TaskID:     task,
-		Message:    msg,
-		Code:       code,
-		Data:       data,
-		Meta:       meta,
+		InstanceID: ev.ID,
+		Level:      ev.Level,
+		Event:      ev.Event,
+		TaskID:     ev.Task,
+		Message:    ev.Msg,
+		Code:       ev.Code,
+		Data:       ev.Data,
+		Meta:       ev.Meta,
 	}); err != nil {
-		e.log.Error("append audit log", "id", inst.ID, "event", event, "err", err)
+		e.logOnly(logEvent{Level: model.LogError, ID: ev.ID, Msg: "append audit log: " + err.Error()})
+	}
+}
+
+// logOnly records a console-only line (server lifecycle / operational events not in
+// any instance's durable trail). It carries no Event — it renders free-form (a
+// message + fields), distinct from the columnar audit rows.
+func (e *Engine) logOnly(ev logEvent) {
+	ev.Event = "" // operational: no structured event
+	e.emit(ev)
+}
+
+// emit renders one record to the server console via slog. It builds the attrs only
+// when the level is enabled (most are dropped at the common low-verbosity setting),
+// keeping audit's hot path — the DB write — cheap. A record with an Event is a
+// structured audit event (marked, so the console renders it in aligned columns); one
+// without is operational (rendered free-form). The fields come from logview.Record
+// so the console and the CLI show the same fields in the same order.
+func (e *Engine) emit(ev logEvent) {
+	lvl := slogLevel(ev.Level)
+	if !e.log.Enabled(context.Background(), lvl) {
+		return
+	}
+	if ev.Event == "" {
+		// operational: message + any id/meta as free-form fields.
+		attrs := make([]any, 0, 2+2*len(ev.Meta))
+		if ev.ID != "" {
+			attrs = append(attrs, "id", ev.ID)
+		}
+		for _, k := range sortedMetaKeys(ev.Meta) {
+			attrs = append(attrs, k, ev.Meta[k])
+		}
+		e.log.Log(context.Background(), lvl, ev.Msg, attrs...)
+		return
+	}
+	// audit: the event is the slog message; id/task become columns; the rest detail.
+	detail := logview.Record{
+		Event: ev.Event, Msg: ev.Msg, Code: ev.Code, Data: ev.Data, Meta: ev.Meta,
+	}.Detail(e.logCfg.Mode)
+	attrs := make([]any, 0, 6+2*len(detail))
+	attrs = append(attrs, logview.AuditKey, true, "id", ev.ID, "task", ev.Task)
+	for _, f := range detail {
+		attrs = append(attrs, f.Key, f.Val)
+	}
+	e.log.Log(context.Background(), lvl, ev.Event, attrs...)
+}
+
+func sortedMetaKeys(m map[string]any) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// slogLevel maps an audit level to the matching slog level for console output.
+func slogLevel(l model.LogLevel) slog.Level {
+	switch l {
+	case model.LogDebug:
+		return slog.LevelDebug
+	case model.LogWarn:
+		return slog.LevelWarn
+	case model.LogError:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 
@@ -973,7 +1041,7 @@ func statusMeta(status int) map[string]any {
 // for each spawned child. It bookends the trail with instance_completed, which
 // carries the final output.
 func (e *Engine) AuditCreated(inst *model.ProcessInstance) {
-	e.audit(inst, model.LogInfo, model.EventInstanceCreated, "", "", "", e.snippet(inst.ContextData["input"]))
+	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventInstanceCreated, Data: e.snippet(inst.ContextData["input"])})
 }
 
 // outputData captures the process's final output for the instance_completed event:
@@ -1028,8 +1096,7 @@ func (e *Engine) failInstance(inst *model.ProcessInstance, reason string) advanc
 	inst.WaitState = model.WaitStateNone
 	inst.Error = reason
 	inst.WakeAt = nil
-	e.log.Error("instance failed", "id", inst.ID, "reason", reason)
-	e.audit(inst, model.LogError, model.EventInstanceFailed, "", reason, "", "")
+	e.audit(inst, logEvent{Level: model.LogError, Event: model.EventInstanceFailed, Msg: reason})
 	return advanceOutcome{kind: outcomeTerminal}
 }
 
@@ -1044,8 +1111,7 @@ func (e *Engine) cancelInstance(inst *model.ProcessInstance) advanceOutcome {
 	if inst.RetryCount > 0 {
 		inst.WakeAt = nil
 	}
-	e.log.Info("instance cancelled", "id", inst.ID)
-	e.audit(inst, model.LogInfo, model.EventCancelled, "", "", "", "")
+	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventCancelled})
 	return advanceOutcome{kind: outcomeTerminal}
 }
 
@@ -1057,8 +1123,7 @@ func (e *Engine) settleFailing(inst *model.ProcessInstance) advanceOutcome {
 	inst.Status = model.StatusFailed
 	inst.WaitState = model.WaitStateNone
 	inst.WakeAt = nil
-	e.log.Info("instance settled as failed", "id", inst.ID, "reason", inst.Error)
-	e.audit(inst, model.LogInfo, model.EventInstanceSettled, "", inst.Error, "", "")
+	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventInstanceSettled, Msg: inst.Error})
 	return advanceOutcome{kind: outcomeTerminal}
 }
 
@@ -1094,8 +1159,7 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 			return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q collect: %v", task.ID, err)))
 		}
 		inst.WaitState = model.WaitStateNone
-		e.log.Info("parent collected child outputs", "id", inst.ID, "task", task.ID)
-		e.audit(inst, model.LogInfo, model.EventChildrenCollect, task.ID, "", "", "")
+		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventChildrenCollect, Task: task.ID})
 		return output, nil
 	}
 
@@ -1157,8 +1221,7 @@ func (e *Engine) runChildProcesses(ctx context.Context, inst *model.ProcessInsta
 		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q spawn: %v", task.ID, err)))
 	}
 
-	e.log.Info("parent waiting for children", "id", inst.ID, "task", task.ID, "children", len(children))
-	e.audit(inst, model.LogInfo, model.EventChildrenSpawned, task.ID, fmt.Sprintf("%d children", len(children)), "", "")
+	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventChildrenSpawned, Task: task.ID, Msg: fmt.Sprintf("%d children", len(children))})
 	// Each spawned child is its own process: record its creation + input so its
 	// subtree trail bookends the same way a root's does.
 	for _, c := range children {

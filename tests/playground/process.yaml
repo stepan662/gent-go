@@ -53,7 +53,7 @@ tasks:
     output: "{{ self.result }}"
     switch: next
 
-  - id: fourth
+  - id: long_long_long_long
     action:
       type: child
       input:
@@ -70,4 +70,4 @@ tasks:
     output: "{{ self.result }}"
     switch: end
 
-output: "{{outputs.fourth}}"
+output: "{{outputs.long_long_long_long}}"

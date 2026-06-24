@@ -18,9 +18,9 @@ async function defineProc() {
   });
 }
 
-// The audit trail bookends a process: instance_created carries the process input,
-// instance_completed carries the final output (the definition's output projection).
-test("logs — instance_created carries input, instance_completed carries output", async () => {
+// The audit trail bookends a process: inst_created carries the process input,
+// inst_completed carries the final output (the definition's output projection).
+test("logs — inst_created carries input, inst_completed carries output", async () => {
   await defineProc();
   const { data: started } = await client.POST("/instances", {
     body: { process: proc, input: { name: "Sam" } },
@@ -35,14 +35,14 @@ test("logs — instance_created carries input, instance_completed carries output
   const items = data!.items ?? [];
 
   // data is the engine's compact JSON marshalling of the value, stored raw.
-  const created = items.find((l) => l.event === "instance_created");
+  const created = items.find((l) => l.event === "inst_created");
   expect(created).toBeDefined();
   expect(created!.data).toBe('{"name":"Sam"}');
 
-  const completed = items.find((l) => l.event === "instance_completed");
+  const completed = items.find((l) => l.event === "inst_completed");
   expect(completed).toBeDefined();
   expect(completed!.data).toBe('{"greeting":"Sam"}');
 
-  // instance_created is the first event in the trail.
-  expect(items[0]?.event).toBe("instance_created");
+  // inst_created is the first event in the trail.
+  expect(items[0]?.event).toBe("inst_created");
 });
