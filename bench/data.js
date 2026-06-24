@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782283594608,
+  "lastUpdate": 1782305251157,
   "repoUrl": "https://github.com/stepan662/gent-go",
   "entries": {
     "gent throughput": [
@@ -1084,6 +1084,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "spawn recursive postgres",
             "value": 454,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "granat.stepan@gmail.com",
+            "name": "Štěpán Granát",
+            "username": "stepan662"
+          },
+          "committer": {
+            "email": "granat.stepan@gmail.com",
+            "name": "Štěpán Granát",
+            "username": "stepan662"
+          },
+          "distinct": true,
+          "id": "776f053a0cb55767ba3546d2dd3f62b489c9383b",
+          "message": "feat: improved logs",
+          "timestamp": "2026-06-24T14:44:07+02:00",
+          "tree_id": "257679e6664edb7d5866b9c18af622628b7a32d2",
+          "url": "https://github.com/stepan662/gent-go/commit/776f053a0cb55767ba3546d2dd3f62b489c9383b"
+        },
+        "date": 1782305250839,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "spawn deep sqlite",
+            "value": 99,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn deep postgres",
+            "value": 295,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn recursive sqlite",
+            "value": 121,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn recursive postgres",
+            "value": 442,
             "unit": "inst/s",
             "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
           }
