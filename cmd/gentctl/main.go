@@ -9,7 +9,7 @@
 //	gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...]
 //	gentctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
 //	gentctl get      <instance-id> [--json]
-//	gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] <instance-id>
+//	gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] [--payload-chars <n>] <instance-id>
 //	gentctl cancel   <instance-id>
 //	gentctl retry    [--force] <instance-id>
 //	gentctl channel list   <process>
@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -475,9 +476,10 @@ func runLogsCmd(server string, args []string) {
 	sinceFlag := fs.Int64("since", 0, "only logs at/after this unix-millis timestamp")
 	limitFlag := fs.Int("limit", 200, "max entries to return")
 	treeFlag := fs.Bool("tree", false, "include the whole process subtree (root instance id)")
+	payloadCharsFlag := fs.Int("payload-chars", 120, "max chars of task input/result shown per line (0 = no limit, -1 = hide)")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		fatal("usage: gentctl logs [--level L] [--since MS] [--limit N] [--tree] <instance-id>")
+		fatal("usage: gentctl logs [--level L] [--since MS] [--limit N] [--tree] [--payload-chars N] <instance-id>")
 	}
 	id := fs.Arg(0)
 
@@ -500,14 +502,16 @@ func runLogsCmd(server string, args []string) {
 	}
 
 	type logRow struct {
-		Time     string `json:"time"`
-		Instance string `json:"instance"`
-		Depth    int    `json:"depth"`
-		Level    string `json:"level"`
-		Event    string `json:"event"`
-		Task     string `json:"task"`
-		Message  string `json:"message"`
-		Code     string `json:"code"`
+		Time     string         `json:"time"`
+		Instance string         `json:"instance"`
+		Depth    int            `json:"depth"`
+		Level    string         `json:"level"`
+		Event    string         `json:"event"`
+		Task     string         `json:"task"`
+		Message  string         `json:"message"`
+		Code     string         `json:"code"`
+		Data     string         `json:"data"`
+		Meta     map[string]any `json:"meta"`
 	}
 	// A single page, bounded by --limit (the server caps it at 1000). Unlike
 	// instances/channels we don't follow next_cursor here: --limit is a deliberate
@@ -516,10 +520,16 @@ func runLogsCmd(server string, args []string) {
 	if err := callGet(u, &resp); err != nil {
 		fatal("%v", err)
 	}
+	// Render as aligned columns: TIME · LEVEL · EVENT · TASK · [ID] · MESSAGE ·
+	// DATA. tabwriter pads each column to its widest cell, so even with tree
+	// indentation (folded into the first cell) every later column lines up; the
+	// payload (DATA) is last and the only unpadded cell, so a long value never pushes
+	// the columns around. Trailing empty cells are dropped so rows end cleanly.
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, l := range resp.Items {
-		// In tree mode, indent by the instance's depth in the subtree and tag the
-		// line with a short instance id, so the chronological stream still reads as
-		// a tree. Cap the indent so a deep subtree doesn't run off-screen.
+		// In tree mode, indent the first cell by the instance's depth in the subtree
+		// (capped) and tag the row with a short, distinguishing instance id so the
+		// chronological stream still reads as a tree.
 		indent := ""
 		if *treeFlag {
 			depth := l.Depth
@@ -528,29 +538,117 @@ func runLogsCmd(server string, args []string) {
 			}
 			indent = strings.Repeat("  ", depth)
 		}
-		line := fmt.Sprintf("%s%s  %-5s  %-24s", indent, logTime(l.Time), strings.ToUpper(l.Level), l.Event)
+		task := ""
 		if l.Task != "" {
-			line += "  task=" + l.Task
+			task = "task=" + l.Task
 		}
+		// Fold the small classifiers — code (errors) and the structured meta (url /
+		// status) — into the message cell rather than spend columns that are empty on
+		// most rows. data (the body) stays its own trailing column.
+		msg := l.Message
 		if l.Code != "" {
-			line += "  code=" + l.Code
+			msg = strings.TrimSpace(msg + " code=" + l.Code)
 		}
-		if l.Message != "" {
-			line += "  " + l.Message
+		if m := formatMeta(l.Meta); m != "" {
+			msg = strings.TrimSpace(msg + " " + m)
 		}
+		data := ""
+		if *payloadCharsFlag >= 0 && l.Data != "" {
+			data = payloadLabel(l.Event) + "=" + clip(l.Data, *payloadCharsFlag)
+		}
+
+		cells := []string{indent + logTime(l.Time), strings.ToUpper(l.Level), l.Event, task}
 		if *treeFlag {
-			line += "  [" + shortID(l.Instance) + "]"
+			cells = append(cells, "["+shortID(l.Instance)+"]")
 		}
-		fmt.Println(line)
+		cells = append(cells, msg, data)
+		// Drop trailing empties so a row without a message/payload ends at its last
+		// real cell (tabwriter only pads tab-terminated cells, keeping columns aligned).
+		for len(cells) > 0 && cells[len(cells)-1] == "" {
+			cells = cells[:len(cells)-1]
+		}
+		fmt.Fprintln(w, strings.Join(cells, "\t"))
+	}
+	w.Flush()
+}
+
+// shortID returns a compact, distinguishing tag for an instance id in tree-log
+// display. It uses the id's tail, not its head: instance ids are UUIDv7s whose
+// leading bits are a millisecond timestamp, so a parent and a child spawned in the
+// same millisecond share a long prefix — the random tail is what tells them apart.
+func shortID(id string) string {
+	if len(id) > 6 {
+		return id[len(id)-6:]
+	}
+	return id
+}
+
+// payloadLabel names a log entry's data field for display, based on the event that
+// produced it: a process/task input, a task result, or the process output. The
+// value itself is a (possibly truncation-cropped) JSON string stored raw.
+func payloadLabel(event string) string {
+	switch event {
+	case "instance_created":
+		return "input"
+	case "action_started":
+		return "request" // the request body sent to the action
+	case "action_succeeded":
+		return "result" // the action's response body
+	case "action_failed":
+		return "error" // the action's error body
+	case "instance_completed":
+		return "output"
+	default:
+		return "data"
 	}
 }
 
-// shortID truncates an instance id for compact tree-log display.
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
+// formatMeta renders a log entry's structured meta as space-joined key=value pairs
+// (keys sorted for stable output), e.g. "url=http://x" or "status=200".
+func formatMeta(meta map[string]any) string {
+	if len(meta) == 0 {
+		return ""
 	}
-	return id
+	keys := make([]string, 0, len(meta))
+	for k := range meta {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+formatMetaVal(meta[k]))
+	}
+	return strings.Join(parts, " ")
+}
+
+// formatMetaVal renders a JSON-decoded meta value compactly: integers without a
+// decimal point (status 200, not 200.0), strings bare, anything else as JSON.
+func formatMetaVal(v any) string {
+	switch n := v.(type) {
+	case float64:
+		if n == float64(int64(n)) {
+			return strconv.FormatInt(int64(n), 10)
+		}
+		return strconv.FormatFloat(n, 'g', -1, 64)
+	case string:
+		return n
+	default:
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+}
+
+// clip shortens s to at most max runes (rune-safe so multibyte JSON isn't split),
+// appending an ellipsis when truncated. max <= 0 returns s unchanged.
+func clip(s string, max int) string {
+	if max <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 // ── input assembly (gentctl run) ────────────────────────────────────────────────
@@ -1046,7 +1144,7 @@ func usage() {
   gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...]
   gentctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
   gentctl get      <instance-id> [--json]
-  gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] <instance-id>
+  gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--tree] [--payload-chars <n>] <instance-id>
   gentctl cancel   <instance-id>
   gentctl retry    [--force] <instance-id>
   gentctl channel list   <process>

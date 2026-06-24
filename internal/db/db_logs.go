@@ -46,14 +46,6 @@ func logCursorVals(_ string, e *model.LogEntry) []any {
 // entry.ID is filled with a fresh uuid; a zero CreatedAt is stamped with the
 // DB clock.
 func (db *DB) AppendLog(entry *model.LogEntry) error {
-	detail := []byte("{}")
-	if len(entry.Detail) > 0 {
-		b, err := json.Marshal(entry.Detail)
-		if err != nil {
-			return err
-		}
-		detail = b
-	}
 	id := entry.ID
 	if id == "" {
 		// UUIDv7 is time-ordered and monotonic within a millisecond, so the
@@ -65,6 +57,16 @@ func (db *DB) AppendLog(entry *model.LogEntry) error {
 	if !entry.CreatedAt.IsZero() {
 		createdAt = entry.CreatedAt.UnixMilli()
 	}
+	// meta is structured (and small), so it is stored as JSON; data is the raw,
+	// possibly-truncated body and is stored verbatim.
+	meta := ""
+	if len(entry.Meta) > 0 {
+		b, err := json.Marshal(entry.Meta)
+		if err != nil {
+			return err
+		}
+		meta = string(b)
+	}
 	return db.q.InsertLog(context.Background(), dbgen.InsertLogParams{
 		ID:         id,
 		InstanceID: entry.InstanceID,
@@ -73,14 +75,15 @@ func (db *DB) AppendLog(entry *model.LogEntry) error {
 		TaskID:     entry.TaskID,
 		Message:    entry.Message,
 		Code:       entry.Code,
-		Detail:     string(detail),
+		Data:       entry.Data, // raw payload snippet (input/output/request/response body), or ""
+		Meta:       meta,
 		CreatedAt:  createdAt,
 	})
 }
 
 // logColumns is the pl.-qualified SELECT list shared by both log queries (the
 // flat query aliases process_logs pl; the subtree query joins it as pl).
-const logColumns = `pl.id, pl.instance_id, pl.level, pl.event, pl.task_id, pl.message, pl.code, pl.detail, pl.created_at`
+const logColumns = `pl.id, pl.instance_id, pl.level, pl.event, pl.task_id, pl.message, pl.code, pl.data, pl.meta, pl.created_at`
 
 // logSubtreeCTE walks process_instances.parent_id from a seed id (the single ?
 // placeholder) down, tagging each node with its depth from the seed. Hand-written
@@ -173,7 +176,7 @@ func scanLogPage(rows interface {
 	for rows.Next() {
 		var r dbgen.ProcessLog
 		var depth int64
-		dest := []any{&r.ID, &r.InstanceID, &r.Level, &r.Event, &r.TaskID, &r.Message, &r.Code, &r.Detail, &r.CreatedAt}
+		dest := []any{&r.ID, &r.InstanceID, &r.Level, &r.Event, &r.TaskID, &r.Message, &r.Code, &r.Data, &r.Meta, &r.CreatedAt}
 		if withDepth {
 			dest = append(dest, &depth)
 		}
@@ -205,10 +208,11 @@ func toLogEntry(r dbgen.ProcessLog) (*model.LogEntry, error) {
 		TaskID:     r.TaskID,
 		Message:    r.Message,
 		Code:       r.Code,
+		Data:       r.Data,
 		CreatedAt:  toTime(r.CreatedAt),
 	}
-	if r.Detail != "" && r.Detail != "{}" {
-		if err := json.Unmarshal([]byte(r.Detail), &e.Detail); err != nil {
+	if r.Meta != "" && r.Meta != "{}" {
+		if err := json.Unmarshal([]byte(r.Meta), &e.Meta); err != nil {
 			return nil, err
 		}
 	}

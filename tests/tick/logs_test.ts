@@ -6,8 +6,9 @@
  * are claimable on the very next tick with no backoff wait.
  *
  * Covers:
- *   1. A successful run records task_started → task_succeeded → task_completed
- *      → instance_completed, and task_succeeded carries a (capped) response snippet.
+ *   1. A successful run records action_started → action_succeeded → task_completed
+ *      → instance_completed; action_succeeded carries the response body in data and
+ *      the HTTP status in meta.
  *   2. A failing task with one retry records retry_scheduled (warn) then
  *      instance_failed; the level filter narrows to just the warn entry.
  *   3. Time-based pruning: advancing the clock past the retention window drops
@@ -105,24 +106,31 @@ test("successful run records task and completion events with response snippet", 
   const logs = await getLogs(id);
   const events = logs.map((l) => l.event);
 
-  // Oldest-first ordering, full lifecycle of a two-task run.
+  // Oldest-first ordering, full lifecycle of a two-task run: instance_created
+  // bookends the start, instance_completed the end. The action request/response are
+  // action_started/action_succeeded; task_completed is the per-task routing.
   expect(events).toEqual([
-    "task_started",
-    "task_succeeded",
+    "instance_created",
+    "action_started",
+    "action_succeeded",
     "task_completed",
-    "task_started",
-    "task_succeeded",
+    "action_started",
+    "action_succeeded",
     "instance_completed",
   ]);
 
-  // task_succeeded for the first task carries a truncated response snippet.
-  const firstSucceeded = logs.find((l) => l.event === "task_succeeded");
+  // action_succeeded carries the raw (capped) response body in data and the HTTP
+  // status in the structured meta.
+  const firstSucceeded = logs.find((l) => l.event === "action_succeeded");
   expect(firstSucceeded?.task).toBe("first");
-  expect(JSON.stringify(firstSucceeded?.detail)).toContain("ok");
+  expect(firstSucceeded?.data).toContain("ok");
+  expect(firstSucceeded?.meta?.status).toBe(200);
 
-  // task_started captures the call type.
-  const firstStarted = logs.find((l) => l.event === "task_started");
-  expect(JSON.stringify(firstStarted?.detail)).toContain("rest");
+  // action_started records the action type in message, the request body in data,
+  // and the REST endpoint url in meta (headers are intentionally not logged).
+  const firstStarted = logs.find((l) => l.event === "action_started");
+  expect(firstStarted?.message).toBe("rest");
+  expect(String(firstStarted?.meta?.url)).toContain("/action");
 });
 
 test("failing task records retry_scheduled then instance_failed; level filter narrows", async () => {
@@ -138,9 +146,16 @@ test("failing task records retry_scheduled then instance_failed; level filter na
   const retry = logs.find((l) => l.event === "retry_scheduled");
   expect(retry?.level).toBe("warn");
   expect(retry?.code).toMatch(/^http\./);
-  expect(retry?.detail).toMatchObject({ attempt: 1, max: 1 });
+  expect(retry?.message).toContain("attempt 1/1");
 
-  // Level filter returns only the warn-level entry.
+  // action_failed (debug) captures the raw call failure separately: the http code,
+  // the status in structured meta, and the error body in data.
+  const failed = logs.find((l) => l.event === "action_failed");
+  expect(failed?.level).toBe("debug");
+  expect(failed?.code).toMatch(/^http\./);
+  expect(failed?.meta?.status).toBe(500);
+
+  // Level filter returns only the warn-level entry (action_failed is debug).
   const warns = await getLogs(id, { level: "warn" });
   expect(warns).toHaveLength(1);
   expect(warns[0].event).toBe("retry_scheduled");

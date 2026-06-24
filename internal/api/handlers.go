@@ -21,18 +21,21 @@ import (
 
 const defaultChannel = "latest"
 
-type tickProvider interface {
+// engineService is the slice of the engine the API depends on: triggering a tick
+// and recording the instance_created audit milestone for a root instance.
+type engineService interface {
 	Tick(ctx context.Context) (int, error)
 	ManualTick() bool
+	AuditCreated(inst *model.ProcessInstance)
 }
 
 // Handlers holds business logic for all API operations.
 type Handlers struct {
 	db     *db.DB
-	engine tickProvider
+	engine engineService
 }
 
-func NewHandlers(database *db.DB, eng tickProvider) *Handlers {
+func NewHandlers(database *db.DB, eng engineService) *Handlers {
 	return &Handlers{db: database, engine: eng}
 }
 
@@ -242,7 +245,8 @@ type LogEntryResp struct {
 	Task     string         `json:"task,omitempty"`
 	Message  string         `json:"message,omitempty"`
 	Code     string         `json:"code,omitempty"`
-	Detail   map[string]any `json:"detail,omitempty"`
+	Data     string         `json:"data,omitempty"` // raw payload snippet (input/output/request/response body), may be truncated
+	Meta     map[string]any `json:"meta,omitempty"` // small, complete, parseable metadata (e.g. {"url":…}, {"status":200})
 }
 
 // --- Envelope ---
@@ -348,6 +352,9 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 	if err := h.db.SaveInstance(inst); err != nil {
 		return errReply(fmt.Errorf("save instance: %w", err))
 	}
+	if h.engine != nil {
+		h.engine.AuditCreated(inst) // bookend: instance_created with the process input
+	}
 
 	return okReply(StartInstanceResp{
 		ID:      inst.ID,
@@ -437,7 +444,8 @@ func (h *Handlers) listInstanceLogs(id string, raw json.RawMessage) Reply {
 			Task:     l.TaskID,
 			Message:  l.Message,
 			Code:     l.Code,
-			Detail:   l.Detail,
+			Data:     l.Data,
+			Meta:     l.Meta,
 		}
 	}
 	return okReply(PageResp[LogEntryResp]{Items: resp, Page: info})

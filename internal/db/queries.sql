@@ -199,10 +199,10 @@ WHERE pd.parent_version = pc.version
 
 -- name: InsertLog :exec
 INSERT INTO process_logs
-    (id, instance_id, level, event, task_id, message, code, detail, created_at)
+    (id, instance_id, level, event, task_id, message, code, data, meta, created_at)
 VALUES
     (sqlc.arg(id), sqlc.arg(instance_id), sqlc.arg(level), sqlc.arg(event),
-     sqlc.arg(task_id), sqlc.arg(message), sqlc.arg(code), sqlc.arg(detail), sqlc.arg(created_at));
+     sqlc.arg(task_id), sqlc.arg(message), sqlc.arg(code), sqlc.arg(data), sqlc.arg(meta), sqlc.arg(created_at));
 
 -- ListLogs (per-instance) and ListTreeLogs (subtree) are hand-written in
 -- db_logs.go: both take a dynamic ORDER BY + keyset cursor (see paginate.go), and

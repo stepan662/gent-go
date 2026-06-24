@@ -60,8 +60,9 @@ type ProcessLog struct {
 	TaskID     string
 	Message    string
 	Code       string
-	Detail     string
+	Data       string
 	CreatedAt  int64
+	Meta       string
 }
 
 type ProcessSignal struct {

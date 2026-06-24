@@ -127,6 +127,56 @@ func TestInputValidationError(t *testing.T) {
 	}
 }
 
+func TestPayloadLabel(t *testing.T) {
+	cases := map[string]string{
+		"instance_created":   "input",
+		"action_started":     "request",
+		"action_succeeded":   "result",
+		"action_failed":      "error",
+		"instance_completed": "output",
+		"children_spawned":   "data", // events without a payload label fall back to "data"
+	}
+	for event, want := range cases {
+		if got := payloadLabel(event); got != want {
+			t.Errorf("payloadLabel(%q) = %q, want %q", event, got, want)
+		}
+	}
+}
+
+func TestFormatMeta(t *testing.T) {
+	// JSON numbers decode to float64; an integer status must render without a decimal.
+	if got := formatMeta(map[string]any{"status": float64(200)}); got != "status=200" {
+		t.Errorf("status meta = %q", got)
+	}
+	if got := formatMeta(map[string]any{"url": "http://x/y"}); got != "url=http://x/y" {
+		t.Errorf("url meta = %q", got)
+	}
+	// Keys are sorted for stable output.
+	if got := formatMeta(map[string]any{"status": float64(500), "code": "http.500"}); got != "code=http.500 status=500" {
+		t.Errorf("multi meta = %q", got)
+	}
+	if got := formatMeta(nil); got != "" {
+		t.Errorf("nil meta = %q, want empty", got)
+	}
+}
+
+func TestClip(t *testing.T) {
+	// The engine stores payload snippets raw — possibly cropped mid-JSON
+	// (…(truncated)) — so the CLI only ever truncates the string, never parses it.
+	if got := clip("hello world", 5); got != "hello…" {
+		t.Errorf("clip(11,5) = %q", got)
+	}
+	if got := clip("short", 10); got != "short" {
+		t.Errorf("clip(no-trunc) = %q", got)
+	}
+	if got := clip("anything", 0); got != "anything" {
+		t.Errorf("clip(0=unlimited) = %q", got)
+	}
+	if got := clip("héllo", 2); got != "hé…" { // multibyte rune kept intact
+		t.Errorf("clip(multibyte) = %q", got)
+	}
+}
+
 func TestTimeFormatting(t *testing.T) {
 	now := time.Now()
 	// shortTime: relative ages for recent timestamps.

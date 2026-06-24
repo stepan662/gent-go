@@ -55,15 +55,19 @@ tasks:
 
   - id: fourth
     action:
-      type: rest
+      type: child
       input:
         sleep: "{{ input.sleep }}"
-      endpoint: "http://localhost:3001/fourth"
+      name: "child"
       result_schema:
         type: object
         properties:
-          slept:
-            type: number
-        required: [slept]
+          final_result:
+            type: object  
+            properties:
+              slept:
+                type: number
     output: "{{ self.result }}"
     switch: end
+
+output: "{{outputs.fourth}}"

@@ -15,8 +15,10 @@ const (
 // Log event kinds emitted by the engine as it advances an instance. These are
 // the stable machine-readable identifiers; the human message lives in Message.
 const (
-	EventTaskStarted     = "task_started"
-	EventTaskSucceeded   = "task_succeeded"
+	EventInstanceCreated = "instance_created"
+	EventActionStarted   = "action_started"   // an action call is about to be sent (request)
+	EventActionSucceeded = "action_succeeded" // an action call returned successfully (response)
+	EventActionFailed    = "action_failed"    // an action call returned an error (status + error body)
 	EventTaskCompleted   = "task_completed"
 	EventRetryScheduled  = "retry_scheduled"
 	EventErrorRoute      = "routing_to_error_handler"
@@ -35,8 +37,14 @@ const (
 )
 
 // LogEntry is one persisted line of an instance's execution audit trail.
-// Detail carries event-specific structured fields (attempt counts, goto target,
-// truncated request/response snippets) and is stored as a JSON blob.
+//
+// Data carries the single raw payload an event is about — a process/task input,
+// output, or request/response/error body — as a JSON snippet that MAY be truncated
+// (so it is not guaranteed to parse). Meta carries small, complete, structured
+// metadata about the event (e.g. {"url":…} / {"status":200}) and is always valid
+// JSON. Message is the human-readable summary; the same fact may appear in both
+// Message (prose) and Meta (structured) by design. Small facts with no payload
+// (attempt counts, goto target, child counts) live in Message.
 type LogEntry struct {
 	ID         string         `json:"id"`
 	InstanceID string         `json:"instance_id"`
@@ -45,7 +53,8 @@ type LogEntry struct {
 	TaskID     string         `json:"task_id,omitempty"`
 	Message    string         `json:"message,omitempty"`
 	Code       string         `json:"code,omitempty"`
-	Detail     map[string]any `json:"detail,omitempty"`
+	Data       string         `json:"data,omitempty"`
+	Meta       map[string]any `json:"meta,omitempty"`
 	CreatedAt  time.Time      `json:"created_at"`
 	// Depth is the instance's distance from the queried subtree root; only set by
 	// ListTreeLogs (0 for single-instance queries). Not persisted.

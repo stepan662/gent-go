@@ -503,10 +503,10 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 
 const insertLog = `-- name: InsertLog :exec
 INSERT INTO process_logs
-    (id, instance_id, level, event, task_id, message, code, detail, created_at)
+    (id, instance_id, level, event, task_id, message, code, data, meta, created_at)
 VALUES
     (?1, ?2, ?3, ?4,
-     ?5, ?6, ?7, ?8, ?9)
+     ?5, ?6, ?7, ?8, ?9, ?10)
 `
 
 type InsertLogParams struct {
@@ -517,7 +517,8 @@ type InsertLogParams struct {
 	TaskID     string
 	Message    string
 	Code       string
-	Detail     string
+	Data       string
+	Meta       string
 	CreatedAt  int64
 }
 
@@ -530,7 +531,8 @@ func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
 		arg.TaskID,
 		arg.Message,
 		arg.Code,
-		arg.Detail,
+		arg.Data,
+		arg.Meta,
 		arg.CreatedAt,
 	)
 	return err

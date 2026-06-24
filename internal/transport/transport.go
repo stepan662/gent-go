@@ -28,10 +28,12 @@ type Request struct {
 // ErrorCode is non-empty on failure ("http.404", "script.1", "output.parse", "start.error", etc.).
 // ErrorMessage is a human-readable description of the failure (may include trimmed response body).
 // Body holds the raw decoded JSON body on success.
+// Status is the HTTP status code for a REST call (success or failure); 0 for non-HTTP transports.
 type Response struct {
 	Body         any
 	ErrorCode    string
 	ErrorMessage string
+	Status       int
 }
 
 // Send dispatches a request to the appropriate endpoint based on the task's call config.
@@ -74,14 +76,14 @@ func sendHTTP(ctx context.Context, endpoint string, acceptedStatus []string, hea
 		if msg == "" {
 			msg = fmt.Sprintf("request failed with status %d without response body", resp.StatusCode)
 		}
-		return &Response{ErrorCode: fmt.Sprintf("http.%d", resp.StatusCode), ErrorMessage: msg}, nil
+		return &Response{ErrorCode: fmt.Sprintf("http.%d", resp.StatusCode), ErrorMessage: msg, Status: resp.StatusCode}, nil
 	}
 
 	var b any
 	if err := json.NewDecoder(resp.Body).Decode(&b); err != nil {
-		return &Response{ErrorCode: "output.parse"}, nil
+		return &Response{ErrorCode: "output.parse", Status: resp.StatusCode}, nil
 	}
-	return &Response{Body: b}, nil
+	return &Response{Body: b, Status: resp.StatusCode}, nil
 }
 
 // matchAcceptedStatus reports whether code is covered by patterns.

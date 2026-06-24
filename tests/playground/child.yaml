@@ -1,14 +1,25 @@
 # yaml-language-server: $schema=http://localhost:8888/process-schema.json
 name: child
+input_schema:
+  type: object
+  properties:
+    sleep:
+      type: integer
+  required: [sleep]
 tasks:
-  - id: child
+  - id: fourth
     action:
       type: rest
-      endpoint: http://localhost:3001/child
+      input:
+        sleep: "{{ input.sleep }}"
+      endpoint: "http://localhost:3001/fourth"
       result_schema:
         type: object
         properties:
-          ok:
-            type: boolean
-        required: [ok]
+          slept:
+            type: number
+        required: [slept]
+    output: "{{ self.result }}"
     switch: end
+output:
+  final_result: "{{outputs.fourth}}"
