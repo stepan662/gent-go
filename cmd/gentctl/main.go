@@ -6,12 +6,17 @@
 //
 //	gentctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
 //	gentctl validate -f file.yaml [-f file2.yaml ...]
-//	gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...]
+//	gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]
 //	gentctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
 //	gentctl get      <instance-id> [--json]
 //	gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--recursive] [--mode basic|detail|json] <instance-id>
 //	gentctl cancel   <instance-id>
 //	gentctl retry    [--force] <instance-id>
+//	gentctl last
+//
+// get/logs/cancel/retry require an instance id; pass @last for the most recently
+// started instance (recorded by run). `gentctl last` prints that id.
+//
 //	gentctl channel list   <process>
 //	gentctl channel set    <process> <channel> <version>
 //	gentctl channel delete <process> <channel>
@@ -83,6 +88,8 @@ func main() {
 		runCancelCmd(server, args)
 	case "retry":
 		runRetryCmd(server, args)
+	case "last":
+		runLastCmd(args)
 	case "config":
 		runConfigCmd(args)
 	default:
@@ -294,7 +301,7 @@ func runStatusCmd(server string, args []string) {
 // number of --set key=value overrides; see buildInput.
 func runRunCmd(server string, args []string) {
 	if len(args) == 0 {
-		fatal("usage: gentctl run <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...]")
+		fatal("usage: gentctl run <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]")
 	}
 	process := args[0]
 
@@ -305,6 +312,8 @@ func runRunCmd(server string, args []string) {
 	inputFlag := fs.String("input", "", "input as a JSON/YAML literal, @file, or - for stdin")
 	var sets multiFlag
 	fs.Var(&sets, "set", "set an input field: key=value (repeatable; dotted keys nest, values are type-inferred)")
+	quietFlag := fs.Bool("quiet", false, "print only the new instance id, e.g. id=$(gentctl run NAME -q)")
+	fs.BoolVar(quietFlag, "q", false, "shorthand for --quiet")
 	fs.Parse(args[1:])
 
 	input, hasInput, err := buildInput(*inputFlag, sets)
@@ -337,21 +346,26 @@ func runRunCmd(server string, args []string) {
 		}
 		fatal("%v", err)
 	}
+	// Record the id so a follow-up command can resolve @last (or a bare-id default)
+	// without copy-pasting. Best-effort: an unwritable state dir must not fail run.
+	if err := saveLastInstance(resp.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "gentctl: warning: could not record last instance id: %v\n", err)
+	}
+	// -q prints just the id so it composes: id=$(gentctl run NAME -q).
+	if *quietFlag {
+		fmt.Println(resp.ID)
+		return
+	}
 	fmt.Printf("started: %s  %s@v%d  (%s)\n", resp.ID, resp.Process, resp.Version, resp.Status)
 }
 
 // runGetCmd prints a single instance's details, including its full context. The
 // instance id is the first argument; pass --json for the raw response.
 func runGetCmd(server string, args []string) {
-	if len(args) == 0 {
-		fatal("usage: gentctl get <instance-id> [--json]")
-	}
-	id := args[0]
-
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
 	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
 	jsonFlag := fs.Bool("json", false, "print the raw JSON response")
-	fs.Parse(args[1:])
+	id := instanceIDAndFlags(fs, args)
 
 	u := *serverFlag + "/instances/" + url.PathEscape(id)
 	if *jsonFlag {
@@ -477,11 +491,7 @@ func runLogsCmd(server string, args []string) {
 	limitFlag := fs.Int("limit", 200, "max entries to return")
 	recursiveFlag := fs.Bool("recursive", false, "include the whole process subtree (root instance id)")
 	modeFlag := fs.String("mode", "detail", "output: basic (no data body), detail (+ data), or json (one JSON object per line, untruncated)")
-	fs.Parse(args)
-	if fs.NArg() != 1 {
-		fatal("usage: gentctl logs [--level L] [--since MS] [--limit N] [--recursive] [--mode basic|detail|json] <instance-id>")
-	}
-	id := fs.Arg(0)
+	id := instanceIDAndFlags(fs, args)
 	mode, err := logview.ParseMode(*modeFlag)
 	if err != nil {
 		fatal("%v", err)
@@ -760,11 +770,7 @@ func longTime(rfc string) string {
 func runCancelCmd(server string, args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
 	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
-	fs.Parse(args)
-	if fs.NArg() != 1 {
-		fatal("usage: gentctl cancel <instance-id>")
-	}
-	id := fs.Arg(0)
+	id := instanceIDAndFlags(fs, args)
 
 	if err := call(*serverFlag+"/instances/"+url.PathEscape(id)+"/cancel", http.MethodPost, nil, nil); err != nil {
 		fatal("%v", err)
@@ -776,11 +782,7 @@ func runRetryCmd(server string, args []string) {
 	fs := flag.NewFlagSet("retry", flag.ExitOnError)
 	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
 	forceFlag := fs.Bool("force", false, "override only_once retry protection")
-	fs.Parse(args)
-	if fs.NArg() != 1 {
-		fatal("usage: gentctl retry [--force] <instance-id>")
-	}
-	id := fs.Arg(0)
+	id := instanceIDAndFlags(fs, args)
 
 	u := *serverFlag + "/instances/" + url.PathEscape(id) + "/retry"
 	if *forceFlag {
@@ -790,6 +792,12 @@ func runRetryCmd(server string, args []string) {
 		fatal("%v", err)
 	}
 	fmt.Printf("retried: %s\n", id)
+}
+
+// runLastCmd prints the most recently started instance id (recorded by `run`), so
+// it can be spliced into other commands, e.g. `gentctl logs $(gentctl last)`.
+func runLastCmd(args []string) {
+	fmt.Println(resolveInstanceID("@last"))
 }
 
 // callGet sends a GET request with no body and decodes the response into out.
@@ -999,6 +1007,82 @@ func saveConfig(cfg gentConfig) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+// ── last-instance state (gentctl run → @last) ───────────────────────────────────
+
+// lastInstanceFilePath is where `run` records the most recently started instance
+// id, kept beside the config so a follow-up command can resolve `@last` (or a bare
+// default) without the caller copy-pasting it.
+func lastInstanceFilePath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "gent", "last"), nil
+}
+
+// saveLastInstance records id as the most recently started instance. Best-effort:
+// the caller treats a failure as non-fatal so `run` still succeeds.
+func saveLastInstance(id string) error {
+	path, err := lastInstanceFilePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(id+"\n"), 0600)
+}
+
+// loadLastInstance returns the most recently started instance id, or "" if none
+// has been recorded yet.
+func loadLastInstance() string {
+	path, err := lastInstanceFilePath()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// resolveInstanceID maps an instance-id argument to a concrete id. The id must be
+// given explicitly: the literal "@last" resolves to the most recently started
+// instance (recorded by `run`), and any other non-empty value is returned
+// unchanged. An empty argument is an error — a bare command never implies @last —
+// as is "@last" when nothing has been started yet.
+func resolveInstanceID(arg string) string {
+	if arg == "" {
+		fatal("an instance id is required — pass one explicitly, or @last for the most recently started instance")
+	}
+	if arg != "@last" {
+		return arg
+	}
+	id := loadLastInstance()
+	if id == "" {
+		fatal("@last: no instance recorded yet — run `gentctl run <process>` first")
+	}
+	return id
+}
+
+// instanceIDAndFlags parses an instance subcommand's args, where the instance id
+// may sit before or after the flags. A leading non-flag token is taken as the id
+// (so `get <id> --json` keeps working); otherwise a trailing positional is used (so
+// `cancel --server X <id>` works too). The id must be given explicitly — a concrete
+// id or "@last"; a missing one is an error (see resolveInstanceID).
+func instanceIDAndFlags(fs *flag.FlagSet, args []string) string {
+	var id string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		id, args = args[0], args[1:]
+	}
+	fs.Parse(args)
+	if id == "" {
+		id = fs.Arg(0)
+	}
+	return resolveInstanceID(id)
+}
+
 func runConfigCmd(args []string) {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: gentctl config get <key>")
@@ -1045,12 +1129,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `Usage:
   gentctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
   gentctl validate -f file.yaml [-f file2.yaml ...]
-  gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...]
+  gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]
   gentctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
   gentctl get      <instance-id> [--json]
   gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--recursive] [--mode basic|detail|json] <instance-id>
   gentctl cancel   <instance-id>
   gentctl retry    [--force] <instance-id>
+  gentctl last
   gentctl channel list   <process>
   gentctl channel set    <process> <channel> <version>
   gentctl channel delete <process> <channel>
@@ -1064,6 +1149,11 @@ Flags:
   --input   process input: a JSON/YAML literal, @file, or - for stdin
   --set     input field key=value (repeatable; dotted keys nest, values type-inferred)
   --server  gent server URL (overrides $GENT_SERVER and config file)
+  -q        with run, print only the new instance id (id=$(gentctl run NAME -q))
+
+Instance id:
+  get/logs/cancel/retry require an instance id; pass @last for the most recently
+  started instance (recorded by run), or run "gentctl last" to print it.
 
 Config keys:
   server    gent server base URL`)

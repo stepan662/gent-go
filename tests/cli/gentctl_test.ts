@@ -1,3 +1,6 @@
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { beforeAll, expect, test } from "vitest";
 import { buildGentctlBinary, runCli, writeDefs } from "../helpers/cli.ts";
 import { client } from "../helpers/client.ts";
@@ -307,6 +310,61 @@ test("instances — lists a freshly started instance", () => {
   // --sort updated is accepted too.
   const u = runCli(bin, ["instances", "--sort", "updated"]);
   expect(u.ok).toBe(true);
+});
+
+// ── run -q / @last / last ───────────────────────────────────────────────────────
+
+test("run -q — prints only the bare instance id", () => {
+  const name = uid("proc");
+  runCli(bin, ["apply", "-f", writeDefs([inputDef(name)])]);
+
+  const r = runCli(bin, ["run", name, "--set", "count=1", "-q"]);
+
+  expect(r.ok).toBe(true);
+  // stdout is exactly the id — nothing else — so id=$(gentctl run … -q) is clean.
+  expect(r.stdout.trim()).toMatch(/^[0-9a-f-]{36}$/);
+  expect(r.stdout).not.toContain("started:");
+});
+
+test("get / logs / last — @last resolves the most recently started instance", () => {
+  const name = uid("proc");
+  runCli(bin, ["apply", "-f", writeDefs([inputDef(name)])]);
+  const id = runCli(bin, ["run", name, "--set", "count=7", "-q"]).stdout.trim();
+
+  // `last` echoes the recorded id.
+  expect(runCli(bin, ["last"]).stdout.trim()).toBe(id);
+
+  // @last is the explicit handle, including alongside a flag.
+  const gj = runCli(bin, ["get", "@last", "--json"]);
+  expect(gj.ok).toBe(true);
+  expect(gj.stdout).toContain(`"${id}"`);
+
+  // logs accept @last too.
+  const l = runCli(bin, ["logs", "@last"]);
+  expect(l.ok).toBe(true);
+});
+
+test("get — requires an explicit id (a bare command never implies @last)", () => {
+  const name = uid("proc");
+  runCli(bin, ["apply", "-f", writeDefs([inputDef(name)])]);
+  // Even immediately after a run, a bare `get` must not silently reuse the last id.
+  runCli(bin, ["run", name, "--set", "count=1", "-q"]);
+
+  const r = runCli(bin, ["get"]);
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("instance id is required");
+});
+
+test("@last — errors when no instance has been started yet", () => {
+  // A pristine config home so no prior `run` leaks a last id into this case.
+  const home = mkdtempSync(join(tmpdir(), "gent_nolast_"));
+  const r = runCli(bin, ["get", "@last"], {
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+  });
+
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("no instance recorded");
 });
 
 // ── status ────────────────────────────────────────────────────────────────────

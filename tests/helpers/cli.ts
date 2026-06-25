@@ -1,12 +1,18 @@
 import { spawnSync } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
-import { writeFileSync } from "fs";
+import { mkdtempSync, writeFileSync } from "fs";
 import { BASE_URL } from "./constants.ts";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
 let cachedBin: string | null = null;
+
+// gentctl persists its "last started instance" id under the user config dir
+// (os.UserConfigDir → $HOME/Library/... on macOS, $XDG_CONFIG_HOME on Linux). Point
+// both at a throwaway dir so CLI tests exercise @last without touching the real
+// machine config, and so a `run` in one test is visible to a later command in it.
+const CLI_HOME = mkdtempSync(join(tmpdir(), "gent_cli_home_"));
 
 export function buildGentctlBinary(): string {
   if (cachedBin) return cachedBin;
@@ -31,9 +37,19 @@ export interface CliResult {
   ok: boolean;
 }
 
-export function runCli(bin: string, args: string[]): CliResult {
+export function runCli(
+  bin: string,
+  args: string[],
+  env: Record<string, string> = {},
+): CliResult {
   const result = spawnSync(bin, args, {
-    env: { ...process.env, GENT_SERVER: BASE_URL },
+    env: {
+      ...process.env,
+      GENT_SERVER: BASE_URL,
+      HOME: CLI_HOME,
+      XDG_CONFIG_HOME: join(CLI_HOME, ".config"),
+      ...env,
+    },
     encoding: "utf8",
   });
   return {
