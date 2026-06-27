@@ -37,6 +37,19 @@ type DB struct {
 	// hottest read (every spawn/goto/output resolves a definition) and on SQLite it
 	// otherwise contends with writes for the single connection.
 	defCache sync.Map // defKey → string
+
+	// Audit logs are best-effort and decoupled from instance state (migration 008):
+	// the engine appends several per advance() and they must never stall it on a DB
+	// round-trip. AppendLog stamps each row and buffers it; logFlusher writes the
+	// buffer in batched multi-row INSERTs every logFlushInterval (and immediately
+	// once it reaches logBatchRows). Reads (ListLogs/ListTreeLogs) and the retention
+	// prune flush first, so a buffered row is always visible to a query that follows
+	// its append. A crash can drop buffered rows — an observability gap, never state
+	// corruption, exactly as the schema intends.
+	logMu      sync.Mutex
+	logBuf     []dbgen.InsertLogParams
+	logStop    chan struct{} // closed by Close() to stop the flusher
+	logStopped chan struct{} // closed by the flusher after its final flush
 }
 
 type defKey struct {
@@ -56,6 +69,7 @@ type defKey struct {
 //   - FULL: fsync the WAL on every commit, so a committed transaction survives even a
 //     power loss — the same guarantee as Postgres's synchronous_commit=on, at a much
 //     higher per-commit cost.
+//
 // OFF and EXTRA are also accepted (weaker / stronger respectively).
 func OpenSQLite(path, synchronous string) (*DB, error) {
 	sync, err := sqliteSynchronous(synchronous)
@@ -122,7 +136,16 @@ func open(sqldb *sql.DB, dialect string) (*DB, error) {
 	if dialect == "postgres" {
 		dbtx = pgRewriter{dbtx}
 	}
-	return &DB{sqldb: sqldb, q: dbgen.New(dbtx), exec: dbtx, dialect: dialect}, nil
+	db := &DB{
+		sqldb:      sqldb,
+		q:          dbgen.New(dbtx),
+		exec:       dbtx,
+		dialect:    dialect,
+		logStop:    make(chan struct{}),
+		logStopped: make(chan struct{}),
+	}
+	go db.logFlusher()
+	return db, nil
 }
 
 // pgBootstrapLockKey is the advisory-lock key that serializes bootstrapPostgres
@@ -179,7 +202,13 @@ func bootstrapPostgres(sqldb *sql.DB) error {
 	return nil
 }
 
-func (db *DB) Close() error { return db.sqldb.Close() }
+// Close stops the audit-log flusher (writing out any buffered rows) and closes the
+// underlying connection pool.
+func (db *DB) Close() error {
+	close(db.logStop)
+	<-db.logStopped
+	return db.sqldb.Close()
+}
 
 // pageInfo runs the paginator's before/after counts for a page whose boundary key
 // values are first/last (in display order; nil for an empty page) and assembles
