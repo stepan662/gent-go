@@ -44,6 +44,37 @@ func InferType(s string, sc schema.Schema) (schema.Schema, error) {
 	return schema.FromNode(&schema.SchemaNode{Type: schema.SchemaType{"string"}}), nil
 }
 
+// ReferencesSecret reports whether any expression embedded in the template reads
+// a secret value (see expression.ReferencesSecret). A plain string with no {{ }}
+// is never secret.
+func ReferencesSecret(s string, sc schema.Schema) (bool, error) {
+	if expr, ok := singleExpr(s); ok {
+		return expression.ReferencesSecret(expr, sc)
+	}
+	rest := s
+	for {
+		start := strings.Index(rest, "{{")
+		if start == -1 {
+			break
+		}
+		rest = rest[start+2:]
+		end := strings.Index(rest, "}}")
+		if end == -1 {
+			break
+		}
+		expr := rest[:end]
+		rest = rest[end+2:]
+		sec, err := expression.ReferencesSecret(expr, sc)
+		if err != nil {
+			return false, err
+		}
+		if sec {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // checkMixedNullability rejects mixed templates where any expression may be null.
 // Null values would silently become the string "null" at runtime, which is almost
 // never intentional. The user must add a ?? default to make the intent explicit.

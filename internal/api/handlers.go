@@ -293,7 +293,7 @@ func (h *Handlers) putDefinition(raw json.RawMessage) Reply {
 	if err := validation.ValidateChildProcessRefs(&req.ProcessDefinition, version, h.db); err != nil {
 		return errReply(err)
 	}
-	if err := h.db.SaveDefinition(&req.ProcessDefinition, version, nil, "", ""); err != nil {
+	if err := h.db.SaveDefinition(&req.ProcessDefinition, version, nil, "", defaultChannel); err != nil {
 		return errReply(fmt.Errorf("save: %w", err))
 	}
 	return okReply(map[string]interface{}{"saved": true, "name": req.Name, "version": version})
@@ -319,7 +319,7 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 		}
 		version = v
 	default:
-		v, err := h.db.LatestVersion(req.Process)
+		v, err := h.resolveDefaultVersion(req.Process)
 		if err != nil {
 			return errReply(err)
 		}
@@ -411,7 +411,15 @@ func (h *Handlers) getInstance(id string) Reply {
 	if err != nil {
 		return errReply(err)
 	}
-	return okReply(instanceToResp(inst))
+	resp := instanceToResp(inst)
+	// Redact secret-derived values from the returned context (the DB still holds
+	// them plainly; they are just not exposed over the API).
+	if def, derr := h.db.GetDefinition(inst.ProcessName, inst.ProcessVersion); derr == nil {
+		if sf, gerr := validation.Generate(def); gerr == nil {
+			resp.Context = orderedContext(validation.RedactContext(inst.ContextData, sf))
+		}
+	}
+	return okReply(resp)
 }
 
 func (h *Handlers) listInstanceLogs(id string, raw json.RawMessage) Reply {
@@ -719,12 +727,36 @@ func orderedContext(ctxData map[string]any) map[string]any {
 	return result
 }
 
+// resolveDefaultVersion returns the version a bare process reference (no explicit
+// version or channel) resolves to: the version the "latest" channel points at —
+// i.e. what apply most recently published. ensureLatestChannel guarantees "latest"
+// exists from the first apply, so the fallback to the highest version number is
+// only a safety net for definitions registered before that invariant.
+func (h *Handlers) resolveDefaultVersion(process string) (int, error) {
+	if v, err := h.db.GetChannel(process, defaultChannel); err == nil {
+		return v, nil
+	}
+	return h.db.LatestVersion(process)
+}
+
+// ensureLatestChannel guarantees the "latest" channel exists for a process — it is
+// created (pointing at version) on the first apply even when applied to another
+// channel, so a bare process reference always resolves via a channel. It only
+// creates "latest" when absent; an apply targeting "latest" updates it through the
+// normal path.
+func (h *Handlers) ensureLatestChannel(name string, version int) error {
+	if _, err := h.db.GetChannel(name, defaultChannel); err == nil {
+		return nil
+	}
+	return h.db.SaveChannel(name, defaultChannel, version)
+}
+
 // ProcessSpec returns the full OpenAPI spec with the input schema for POST /instances
 // patched to match the specific process definition. Input stays as `any` when the
 // process has no input_schema.
 func (h *Handlers) ProcessSpec(name string, version int) ([]byte, error) {
 	if version == 0 {
-		v, err := h.db.LatestVersion(name)
+		v, err := h.resolveDefaultVersion(name)
 		if err != nil {
 			return nil, err
 		}
@@ -880,6 +912,9 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 			if err := h.db.SaveChannel(def.Name, channel, v); err != nil {
 				return nil, fmt.Errorf("channel %s: %w", def.Name, err)
 			}
+			if err := h.ensureLatestChannel(def.Name, v); err != nil {
+				return nil, fmt.Errorf("ensure latest %s: %w", def.Name, err)
+			}
 			batchVersions[def.Name] = v
 			results = append(results, BatchApplyResult{Name: def.Name, Version: v, Saved: false})
 			continue
@@ -900,6 +935,9 @@ func (h *Handlers) applyBatch(defs []model.ProcessDefinition, channel string, au
 
 		if err := h.db.SaveDefinition(def, newVersion, newDeps, hash, channel); err != nil {
 			return nil, fmt.Errorf("save %s: %w", def.Name, err)
+		}
+		if err := h.ensureLatestChannel(def.Name, newVersion); err != nil {
+			return nil, fmt.Errorf("ensure latest %s: %w", def.Name, err)
 		}
 		batchVersions[def.Name] = newVersion
 		results = append(results, BatchApplyResult{Name: def.Name, Version: newVersion, Saved: true})

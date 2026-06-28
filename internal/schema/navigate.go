@@ -219,6 +219,125 @@ func Deref(s *SchemaNode, defs map[string]*SchemaNode) (*SchemaNode, error) {
 	return target, nil
 }
 
+// IsSecret reports whether s is a secret value (marked secret:true), looking
+// through nullable / single-variant union wrappers so an optional or wrapped
+// secret is still recognised.
+func IsSecret(s *SchemaNode) bool {
+	if s == nil {
+		return false
+	}
+	if s.Secret {
+		return true
+	}
+	for _, v := range s.OneOf {
+		if IsSecret(v) {
+			return true
+		}
+	}
+	for _, v := range s.AnyOf {
+		if IsSecret(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// Taint returns a copy of s marked secret:true. It is used to taint the result of
+// an expression that reads a secret value (conservatively, the whole value).
+func Taint(s *SchemaNode) *SchemaNode {
+	if s == nil {
+		return &SchemaNode{Secret: true}
+	}
+	if s.Secret {
+		return s
+	}
+	n := *s
+	n.Secret = true
+	return &n
+}
+
+// PathHitsSecret reports whether navigating path from s passes through (or ends
+// at) a node marked secret — reading from inside a secret object is itself
+// secret. Returns false if the path cannot be resolved.
+func PathHitsSecret(s *SchemaNode, defs map[string]*SchemaNode, path string) bool {
+	steps, err := parsePath(path)
+	if err != nil {
+		return false
+	}
+	cur, err := Deref(s, defs)
+	if err != nil {
+		return false
+	}
+	if IsSecret(cur) {
+		return true
+	}
+	for _, step := range steps {
+		if step.prop != "" {
+			cur, err = LookupProperty(cur, step.prop, defs)
+		} else {
+			cur, err = InferIndex(cur, defs)
+		}
+		if err != nil {
+			return false
+		}
+		if IsSecret(cur) {
+			return true
+		}
+	}
+	return false
+}
+
+// Redact returns value with every field whose schema is marked secret replaced by
+// "***", walking objects and arrays against node (resolving $refs and looking
+// through nullable wrappers). Non-secret values pass through unchanged. Used to
+// scrub secret-derived values before they cross a public boundary (API, logs).
+func Redact(value any, node *SchemaNode, defs map[string]*SchemaNode) any {
+	if node == nil || value == nil {
+		return value
+	}
+	resolved, err := Deref(node, defs)
+	if err != nil {
+		return value
+	}
+	if IsSecret(resolved) {
+		return "***"
+	}
+	// Look through a nullable / single-variant wrapper to the concrete shape.
+	if len(resolved.Properties) == 0 && resolved.Items == nil && (len(resolved.OneOf) > 0 || len(resolved.AnyOf) > 0) {
+		if stripped := StripNull(resolved); stripped != resolved {
+			if d, derr := Deref(stripped, defs); derr == nil {
+				resolved = d
+			}
+		}
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		if len(resolved.Properties) == 0 {
+			return value
+		}
+		out := make(map[string]any, len(v))
+		for k, val := range v {
+			if prop, ok := resolved.Properties[k]; ok {
+				out[k] = Redact(val, prop, defs)
+			} else {
+				out[k] = val
+			}
+		}
+		return out
+	case []any:
+		if resolved.Items == nil {
+			return value
+		}
+		out := make([]any, len(v))
+		for i, el := range v {
+			out[i] = Redact(el, resolved.Items, defs)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
 // IsNullType reports whether s is exactly {type:"null"}.
 func IsNullType(s *SchemaNode) bool {
 	return s != nil && len(s.Type) == 1 && s.Type[0] == "null"

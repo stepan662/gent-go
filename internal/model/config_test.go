@@ -217,6 +217,38 @@ func TestEnvToken(t *testing.T) {
 	}
 }
 
+// A coercion failure on a secret var must not echo the value into the error.
+func TestResolveConfigRedactsSecretInError(t *testing.T) {
+	def := &ProcessDefinition{
+		Name: "p",
+		ConfigSchema: cfgSchema([]string{"API_KEY"}, map[string]*schema.SchemaNode{
+			"API_KEY": {Type: schema.SchemaType{"number"}, Secret: true},
+		}),
+	}
+	_, err := def.ResolveConfig(lookupFrom(map[string]string{"GENT_GLOBAL_API_KEY": "supersecret"}))
+	if err == nil {
+		t.Fatal("expected a coercion error")
+	}
+	if strings.Contains(err.Error(), "supersecret") {
+		t.Errorf("secret value leaked into error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "***") {
+		t.Errorf("expected redacted value in error, got: %v", err)
+	}
+}
+
+// A non-secret var's bad value is shown to aid debugging.
+func TestResolveConfigShowsNonSecretInError(t *testing.T) {
+	def := &ProcessDefinition{
+		Name:         "p",
+		ConfigSchema: cfgSchema([]string{"PORT"}, map[string]*schema.SchemaNode{"PORT": {Type: schema.SchemaType{"integer"}}}),
+	}
+	_, err := def.ResolveConfig(lookupFrom(map[string]string{"GENT_GLOBAL_PORT": "abc"}))
+	if err == nil || !strings.Contains(err.Error(), "abc") {
+		t.Errorf("non-secret value should be shown for debugging, got: %v", err)
+	}
+}
+
 func TestSecretConfigValues(t *testing.T) {
 	def := &ProcessDefinition{
 		ConfigSchema: cfgSchema(nil, map[string]*schema.SchemaNode{

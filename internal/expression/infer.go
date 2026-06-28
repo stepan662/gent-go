@@ -59,6 +59,45 @@ func InferType(expression string, s schema.Schema) (schema.Schema, error) {
 	return schema.FromNode(result), nil
 }
 
+// ReferencesSecret reports whether expression reads any value whose schema — or
+// an enclosing object's schema along the access path — is marked secret. It is
+// deliberately conservative: any path that passes through a secret node taints
+// the whole expression, regardless of what the expression then does with the
+// value. This is the reliable half of secret taint tracking (the structural half
+// is the secret bit carried on the schema node itself).
+func ReferencesSecret(expression string, s schema.Schema) (bool, error) {
+	tree, err := parser.Parse(expression)
+	if err != nil {
+		return false, fmt.Errorf("parse %q: %w", expression, err)
+	}
+	node := s.Node()
+	var defs map[string]*schema.SchemaNode
+	if node != nil {
+		defs = node.Defs
+	}
+	return walkSecretRefs(tree.Node, node, defs), nil
+}
+
+func walkSecretRefs(n ast.Node, root *schema.SchemaNode, defs map[string]*schema.SchemaNode) bool {
+	if n == nil {
+		return false
+	}
+	if path := nodePath(n); path != "" && schema.PathHitsSecret(root, defs, path) {
+		return true
+	}
+	switch x := n.(type) {
+	case *ast.MemberNode:
+		return walkSecretRefs(x.Node, root, defs) || walkSecretRefs(x.Property, root, defs)
+	case *ast.BinaryNode:
+		return walkSecretRefs(x.Left, root, defs) || walkSecretRefs(x.Right, root, defs)
+	case *ast.UnaryNode:
+		return walkSecretRefs(x.Node, root, defs)
+	case *ast.ConditionalNode:
+		return walkSecretRefs(x.Cond, root, defs) || walkSecretRefs(x.Exp1, root, defs) || walkSecretRefs(x.Exp2, root, defs)
+	}
+	return false
+}
+
 func inferNode(node ast.Node, ictx inferCtx) (*schema.SchemaNode, error) {
 	switch n := node.(type) {
 	case *ast.IntegerNode:

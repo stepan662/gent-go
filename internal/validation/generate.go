@@ -26,6 +26,36 @@ type SchemaFile struct {
 	Defs          map[string]*schema.SchemaNode `json:"$defs,omitempty"`
 }
 
+// RedactContext returns a copy of an instance's context_data with secret-derived
+// values replaced by "***", using the schemas inferred for the process: input is
+// scrubbed against ProcessInput, each outputs.<task> against that task's output
+// schema, and output against ProcessOutput. Values with no inferred schema (or no
+// secrets) pass through unchanged.
+func RedactContext(ctxData map[string]any, sf SchemaFile) map[string]any {
+	out := make(map[string]any, len(ctxData))
+	for k, v := range ctxData {
+		out[k] = v
+	}
+	if v, ok := out["input"]; ok && sf.ProcessInput != nil {
+		out["input"] = schema.Redact(v, sf.ProcessInput, sf.Defs)
+	}
+	if outputs, ok := out["outputs"].(map[string]any); ok {
+		red := make(map[string]any, len(outputs))
+		for tid, v := range outputs {
+			if ts, ok := sf.Tasks[tid]; ok && ts.Output != nil {
+				red[tid] = schema.Redact(v, ts.Output, sf.Defs)
+			} else {
+				red[tid] = v
+			}
+		}
+		out["outputs"] = red
+	}
+	if v, ok := out["output"]; ok && sf.ProcessOutput != nil {
+		out["output"] = schema.Redact(v, sf.ProcessOutput, sf.Defs)
+	}
+	return out
+}
+
 // buildSchemaContext derives the shared defs, tasks, and processInput from a definition.
 // Both Generate and ValidateChildProcessRefs use it to avoid duplicating setup.
 func buildSchemaContext(def *model.ProcessDefinition) (defs map[string]*schema.SchemaNode, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, configSchema *schema.SchemaNode, err error) {

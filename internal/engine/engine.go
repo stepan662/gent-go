@@ -16,7 +16,9 @@ import (
 	"gent/internal/idgen"
 	"gent/internal/logview"
 	"gent/internal/model"
+	"gent/internal/schema"
 	"gent/internal/transport"
+	"gent/internal/validation"
 )
 
 const (
@@ -69,6 +71,56 @@ type Engine struct {
 	sem                chan struct{}
 	workerID           string
 	inflight           sync.Map // instance IDs this worker is currently advancing (detects overwhelm via self-reclaim)
+	// schemaCache caches the inferred SchemaFile per (process,version) so logged
+	// payloads can be schema-redacted (secret fields → "***") without re-running
+	// inference on every log line. Definitions are immutable per version.
+	schemaCache sync.Map
+}
+
+type schemaKey struct {
+	name    string
+	version int
+}
+
+// schemaFile returns the inferred schemas for the instance's process (cached),
+// used to redact secret-derived fields from logged payloads.
+func (e *Engine) schemaFile(inst *model.ProcessInstance) (validation.SchemaFile, bool) {
+	key := schemaKey{inst.ProcessName, inst.ProcessVersion}
+	if cached, ok := e.schemaCache.Load(key); ok {
+		return cached.(validation.SchemaFile), true
+	}
+	def, err := e.db.GetDefinition(inst.ProcessName, inst.ProcessVersion)
+	if err != nil {
+		return validation.SchemaFile{}, false
+	}
+	sf, err := validation.Generate(def)
+	if err != nil {
+		return validation.SchemaFile{}, false
+	}
+	e.schemaCache.Store(key, sf)
+	return sf, true
+}
+
+// snippetInput redacts a task's resolved input (the request body) against its
+// inferred input schema, then returns the capped JSON snippet.
+func (e *Engine) snippetInput(inst *model.ProcessInstance, taskID string, data any) string {
+	if e.logCfg.Payloads {
+		if sf, ok := e.schemaFile(inst); ok {
+			if ts, ok := sf.Tasks[taskID]; ok && ts.Input != nil {
+				data = schema.Redact(data, ts.Input, sf.Defs)
+			}
+		}
+	}
+	return e.snippet(data)
+}
+
+// snippetResult redacts an action's raw result body against its result_schema
+// (which may mark response fields secret), then returns the capped JSON snippet.
+func (e *Engine) snippetResult(task *model.Task, body any) string {
+	if e.logCfg.Payloads && task.Action != nil && task.Action.ResultSchema != nil {
+		body = schema.Redact(body, task.Action.ResultSchema, task.Action.ResultSchema.Defs)
+	}
+	return e.snippet(body)
 }
 
 // New creates an Engine. pollEvery controls how often SQLite is checked for work.
@@ -610,7 +662,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	if task.Action.Type == model.ActionTypeREST {
 		startMeta = map[string]any{"url": endpoint}
 	}
-	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionStarted, Task: task.ID, Msg: string(task.Action.Type), Data: e.snippet(data), Meta: startMeta})
+	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionStarted, Task: task.ID, Msg: string(task.Action.Type), Data: e.snippetInput(inst, task.ID, data), Meta: startMeta})
 
 	resolvedHeaders, err := e.resolveHeaders(inst, task.Action)
 	if err != nil {
@@ -647,7 +699,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	// action_succeeded (debug): the response body in data, the HTTP status in meta.
 	// Like action_started it carries an action payload, so it is gated behind
 	// --level debug rather than cluttering the default info trail.
-	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionSucceeded, Task: task.ID, Data: e.snippet(resp.Body), Meta: statusMeta(resp.Status)})
+	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionSucceeded, Task: task.ID, Data: e.snippetResult(task, resp.Body), Meta: statusMeta(resp.Status)})
 
 	return resp.Body, nil
 }
@@ -1074,7 +1126,13 @@ func statusMeta(status int) map[string]any {
 // for each spawned child. It bookends the trail with instance_completed, which
 // carries the final output.
 func (e *Engine) AuditCreated(inst *model.ProcessInstance) {
-	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventInstanceCreated, Data: e.snippet(inst.ContextData["input"])})
+	input := inst.ContextData["input"]
+	if e.logCfg.Payloads {
+		if sf, ok := e.schemaFile(inst); ok && sf.ProcessInput != nil {
+			input = schema.Redact(input, sf.ProcessInput, sf.Defs)
+		}
+	}
+	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventInstanceCreated, Data: e.snippet(input)})
 }
 
 // outputData captures the process's final output for the instance_completed event:
@@ -1082,7 +1140,13 @@ func (e *Engine) AuditCreated(inst *model.ProcessInstance) {
 // definition's output projection), or "" when the process defines no output (or
 // payload logging is off).
 func (e *Engine) outputData(inst *model.ProcessInstance) string {
-	return e.snippet(inst.ContextData["output"])
+	out := inst.ContextData["output"]
+	if e.logCfg.Payloads {
+		if sf, ok := e.schemaFile(inst); ok && sf.ProcessOutput != nil {
+			out = schema.Redact(out, sf.ProcessOutput, sf.Defs)
+		}
+	}
+	return e.snippet(out)
 }
 
 // snippet renders v as JSON capped to the configured payload size for inclusion

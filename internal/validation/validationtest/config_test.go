@@ -5,6 +5,33 @@ import (
 	"testing"
 )
 
+// A config secret interpolated into the process output taints that output field
+// in the inferred schema (so it can be redacted at the public boundary).
+func TestSecretFlowsToOutput(t *testing.T) {
+	out := runGenerate(t, `{
+		"name": "p",
+		"config_schema": {
+			"type": "object",
+			"required": ["api_key"],
+			"properties": { "api_key": { "type": "string", "secret": true } }
+		},
+		"tasks": [
+			{ "id": "t", "action": { "type": "rest", "endpoint": "http://x" }, "switch": "end" }
+		],
+		"output": { "token": "{{ config.api_key }}", "name": "static" }
+	}`)
+	def := out.Defs["output"]
+	if def == nil {
+		t.Fatalf("no \"output\" def; have %v", defKeys(out))
+	}
+	if def.Properties["token"] == nil || !def.Properties["token"].Secret {
+		t.Errorf("output.token should be marked secret, got %+v", def.Properties["token"])
+	}
+	if def.Properties["name"] != nil && def.Properties["name"].Secret {
+		t.Errorf("output.name should not be secret")
+	}
+}
+
 // An optional config var (not required, no default) is nullable, so interpolating
 // it into a rest endpoint URL is rejected at registration.
 func TestConfigNullableEndpointRejected(t *testing.T) {

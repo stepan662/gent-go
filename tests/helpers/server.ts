@@ -55,6 +55,8 @@ function spawnProc(
       GENT_GLOBAL_E2E_TOKEN: "supersecret-token-value",
       // Points at a fixed mock port for the "config value in a rest endpoint" test.
       GENT_GLOBAL_SERVER_URL: "http://localhost:14100",
+      // A secret config value for the API-redaction test.
+      GENT_GLOBAL_API_KEY: "supersecret-api-key",
     },
   });
 }

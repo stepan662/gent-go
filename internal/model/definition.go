@@ -791,14 +791,20 @@ func (d *ProcessDefinition) ResolveConfig(lookup func(string) (string, bool)) (m
 			}
 			continue
 		}
-		val, err := coerceConfigValue(name, propType(prop), raw)
+		val, err := coerceConfigValue(name, propType(prop), raw, prop.Secret)
 		if err != nil {
 			return nil, err
 		}
 		out[name] = val
 	}
 	if err := validateSchema(d.ConfigSchema, out); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
+		// Schema-validation errors (enum/range) can echo the offending value, so
+		// scrub any secret values that reach the message.
+		msg := err.Error()
+		for _, sv := range d.SecretConfigValues(out) {
+			msg = strings.ReplaceAll(msg, sv, "***")
+		}
+		return nil, fmt.Errorf("config: %s", msg)
 	}
 	return out, nil
 }
@@ -876,27 +882,33 @@ func (d *ProcessDefinition) SecretConfigValues(resolved map[string]any) []string
 }
 
 // coerceConfigValue converts an environment string to the config var's declared
-// type. An empty or "string" type passes the value through unchanged.
-func coerceConfigValue(name, typ, raw string) (any, error) {
+// type. An empty or "string" type passes the value through unchanged. When the var
+// is secret, the value is never echoed in an error (it would leak to the CLI, the
+// instance error field, and logs); a non-secret value is shown to aid debugging.
+func coerceConfigValue(name, typ, raw string, secret bool) (any, error) {
+	shown := raw
+	if secret {
+		shown = "***"
+	}
 	switch typ {
 	case "", "string":
 		return raw, nil
 	case "integer":
 		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("config %q: %q is not a valid integer", name, raw)
+			return nil, fmt.Errorf("config %q: %q is not a valid integer", name, shown)
 		}
 		return n, nil
 	case "number":
 		f, err := strconv.ParseFloat(raw, 64)
 		if err != nil {
-			return nil, fmt.Errorf("config %q: %q is not a valid number", name, raw)
+			return nil, fmt.Errorf("config %q: %q is not a valid number", name, shown)
 		}
 		return f, nil
 	case "boolean":
 		b, err := strconv.ParseBool(raw)
 		if err != nil {
-			return nil, fmt.Errorf("config %q: %q is not a valid boolean (use true/false)", name, raw)
+			return nil, fmt.Errorf("config %q: %q is not a valid boolean (use true/false)", name, shown)
 		}
 		return b, nil
 	default:

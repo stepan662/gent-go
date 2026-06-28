@@ -131,7 +131,14 @@ func inferShape(node any, ctx *schema.SchemaNode, label string) (*schema.SchemaN
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", label, err)
 		}
-		return inferred.Node(), nil
+		out := inferred.Node()
+		// Taint the leaf if its expression reads a secret. Structural secrets (a
+		// passed-through secret node) are already carried on `out`; this adds the
+		// reference-taint that survives any transformation the expression applies.
+		if sec, serr := template.ReferencesSecret(n, schema.FromNode(ctx)); serr == nil && sec {
+			out = schema.Taint(out)
+		}
+		return out, nil
 	case map[string]any:
 		props := make(map[string]*schema.SchemaNode, len(n))
 		required := make([]string, 0, len(n))
