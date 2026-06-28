@@ -4,6 +4,7 @@ package validation
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"gent/internal/model"
 	"gent/internal/schema"
@@ -27,7 +28,7 @@ type SchemaFile struct {
 
 // buildSchemaContext derives the shared defs, tasks, and processInput from a definition.
 // Both Generate and ValidateChildProcessRefs use it to avoid duplicating setup.
-func buildSchemaContext(def *model.ProcessDefinition) (defs map[string]*schema.SchemaNode, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, err error) {
+func buildSchemaContext(def *model.ProcessDefinition) (defs map[string]*schema.SchemaNode, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, configSchema *schema.SchemaNode, err error) {
 	named := make(map[string]*schema.SchemaNode)
 	if def.InputSchema != nil {
 		named["input"] = def.InputSchema
@@ -44,7 +45,37 @@ func buildSchemaContext(def *model.ProcessDefinition) (defs map[string]*schema.S
 	if named["input"] != nil {
 		processInput = schemaRef("input")
 	}
+	configSchema = buildConfigSchema(def.ConfigSchema)
 	return
+}
+
+// buildConfigSchema types the "config" namespace from the definition's
+// config_schema so expressions referencing config.<NAME> are type-checked and an
+// undeclared config.<NAME> is rejected at registration. A property is marked
+// required (non-null) only when it is actually guaranteed present at runtime — it
+// is in config_schema.required or has a default; everything else stays optional,
+// so accessing it yields a nullable type and the inferrer flags unsafe uses (e.g.
+// a possibly-null value interpolated into a URL). Returns nil when no config is
+// declared.
+func buildConfigSchema(cs *schema.SchemaNode) *schema.SchemaNode {
+	if cs == nil || len(cs.Properties) == 0 {
+		return nil
+	}
+	present := make(map[string]bool, len(cs.Properties))
+	for _, r := range cs.Required {
+		present[r] = true
+	}
+	for name, prop := range cs.Properties {
+		if prop != nil && prop.Default != nil {
+			present[name] = true
+		}
+	}
+	required := make([]string, 0, len(present))
+	for name := range present {
+		required = append(required, name)
+	}
+	slices.Sort(required)
+	return &schema.SchemaNode{Type: schema.SchemaType{"object"}, Properties: cs.Properties, Required: required}
 }
 
 // Generate normalises all schemas in def and builds the SchemaFile output.
@@ -54,13 +85,13 @@ func Generate(def *model.ProcessDefinition) (SchemaFile, error) {
 	}
 	result := SchemaFile{Process: def.Name}
 
-	defs, tasks, processInput, err := buildSchemaContext(def)
+	defs, tasks, processInput, configSchema, err := buildSchemaContext(def)
 	if err != nil {
 		return SchemaFile{}, err
 	}
 	result.ProcessInput = processInput
 
-	if err := buildInputs(def.Tasks, tasks, processInput, defs); err != nil {
+	if err := buildInputs(def.Tasks, tasks, processInput, configSchema, defs); err != nil {
 		return SchemaFile{}, err
 	}
 
@@ -80,7 +111,7 @@ func Generate(def *model.ProcessDefinition) (SchemaFile, error) {
 	}
 
 	if def.Output.Present() {
-		outputSchema, err := inferProcessOutput(def, tasks, result.ProcessInput, defs)
+		outputSchema, err := inferProcessOutput(def, tasks, result.ProcessInput, configSchema, defs)
 		if err != nil {
 			return SchemaFile{}, err
 		}
@@ -98,9 +129,9 @@ func Generate(def *model.ProcessDefinition) (SchemaFile, error) {
 	return result, nil
 }
 
-func inferProcessOutput(def *model.ProcessDefinition, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, defs map[string]*schema.SchemaNode) (*schema.SchemaNode, error) {
+func inferProcessOutput(def *model.ProcessDefinition, tasks map[string]TaskSchemas, processInput, configSchema *schema.SchemaNode, defs map[string]*schema.SchemaNode) (*schema.SchemaNode, error) {
 	req, opt, errReq, errOpt := outputContextSets(def)
-	ctx := contextSchema(req, opt, tasks, processInput, errReq, errOpt)
+	ctx := contextSchema(req, opt, tasks, processInput, configSchema, errReq, errOpt)
 	if len(defs) > 0 {
 		ctx = withDefs(ctx, defs)
 	}

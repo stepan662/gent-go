@@ -24,7 +24,7 @@ func TestEvaluator(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.expr, func(t *testing.T) {
-			got, err := evalBool(tt.expr, tt.ctx, nil)
+			got, err := evalBool(tt.expr, tt.ctx, nil, nil)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
@@ -59,7 +59,7 @@ func TestEvaluator_EvalBool_WithSelf(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := evalBool(tt.expr, ctx, tt.self)
+			got, err := evalBool(tt.expr, ctx, nil, tt.self)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -91,7 +91,7 @@ func TestEvalDurationMs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := evalDurationMs(tt.expr, ctx)
+			got, err := evalDurationMs(tt.expr, ctx, nil)
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("evalDurationMs(%q) = %d, want error", tt.expr, got)

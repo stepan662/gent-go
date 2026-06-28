@@ -15,7 +15,7 @@ import (
 // reads another's output is inferred after it; mutually-recursive tasks (a cycle
 // of outputs.<id> references, including a single task referencing itself) are
 // resolved together by a joint fixpoint over the strongly-connected component.
-func inferOutputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, processInput *schema.SchemaNode,
+func inferOutputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, processInput, configSchema *schema.SchemaNode,
 	defs map[string]*schema.SchemaNode, required, optional map[string][]string, mustErr, mayErr map[string]bool) error {
 
 	taskByID := make(map[string]*model.Task, len(tasks))
@@ -61,7 +61,7 @@ func inferOutputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, proce
 	for _, scc := range tarjanSCC(graph, omIDs) {
 		members := make([]sccMember, 0, len(scc))
 		for _, id := range scc {
-			base := contextSchema(required[id], optional[id], taskSchemas, processInput, mustErr[id], mayErr[id])
+			base := contextSchema(required[id], optional[id], taskSchemas, processInput, configSchema, mustErr[id], mayErr[id])
 			if len(defs) > 0 {
 				base = withDefs(base, defs)
 			}

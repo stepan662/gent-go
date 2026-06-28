@@ -78,6 +78,16 @@ type ProcessInstance struct {
 	WorkerID      *string
 	LeaseExpiresAt *time.Time
 
+	// Config is the configuration namespace resolved from the OS environment at
+	// the start of each tick (see ProcessDefinition.ResolveConfig). It is exposed
+	// to expressions as "config" but is transient: never persisted to the DB and
+	// never returned over the API, so secret values stay out of stored state.
+	Config map[string]any `json:"-"`
+
+	// ConfigSecrets holds the resolved values of config vars marked secret, used
+	// to redact them from audit-log payloads. Transient, like Config.
+	ConfigSecrets []string `json:"-"`
+
 	// ReclaimedExpired is a transient, non-persisted flag set by ClaimInstances
 	// when this instance was reclaimed from an expired lease (its prior worker_id
 	// was non-null) rather than picked up at a clean task boundary. It signals that

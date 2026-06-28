@@ -11,7 +11,7 @@ import (
 	"gent/internal/template"
 )
 
-func buildInputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, processInput *schema.SchemaNode, defs map[string]*schema.SchemaNode) error {
+func buildInputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, processInput, configSchema *schema.SchemaNode, defs map[string]*schema.SchemaNode) error {
 	if err := checkReachability(tasks); err != nil {
 		return err
 	}
@@ -20,7 +20,7 @@ func buildInputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, proces
 	// Phase 1: infer every output-map task's exported type, in dependency order
 	// (mutually-recursive tasks resolved jointly), writing each to defs so the
 	// switches and later tasks below see the final types.
-	if err := inferOutputs(tasks, taskSchemas, processInput, defs, required, optional, mustErr, mayErr); err != nil {
+	if err := inferOutputs(tasks, taskSchemas, processInput, configSchema, defs, required, optional, mustErr, mayErr); err != nil {
 		return err
 	}
 
@@ -28,25 +28,50 @@ func buildInputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, proces
 	for _, s := range tasks {
 		if s.Action != nil {
 			ts, inMap := taskSchemas[s.ID]
-			if inMap || s.Action.Input.Present() {
-				ctx := contextSchema(required[s.ID], optional[s.ID], taskSchemas, processInput, mustErr[s.ID], mayErr[s.ID])
+			isREST := s.Action.Type == model.ActionTypeREST
+			hasEndpoint := isREST && s.Action.Endpoint != ""
+			hasHeaders := isREST && len(s.Action.Headers) > 0
+			if inMap || s.Action.Input.Present() || hasEndpoint || hasHeaders {
+				ctx := contextSchema(required[s.ID], optional[s.ID], taskSchemas, processInput, configSchema, mustErr[s.ID], mayErr[s.ID])
 				if len(defs) > 0 {
 					ctx = withDefs(ctx, defs)
 				}
-				input, err := inferInput(s, ctx, defs)
-				if err != nil {
-					return err
+				// The rest endpoint and header values are templates evaluated against the
+				// context; type-check them and reject a possibly-null result (a null URL or
+				// header value would silently stringify to "null").
+				if hasEndpoint {
+					if err := checkNonNullTemplate(s.Action.Endpoint, ctx, fmt.Sprintf("task %q endpoint", s.ID)); err != nil {
+						return err
+					}
 				}
-				if !inMap {
-					ts.ActionType = s.Action.Type
+				if hasHeaders {
+					names := make([]string, 0, len(s.Action.Headers))
+					for h := range s.Action.Headers {
+						names = append(names, h)
+					}
+					slices.Sort(names)
+					for _, h := range names {
+						if err := checkNonNullTemplate(s.Action.Headers[h], ctx, fmt.Sprintf("task %q header %q", s.ID, h)); err != nil {
+							return err
+						}
+					}
 				}
-				ts.Input = input
-				taskSchemas[s.ID] = ts
+				if inMap || s.Action.Input.Present() {
+					input, err := inferInput(s, ctx, defs)
+					if err != nil {
+						return err
+					}
+					if !inMap {
+						ts.ActionType = s.Action.Type
+					}
+					ts.Input = input
+					taskSchemas[s.ID] = ts
+				}
 			}
 		}
 
 		if len(s.Switch) > 0 {
-			switchCtx := contextSchema(required[s.ID], optional[s.ID], taskSchemas, processInput, mustErr[s.ID], mayErr[s.ID])
+			switchCtx := contextSchema(required[s.ID], optional[s.ID], taskSchemas, processInput, configSchema, mustErr[s.ID], mayErr[s.ID])
 			if s.Action != nil || s.Output.Present() {
 				loops := slices.Contains(optional[s.ID], s.ID) || slices.Contains(required[s.ID], s.ID)
 				switchCtx = addSelfSchema(switchCtx, s, loops)
@@ -67,6 +92,20 @@ func buildInputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, proces
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// checkNonNullTemplate infers a template string (a rest endpoint or header value)
+// against ctx and returns an error if it fails to type-check or may be null — a
+// null URL or header value would silently stringify to "null".
+func checkNonNullTemplate(expr string, ctx *schema.SchemaNode, label string) error {
+	inferred, err := inferShape(expr, ctx, label)
+	if err != nil {
+		return err
+	}
+	if schema.HasNullType(inferred) {
+		return fmt.Errorf("%s may be null; use ?? to provide a default value", label)
 	}
 	return nil
 }
@@ -114,12 +153,16 @@ func inferShape(node any, ctx *schema.SchemaNode, label string) (*schema.SchemaN
 	}
 }
 
-func contextSchema(preceding []string, optional []string, tasks map[string]TaskSchemas, processInput *schema.SchemaNode, errRequired, errOptional bool) *schema.SchemaNode {
+func contextSchema(preceding []string, optional []string, tasks map[string]TaskSchemas, processInput, configSchema *schema.SchemaNode, errRequired, errOptional bool) *schema.SchemaNode {
 	props := make(map[string]*schema.SchemaNode)
 	required := []string{"outputs"}
 	if processInput != nil {
 		props["input"] = processInput
 		required = append(required, "input")
+	}
+	if configSchema != nil {
+		props["config"] = configSchema
+		required = append(required, "config")
 	}
 	outputProps := make(map[string]*schema.SchemaNode)
 	outputRequired := make([]string, 0)

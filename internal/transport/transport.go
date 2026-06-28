@@ -36,8 +36,9 @@ type Response struct {
 }
 
 // Send dispatches a request to the appropriate endpoint based on the task's call config.
-// headers contains pre-resolved header values (for rest calls).
-func Send(ctx context.Context, call *model.Action, headers map[string]string, req Request) (*Response, error) {
+// endpoint is the pre-resolved URL (its template already evaluated) and headers
+// contains pre-resolved header values (for rest calls).
+func Send(ctx context.Context, call *model.Action, endpoint string, headers map[string]string, req Request) (*Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -45,7 +46,7 @@ func Send(ctx context.Context, call *model.Action, headers map[string]string, re
 
 	switch call.Type {
 	case model.ActionTypeREST:
-		return sendHTTP(ctx, call.Endpoint, call.AcceptedStatus, headers, body)
+		return sendHTTP(ctx, endpoint, call.AcceptedStatus, headers, body)
 	default:
 		return nil, fmt.Errorf("unknown call type: %q", call.Type)
 	}

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"gent/internal/schema"
@@ -81,7 +83,7 @@ func (Action) JSONSchemaBytes() ([]byte, error) {
 				"description": "HTTP call — sends a request to an external endpoint.",
 				"properties": {
 					"type":            {"type": "string", "const": "rest"},
-					"endpoint":        {"type": "string", "description": "URL of the HTTP endpoint to call."},
+					"endpoint":        {"type": "string", "description": "URL of the HTTP endpoint to call. May contain {{ }} expressions evaluated against the current context (e.g. {{ config.server_url }}/path)."},
 					"headers":         {"type": "object", "additionalProperties": {"type": "string"}, "description": "HTTP headers to include. Values are expressions evaluated against the current context."},
 					"accepted_status": {"type": "array", "items": {"type": "string"}, "description": "HTTP status patterns accepted as non-errors, e.g. \"2xx\" or \"404\". Defaults to any 2xx."},
 					"input":           {"$ref": "#/$defs/ModelShape", "description": "Templated value (string expression or nested object) evaluated against the current context to build the request body."},
@@ -424,10 +426,11 @@ type Task struct {
 // ProcessDefinition is the immutable versioned blueprint for a process.
 // Versions are assigned by the server on apply; never include a version when submitting definitions.
 type ProcessDefinition struct {
-	Name        string             `json:"name"         validate:"required" description:"Unique process identifier."`
-	Tasks       []*Task            `json:"tasks"        validate:"required,min=1,dive" description:"Ordered list of execution tasks. Control advances linearly unless a switch case redirects."`
-	InputSchema *schema.SchemaNode `json:"input_schema,omitempty"          description:"JSON Schema used to validate the input payload when starting a new instance."`
-	Output      *Shape             `json:"output,omitempty"                description:"Templated value (a string expression or nested object of expressions) evaluated at completion to produce the process output."`
+	Name         string             `json:"name"         validate:"required" description:"Unique process identifier."`
+	Tasks        []*Task            `json:"tasks"        validate:"required,min=1,dive" description:"Ordered list of execution tasks. Control advances linearly unless a switch case redirects."`
+	InputSchema  *schema.SchemaNode `json:"input_schema,omitempty"          description:"JSON Schema used to validate the input payload when starting a new instance."`
+	ConfigSchema *schema.SchemaNode `json:"config_schema,omitempty"         description:"JSON Schema — a flat object whose properties are primitive values (string/integer/number/boolean) — declaring configuration variables. Each is resolved at runtime from GENT_<PROCESS>_<NAME> (falling back to GENT_GLOBAL_<NAME>) in the server environment, coerced to its declared type, and exposed to expressions as config.<NAME>. A property may set secret:true to redact its value from logs."`
+	Output       *Shape             `json:"output,omitempty"                description:"Templated value (a string expression or nested object of expressions) evaluated at completion to produce the process output."`
 }
 
 // Normalize normalizes InputSchema and all task OutputSchemas in-place using the
@@ -475,6 +478,12 @@ func (d *ProcessDefinition) Validate() error {
 		return err
 	}
 	if err := checkSchemaDoc("input_schema", d.InputSchema); err != nil {
+		return err
+	}
+	if err := checkSchemaDoc("config_schema", d.ConfigSchema); err != nil {
+		return err
+	}
+	if err := validateConfigSchema(d.ConfigSchema); err != nil {
 		return err
 	}
 	taskIDs := make(map[string]struct{}, len(d.Tasks))
@@ -673,6 +682,62 @@ func validAcceptedStatusPattern(p string) bool {
 	return false
 }
 
+// configNameRe matches a valid config var name; it is used in the
+// GENT_<PROCESS>_<NAME> / GENT_GLOBAL_<NAME> environment variable names, so it
+// must be an identifier.
+var configNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateConfigSchema enforces the config_schema shape: a flat object whose
+// properties are primitive values. type must be "object"; each property declares a
+// single scalar type (string/integer/number/boolean) with no nested object/array,
+// combinators, or $ref. Property names must be identifiers (used as config.<name>
+// in expressions) and must not collide once normalized to their environment
+// variable suffix. A required property may not also carry a default.
+func validateConfigSchema(cs *schema.SchemaNode) error {
+	if cs == nil {
+		return nil
+	}
+	if len(cs.Type) != 1 || !cs.Type.Contains("object") {
+		return errors.New("config_schema must be type \"object\"")
+	}
+	if len(cs.OneOf)+len(cs.AnyOf)+len(cs.AllOf) > 0 || cs.Ref != "" || len(cs.Defs) > 0 {
+		return errors.New("config_schema must not use oneOf/anyOf/allOf/$ref/$defs")
+	}
+	required := make(map[string]bool, len(cs.Required))
+	for _, r := range cs.Required {
+		if _, ok := cs.Properties[r]; !ok {
+			return fmt.Errorf("config_schema: required lists unknown property %q", r)
+		}
+		required[r] = true
+	}
+	envKeys := make(map[string]string, len(cs.Properties))
+	for name, prop := range cs.Properties {
+		if !configNameRe.MatchString(name) {
+			return fmt.Errorf("config %q: name must be a valid identifier [A-Za-z_][A-Za-z0-9_]*", name)
+		}
+		key := envToken(name)
+		if prev, dup := envKeys[key]; dup {
+			return fmt.Errorf("config %q and %q both map to the same environment variable suffix %q", name, prev, key)
+		}
+		envKeys[key] = name
+		if prop == nil || len(prop.Type) != 1 {
+			return fmt.Errorf("config %q: must declare a single primitive type (string, integer, number, or boolean)", name)
+		}
+		switch prop.Type[0] {
+		case "string", "integer", "number", "boolean":
+		default:
+			return fmt.Errorf("config %q: unsupported type %q (use string, integer, number, or boolean)", name, prop.Type[0])
+		}
+		if len(prop.Properties) > 0 || prop.Items != nil || len(prop.OneOf)+len(prop.AnyOf)+len(prop.AllOf) > 0 || prop.Ref != "" {
+			return fmt.Errorf("config %q: must be a primitive value (no nested objects, arrays, combinators, or $ref)", name)
+		}
+		if required[name] && prop.Default != nil {
+			return fmt.Errorf("config %q: cannot be both required and have a default", name)
+		}
+	}
+	return nil
+}
+
 func checkSchemaDoc(field string, s *schema.SchemaNode) error {
 	if s == nil {
 		return nil
@@ -686,6 +751,157 @@ func checkSchemaDoc(field string, s *schema.SchemaNode) error {
 // ValidateInput checks input data against InputSchema. No-op if InputSchema is nil.
 func (d *ProcessDefinition) ValidateInput(input any) error {
 	return validateSchema(d.InputSchema, input)
+}
+
+// ResolveConfig reads each config var declared in ConfigSchema from the OS
+// environment via lookup (os.LookupEnv in production; injectable for tests). Both
+// the process name and the var name are run through envToken (normalized to
+// UPPER_SNAKE — camelCase split, non-alphanumerics → '_'), so the schema may use
+// any case: config.apiKey reads a process-scoped GENT_<PROCESS>_API_KEY, falling
+// back to a shared GENT_GLOBAL_API_KEY, then the property's default, else an error
+// if required. The string is coerced to the declared type, and the assembled
+// object is validated against ConfigSchema (required/enum/ranges). The returned
+// map is keyed by the declared name (the "config" namespace for expressions).
+// Values are never persisted; this runs at instance start (to reject a bad start)
+// and on every tick.
+func (d *ProcessDefinition) ResolveConfig(lookup func(string) (string, bool)) (map[string]any, error) {
+	if d.ConfigSchema == nil {
+		return map[string]any{}, nil
+	}
+	procPrefix := "GENT_" + envToken(d.Name) + "_"
+	const globalPrefix = "GENT_GLOBAL_"
+	required := make(map[string]bool, len(d.ConfigSchema.Required))
+	for _, r := range d.ConfigSchema.Required {
+		required[r] = true
+	}
+	out := make(map[string]any, len(d.ConfigSchema.Properties))
+	for name, prop := range d.ConfigSchema.Properties {
+		key := envToken(name) // declared name (any case) → UPPER_SNAKE env suffix
+		raw, ok := lookup(procPrefix + key)
+		if !ok || raw == "" {
+			raw, ok = lookup(globalPrefix + key)
+		}
+		if !ok || raw == "" {
+			if prop.Default != nil {
+				out[name] = prop.Default
+				continue
+			}
+			if required[name] {
+				return nil, fmt.Errorf("config %q is required but neither %s%s nor %s%s is set", name, procPrefix, key, globalPrefix, key)
+			}
+			continue
+		}
+		val, err := coerceConfigValue(name, propType(prop), raw)
+		if err != nil {
+			return nil, err
+		}
+		out[name] = val
+	}
+	if err := validateSchema(d.ConfigSchema, out); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return out, nil
+}
+
+// propType returns the single declared type of a primitive config property, or ""
+// (treated as string) when none is set.
+func propType(prop *schema.SchemaNode) string {
+	if prop != nil && len(prop.Type) > 0 {
+		return prop.Type[0]
+	}
+	return ""
+}
+
+// envToken converts a name to the UPPER_SNAKE token used in config environment
+// variable names. It uppercases, turns any run of non-alphanumeric characters
+// into a single '_', and splits camelCase / PascalCase humps so a schema may use
+// any case: apiKey -> API_KEY, serverUrl -> SERVER_URL, URLPath -> URL_PATH,
+// order-flow -> ORDER_FLOW.
+func envToken(s string) string {
+	runes := []rune(s)
+	out := make([]byte, 0, len(runes)+4)
+	sep := func() {
+		if n := len(out); n > 0 && out[n-1] != '_' {
+			out = append(out, '_')
+		}
+	}
+	for i, r := range runes {
+		switch {
+		case r >= 'a' && r <= 'z':
+			out = append(out, byte(r-('a'-'A')))
+		case r >= '0' && r <= '9':
+			out = append(out, byte(r))
+		case r >= 'A' && r <= 'Z':
+			// Insert a separator at a camel boundary: an uppercase that follows a
+			// lowercase/digit (apiKey), or that starts a word after an acronym —
+			// uppercase followed by lowercase preceded by uppercase (URLPath).
+			if i > 0 {
+				prev := runes[i-1]
+				prevLowerDigit := (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9')
+				prevUpper := prev >= 'A' && prev <= 'Z'
+				nextLower := i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
+				if prevLowerDigit || (prevUpper && nextLower) {
+					sep()
+				}
+			}
+			out = append(out, byte(r))
+		default:
+			sep()
+		}
+	}
+	for len(out) > 0 && out[len(out)-1] == '_' {
+		out = out[:len(out)-1]
+	}
+	return string(out)
+}
+
+// SecretConfigValues returns the resolved values of config properties marked
+// secret:true, formatted as strings, for redaction from log payloads.
+func (d *ProcessDefinition) SecretConfigValues(resolved map[string]any) []string {
+	if d.ConfigSchema == nil {
+		return nil
+	}
+	var secrets []string
+	for name, prop := range d.ConfigSchema.Properties {
+		if prop == nil || !prop.Secret {
+			continue
+		}
+		if v, ok := resolved[name]; ok {
+			if s := fmt.Sprintf("%v", v); s != "" {
+				secrets = append(secrets, s)
+			}
+		}
+	}
+	return secrets
+}
+
+// coerceConfigValue converts an environment string to the config var's declared
+// type. An empty or "string" type passes the value through unchanged.
+func coerceConfigValue(name, typ, raw string) (any, error) {
+	switch typ {
+	case "", "string":
+		return raw, nil
+	case "integer":
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("config %q: %q is not a valid integer", name, raw)
+		}
+		return n, nil
+	case "number":
+		f, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return nil, fmt.Errorf("config %q: %q is not a valid number", name, raw)
+		}
+		return f, nil
+	case "boolean":
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("config %q: %q is not a valid boolean (use true/false)", name, raw)
+		}
+		return b, nil
+	default:
+		return nil, fmt.Errorf("config %q: unsupported type %q", name, typ)
+	}
 }
 
 // ValidateOutput checks output data against call.ResultSchema. No-op if unset.

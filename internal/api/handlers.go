@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -337,6 +338,12 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 
 	if err := def.ValidateInput(input); err != nil {
 		return errReply(fmt.Errorf("input validation: %w", err))
+	}
+
+	// Resolve config up front so a missing required var or bad value rejects the
+	// start request rather than producing an instance that fails on first tick.
+	if _, err := def.ResolveConfig(os.LookupEnv); err != nil {
+		return errReply(fmt.Errorf("config: %w", err))
 	}
 
 	inst := &model.ProcessInstance{

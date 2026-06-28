@@ -20,7 +20,7 @@ type DefinitionGetter interface {
 // currentVersion is the server-assigned version of def (used for self-reference detection).
 // def must already be normalised (Generate calls Normalize internally, so call this after Generate).
 func ValidateChildProcessRefs(def *model.ProcessDefinition, currentVersion int, getter DefinitionGetter) error {
-	defs, tasks, processInput, err := buildSchemaContext(def)
+	defs, tasks, processInput, configSchema, err := buildSchemaContext(def)
 	if err != nil {
 		return err
 	}
@@ -31,7 +31,7 @@ func ValidateChildProcessRefs(def *model.ProcessDefinition, currentVersion int, 
 		if s.Action == nil {
 			continue
 		}
-		ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, mustErr[s.ID], mayErr[s.ID])
+		ctx := contextSchema(required[s.ID], optional[s.ID], tasks, processInput, configSchema, mustErr[s.ID], mayErr[s.ID])
 		if len(defs) > 0 {
 			ctx = withDefs(ctx, defs)
 		}

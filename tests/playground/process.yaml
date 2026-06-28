@@ -3,13 +3,20 @@ name: order-pipeline
 input_schema:
   type: number
 
+config_schema:
+  type: object
+  properties:
+    server_url:
+      type: number
+  required: [server_url]
+
 tasks:
   - id: first
     action:
       type: rest
       input:
         sleep: "{{ input }}"
-      endpoint: "http://localhost:3001/first"
+      endpoint: "{{ config.server_url }}/first"
       result_schema:
         type: object
         properties:
@@ -24,7 +31,7 @@ tasks:
       type: rest
       input:
         sleep: "{{ input }}"
-      endpoint: "http://localhost:3001/second"
+      endpoint: "{{ config.server_url }}/second"
       result_schema:
         type: object
         properties:
@@ -67,3 +74,32 @@ tasks:
     switch: end
 
 output: "{{outputs.long_long_long_long}}"
+
+
+---
+
+name: child
+input_schema:
+  type: object
+  properties:
+    sleep:
+      type: number
+  required: [sleep]
+tasks:
+  - id: fourth
+    action:
+      type: rest
+      input:
+        sleep: "{{ input.sleep }}"
+      endpoint: "http://localhost:3001/fourth"
+      result_schema:
+        type: object
+        properties:
+          slept:
+            type: number
+        required: [slept]
+    output: "{{ self.result }}"
+    switch: end
+output:
+  final_result: "{{outputs.fourth}}"
+

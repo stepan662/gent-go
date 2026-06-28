@@ -46,6 +46,16 @@ function spawnProc(
     : [];
   return spawn(bin, [...dbArgs, "--http", `:${port}`, "--log", "error", ...pollArgs, ...concArgs, ...retryArgs, ...leaseArgs, ...poolArgs, ...syncArgs], {
     stdio: "ignore",
+    // Fixed config fixtures for the config e2e test. The test's process names are
+    // random, so we use the global tier (GENT_GLOBAL_<NAME> → config.<NAME>).
+    env: {
+      ...process.env,
+      GENT_GLOBAL_E2E_URL: "https://config.example.test",
+      GENT_GLOBAL_E2E_PORT: "8080",
+      GENT_GLOBAL_E2E_TOKEN: "supersecret-token-value",
+      // Points at a fixed mock port for the "config value in a rest endpoint" test.
+      GENT_GLOBAL_SERVER_URL: "http://localhost:14100",
+    },
   });
 }
 

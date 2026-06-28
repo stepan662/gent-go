@@ -46,12 +46,16 @@ func (t SchemaType) Contains(s string) bool {
 }
 
 // allowedKeywords is the set of JSON Schema keywords accepted by SchemaNode.
+// "default" is the standard annotation; "secret" is a gent extension that is only
+// meaningful inside a process config_schema (it drives log redaction) and ignored
+// elsewhere.
 var allowedKeywords = map[string]bool{
 	"type": true, "properties": true, "required": true, "items": true,
 	"oneOf": true, "anyOf": true, "allOf": true, "enum": true,
 	"minimum": true, "maximum": true, "minLength": true, "maxLength": true,
 	"minItems": true, "maxItems": true,
 	"$ref": true, "$defs": true, "$anchor": true, "$id": true,
+	"default": true, "secret": true,
 }
 
 // SchemaNode is the typed representation of the supported JSON Schema subset.
@@ -75,6 +79,8 @@ type SchemaNode struct {
 	Defs       map[string]*SchemaNode  `json:"$defs,omitempty"`
 	Anchor     string                  `json:"$anchor,omitempty"`
 	ID         string                  `json:"$id,omitempty"`
+	Default    any                     `json:"default,omitempty"`
+	Secret     bool                    `json:"secret,omitempty"`
 }
 
 // UnmarshalJSON implements strict decoding: any JSON key not in allowedKeywords

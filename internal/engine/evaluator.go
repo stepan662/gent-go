@@ -7,22 +7,26 @@ import (
 	tmpl "gent/internal/template"
 )
 
-func evalEnv(contextData map[string]any, self any) map[string]any {
+func evalEnv(contextData, config map[string]any, self any) map[string]any {
 	outputs, _ := contextData["outputs"].(map[string]any)
 	if outputs == nil {
 		outputs = map[string]any{}
+	}
+	if config == nil {
+		config = map[string]any{}
 	}
 	env := map[string]any{
 		"input":   contextData["input"],
 		"outputs": outputs,
 		"self":    self,
 		"error":   contextData["error"],
+		"config":  config,
 	}
 	return env
 }
 
-func evalAny(expression string, contextData map[string]any) (any, error) {
-	result, err := tmpl.EvalAny(expression, evalEnv(contextData, nil))
+func evalAny(expression string, contextData, config map[string]any) (any, error) {
+	result, err := tmpl.EvalAny(expression, evalEnv(contextData, config, nil))
 	if err != nil {
 		return nil, fmt.Errorf("param %q: %w", expression, err)
 	}
@@ -52,8 +56,8 @@ func evalShape(node any, env map[string]any) (any, error) {
 	}
 }
 
-func evalBool(expr string, contextData map[string]any, self any) (bool, error) {
-	result, err := expression.Eval(expr, evalEnv(contextData, self))
+func evalBool(expr string, contextData, config map[string]any, self any) (bool, error) {
+	result, err := expression.Eval(expr, evalEnv(contextData, config, self))
 	if err != nil {
 		return false, fmt.Errorf("switch %q: %w", expr, err)
 	}

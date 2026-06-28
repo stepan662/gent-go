@@ -396,6 +396,20 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 		return e.cancelInstance(inst)
 	}
 
+	// Resolve config from the OS environment for this tick. Config is never
+	// persisted — it is re-resolved every tick and exposed to expressions as
+	// "config". A resolution failure (missing required var, bad coercion) fails
+	// the instance with a clear reason. A definition-load error is left to the
+	// existing lazy load downstream, preserving current behaviour.
+	if def, err := e.db.GetDefinition(inst.ProcessName, inst.ProcessVersion); err == nil && def.ConfigSchema != nil {
+		cfg, err := def.ResolveConfig(os.LookupEnv)
+		if err != nil {
+			return e.failInstance(inst, fmt.Sprintf("config: %v", err))
+		}
+		inst.Config = cfg
+		inst.ConfigSecrets = def.SecretConfigValues(cfg)
+	}
+
 	// Lease takeover: this instance was reclaimed from an expired lease, so its
 	// front task (TaskQueue[0]) may have started executing on the previous owner
 	// before it crashed/stalled. Re-running is fine for idempotent tasks, but an
@@ -581,13 +595,20 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		Data:       data,
 	}
 
-	// action_started (debug): message = the action type (rest/script/…); data = the
-	// request body; and for a REST call meta = {url} so the trail shows which endpoint
-	// was hit. Headers are intentionally omitted — they routinely carry secrets and
-	// the audit log is persisted.
+	// Resolve the endpoint template first (e.g. a base URL from config or input),
+	// so the trail logs the real URL and the request goes to the right place.
+	endpoint, err := e.resolveEndpoint(inst, task.Action)
+	if err != nil {
+		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q endpoint: %v", task.ID, err)))
+	}
+
+	// action_started (debug): message = the action type; data = the request body; and
+	// for a REST call meta = {url} so the trail shows which endpoint was hit. Headers
+	// are intentionally omitted — they routinely carry secrets and the audit log is
+	// persisted.
 	var startMeta map[string]any
 	if task.Action.Type == model.ActionTypeREST {
-		startMeta = map[string]any{"url": task.Action.Endpoint}
+		startMeta = map[string]any{"url": endpoint}
 	}
 	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionStarted, Task: task.ID, Msg: string(task.Action.Type), Data: e.snippet(data), Meta: startMeta})
 
@@ -596,7 +617,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q headers: %v", task.ID, err)))
 	}
 
-	resp, err := transport.Send(taskCtx, task.Action, resolvedHeaders, req)
+	resp, err := transport.Send(taskCtx, task.Action, endpoint, resolvedHeaders, req)
 	if err != nil {
 		code := transport.ClassifyGoError(err)
 		// action_failed (debug) records the raw call failure — error detail in data,
@@ -636,7 +657,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 // prior output (its value from the last loop iteration, or nil on the first run).
 func (e *Engine) evalTaskOutput(inst *model.ProcessInstance, task *model.Task, result, previous any) (any, error) {
 	self := map[string]any{"result": result, "previous": previous}
-	return evalShape(task.Output.Raw, evalEnv(inst.ContextData, self))
+	return evalShape(task.Output.Raw, evalEnv(inst.ContextData, inst.Config, self))
 }
 
 // setTaskOutput stores value as the task's exported output (outputs.taskID),
@@ -675,7 +696,7 @@ func (e *Engine) evalSwitch(inst *model.ProcessInstance, task *model.Task, selfO
 		if c.Case == "" {
 			return c.Goto, nil
 		}
-		ok, err := evalBool(c.Case, inst.ContextData, selfOutput)
+		ok, err := evalBool(c.Case, inst.ContextData, inst.Config, selfOutput)
 		if err != nil {
 			return "", fmt.Errorf("case %q: %w", c.Case, err)
 		}
@@ -792,7 +813,7 @@ func (e *Engine) buildTaskData(inst *model.ProcessInstance, task *model.Task) (a
 	if !task.Action.Input.Present() {
 		return map[string]any{}, nil
 	}
-	return evalShape(task.Action.Input.Raw, evalEnv(inst.ContextData, nil))
+	return evalShape(task.Action.Input.Raw, evalEnv(inst.ContextData, inst.Config, nil))
 }
 
 // runDelay implements the delay action. On first entry — WakeAt is nil
@@ -804,7 +825,7 @@ func (e *Engine) buildTaskData(inst *model.ProcessInstance, task *model.Task) (a
 // or failed (the caller stops and persists it).
 func (e *Engine) runDelay(inst *model.ProcessInstance, task *model.Task) *advanceOutcome {
 	if inst.WakeAt == nil {
-		ms, err := evalDurationMs(task.Action.Ms, inst.ContextData)
+		ms, err := evalDurationMs(task.Action.Ms, inst.ContextData, inst.Config)
 		if err != nil {
 			return stop(e.failInstance(inst, fmt.Sprintf("task %q delay: %v", task.ID, err)))
 		}
@@ -891,8 +912,8 @@ func (e *Engine) runExternal(ctx context.Context, inst *model.ProcessInstance, t
 // evalDurationMs evaluates a delay expression to a non-negative millisecond
 // count. The expression is a template, so a bare literal ("30000") returns the
 // string "30000" (parsed here) while a "{{ … }}" expression returns a number.
-func evalDurationMs(expr string, ctx map[string]any) (int64, error) {
-	v, err := evalAny(expr, ctx)
+func evalDurationMs(expr string, ctx, config map[string]any) (int64, error) {
+	v, err := evalAny(expr, ctx, config)
 	if err != nil {
 		return 0, err
 	}
@@ -939,6 +960,10 @@ type logEvent struct {
 // swallowed so audit logging can never abort an advance.
 func (e *Engine) audit(inst *model.ProcessInstance, ev logEvent) {
 	ev.ID = inst.ID
+	if len(inst.ConfigSecrets) > 0 {
+		ev.Data = redactSecrets(ev.Data, inst.ConfigSecrets)
+		ev.Msg = redactSecrets(ev.Msg, inst.ConfigSecrets)
+	}
 	e.emit(ev)
 	if err := e.db.AppendLog(&model.LogEntry{
 		InstanceID: ev.ID,
@@ -952,6 +977,17 @@ func (e *Engine) audit(inst *model.ProcessInstance, ev logEvent) {
 	}); err != nil {
 		e.logOnly(logEvent{Level: model.LogError, ID: ev.ID, Msg: "append audit log: " + err.Error()})
 	}
+}
+
+// redactSecrets replaces each secret config value in s with "***" so secret
+// values never reach the console or the persisted audit trail.
+func redactSecrets(s string, secrets []string) string {
+	for _, sv := range secrets {
+		if sv != "" {
+			s = strings.ReplaceAll(s, sv, "***")
+		}
+	}
+	return s
 }
 
 // logOnly records a console-only line (server lifecycle / operational events not in
@@ -1359,7 +1395,7 @@ func (e *Engine) evalChildInput(inst *model.ProcessInstance, taskID, label strin
 	if !input.Present() {
 		return map[string]any{}, nil
 	}
-	val, err := evalShape(input.Raw, evalEnv(inst.ContextData, nil))
+	val, err := evalShape(input.Raw, evalEnv(inst.ContextData, inst.Config, nil))
 	if err != nil {
 		return nil, fmt.Errorf("task %q %s input: %v", taskID, label, err)
 	}
@@ -1377,12 +1413,26 @@ func (e *Engine) computeOutput(inst *model.ProcessInstance) error {
 	if !def.Output.Present() {
 		return nil
 	}
-	out, err := evalShape(def.Output.Raw, evalEnv(inst.ContextData, nil))
+	out, err := evalShape(def.Output.Raw, evalEnv(inst.ContextData, inst.Config, nil))
 	if err != nil {
 		return fmt.Errorf("output: %w", err)
 	}
 	inst.ContextData["output"] = out
 	return nil
+}
+
+// resolveEndpoint evaluates the REST endpoint as a template so a base URL can come
+// from config or input (e.g. "{{ config.server_url }}/path"), returning the
+// resolved URL. Returns "" for actions without an endpoint.
+func (e *Engine) resolveEndpoint(inst *model.ProcessInstance, call *model.Action) (string, error) {
+	if call.Endpoint == "" {
+		return "", nil
+	}
+	val, err := evalAny(call.Endpoint, inst.ContextData, inst.Config)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%v", val), nil
 }
 
 // resolveHeaders evaluates each header value expression against the instance
@@ -1393,7 +1443,7 @@ func (e *Engine) resolveHeaders(inst *model.ProcessInstance, call *model.Action)
 	}
 	resolved := make(map[string]string, len(call.Headers))
 	for k, expr := range call.Headers {
-		val, err := evalAny(expr, inst.ContextData)
+		val, err := evalAny(expr, inst.ContextData, inst.Config)
 		if err != nil {
 			return nil, fmt.Errorf("header %q: %w", k, err)
 		}
