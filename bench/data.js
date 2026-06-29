@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782760626741,
+  "lastUpdate": 1782766270044,
   "repoUrl": "https://github.com/stepan662/gent-go",
   "entries": {
     "gent throughput": [
@@ -2144,6 +2144,66 @@ window.BENCHMARK_DATA = {
             "value": 499,
             "unit": "inst/s",
             "extra": "AMD EPYC 9V74 80-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "granat.stepan@gmail.com",
+            "name": "Štěpán Granát",
+            "username": "stepan662"
+          },
+          "committer": {
+            "email": "granat.stepan@gmail.com",
+            "name": "Štěpán Granát",
+            "username": "stepan662"
+          },
+          "distinct": true,
+          "id": "149149db6776b2a65ad2fb5d34eb44af9301a7ce",
+          "message": "feat: better secrets matching by infer type",
+          "timestamp": "2026-06-29T22:48:18+02:00",
+          "tree_id": "ab9e33cd0ae025ffb23be72de95b0b68eed7a514",
+          "url": "https://github.com/stepan662/gent-go/commit/149149db6776b2a65ad2fb5d34eb44af9301a7ce"
+        },
+        "date": 1782766269533,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "spawn deep sqlite",
+            "value": 84,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn deep postgres",
+            "value": 300,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn drain sqlite",
+            "value": 1771,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn drain postgres",
+            "value": 1616,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn recursive sqlite",
+            "value": 100,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
+          },
+          {
+            "name": "spawn recursive postgres",
+            "value": 488,
+            "unit": "inst/s",
+            "extra": "AMD EPYC 7763 64-Core Processor · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
           }
         ]
       }
