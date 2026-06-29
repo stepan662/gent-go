@@ -54,10 +54,12 @@ test("rest endpoint is evaluated as a template", async () => {
 });
 
 // Regression for the playground: a config value used as the base URL in a rest
-// endpoint. config.server_url resolves from GENT_GLOBAL_SERVER_URL (set on the
-// test server to http://localhost:14100), so the request reaches the mock there.
+// endpoint. config.endpoint_url resolves from GENT_GLOBAL_ENDPOINT_URL (set on the
+// test server to http://localhost:14101 — a port dedicated to this file so it never
+// clashes with secret_log_test's 14100 when Vitest runs the files in parallel), so
+// the request reaches the mock there.
 test("a config value can build a rest endpoint URL", async () => {
-  const mock = await startMockService(14100, { response: { slept: 2 } });
+  const mock = await startMockService(14101, { response: { slept: 2 } });
 
   const name = `config_endpoint_${crypto.randomUUID()}`;
   const { error: putErr } = await client.PUT("/definitions", {
@@ -65,15 +67,15 @@ test("a config value can build a rest endpoint URL", async () => {
       name,
       config_schema: {
         type: "object",
-        required: ["server_url"],
-        properties: { server_url: { type: "string" } },
+        required: ["endpoint_url"],
+        properties: { endpoint_url: { type: "string" } },
       },
       tasks: [
         {
           id: "call",
           action: {
             type: "rest" as const,
-            endpoint: "{{ config.server_url }}/second",
+            endpoint: "{{ config.endpoint_url }}/second",
             result_schema: {
               type: "object",
               properties: { slept: { type: "number" } },

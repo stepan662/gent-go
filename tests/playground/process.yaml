@@ -1,14 +1,15 @@
 # yaml-language-server: $schema=http://localhost:8888/process-schema.json
 name: order-pipeline
-input_schema:
-  type: number
-
 config_schema:
   type: object
   properties:
     server_url:
-      type: boolean
+      type: string
+      secret: true
   required: [server_url]
+
+input_schema:
+  type: number
 
 tasks:
   - id: first
@@ -46,7 +47,7 @@ tasks:
       type: rest
       input:
         sleep: "{{ input }}"
-      endpoint: "http://localhost:3001/third"
+      endpoint: "{{ config.server_url }}/third"
       result_schema:
         type: object
         properties:
@@ -70,36 +71,8 @@ tasks:
             properties:
               slept:
                 type: number
+                secret: true
     output: "{{ self.result }}"
     switch: end
 
 output: "{{outputs.long_long_long_long}}"
-
-
----
-
-name: child
-input_schema:
-  type: object
-  properties:
-    sleep:
-      type: number
-  required: [sleep]
-tasks:
-  - id: fourth
-    action:
-      type: rest
-      input:
-        sleep: "{{ input.sleep }}"
-      endpoint: "http://localhost:3001/fourth"
-      result_schema:
-        type: object
-        properties:
-          slept:
-            type: number
-        required: [slept]
-    output: "{{ self.result }}"
-    switch: end
-output:
-  final_result: "{{outputs.fourth}}"
-

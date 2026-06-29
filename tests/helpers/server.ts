@@ -53,8 +53,13 @@ function spawnProc(
       GENT_GLOBAL_E2E_URL: "https://config.example.test",
       GENT_GLOBAL_E2E_PORT: "8080",
       GENT_GLOBAL_E2E_TOKEN: "supersecret-token-value",
-      // Points at a fixed mock port for the "config value in a rest endpoint" test.
+      // Config-sourced URL for secret_log_test's "secret config value in the URL"
+      // case. A config value is baked in here at server start (a random port-0 can't
+      // be known yet), so each file needing one gets its OWN fixed port — Vitest runs
+      // test files in parallel, and two files sharing a port would collide.
       GENT_GLOBAL_SERVER_URL: "http://localhost:14100",
+      // Dedicated fixed port for endpoint_template_test (avoids the 14100 clash).
+      GENT_GLOBAL_ENDPOINT_URL: "http://localhost:14101",
       // A secret config value for the API-redaction test.
       GENT_GLOBAL_API_KEY: "supersecret-api-key",
     },

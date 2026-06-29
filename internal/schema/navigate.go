@@ -287,6 +287,47 @@ func PathHitsSecret(s *SchemaNode, defs map[string]*SchemaNode, path string) boo
 	return false
 }
 
+// CollectSecrets appends to *out the string form of every value in value whose
+// schema is marked secret, walking objects and arrays against node (resolving
+// $refs and looking through nullable wrappers). It is the gather half of log
+// redaction: the collected values are then scrubbed from free-form log text.
+func CollectSecrets(value any, node *SchemaNode, defs map[string]*SchemaNode, out *[]string) {
+	if node == nil || value == nil {
+		return
+	}
+	resolved, err := Deref(node, defs)
+	if err != nil {
+		return
+	}
+	if IsSecret(resolved) {
+		if s := fmt.Sprintf("%v", value); s != "" {
+			*out = append(*out, s)
+		}
+		return
+	}
+	if len(resolved.Properties) == 0 && resolved.Items == nil && (len(resolved.OneOf) > 0 || len(resolved.AnyOf) > 0) {
+		if stripped := StripNull(resolved); stripped != resolved {
+			if d, derr := Deref(stripped, defs); derr == nil {
+				resolved = d
+			}
+		}
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		for k, val := range v {
+			if prop, ok := resolved.Properties[k]; ok {
+				CollectSecrets(val, prop, defs, out)
+			}
+		}
+	case []any:
+		if resolved.Items != nil {
+			for _, el := range v {
+				CollectSecrets(el, resolved.Items, defs, out)
+			}
+		}
+	}
+}
+
 // Redact returns value with every field whose schema is marked secret replaced by
 // "***", walking objects and arrays against node (resolving $refs and looking
 // through nullable wrappers). Non-secret values pass through unchanged. Used to

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -44,20 +43,3 @@ func TestEvalNilConfig(t *testing.T) {
 	}
 }
 
-func TestRedactSecrets(t *testing.T) {
-	secrets := []string{"s3cr3t", "topsecret"}
-	in := `{"token":"s3cr3t","note":"topsecret value","ok":"public"}`
-	got := redactSecrets(in, secrets)
-	if strings.Contains(got, "s3cr3t") || strings.Contains(got, "topsecret") {
-		t.Errorf("redactSecrets left a secret value: %s", got)
-	}
-	if !strings.Contains(got, "public") {
-		t.Errorf("redactSecrets removed a non-secret value: %s", got)
-	}
-	if redactSecrets("abc", []string{""}) != "abc" {
-		t.Error("an empty secret value must be a no-op, not redact everything")
-	}
-	if redactSecrets("nothing here", nil) != "nothing here" {
-		t.Error("no secrets must leave the string unchanged")
-	}
-}

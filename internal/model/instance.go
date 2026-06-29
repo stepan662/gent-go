@@ -84,10 +84,6 @@ type ProcessInstance struct {
 	// never returned over the API, so secret values stay out of stored state.
 	Config map[string]any `json:"-"`
 
-	// ConfigSecrets holds the resolved values of config vars marked secret, used
-	// to redact them from audit-log payloads. Transient, like Config.
-	ConfigSecrets []string `json:"-"`
-
 	// ReclaimedExpired is a transient, non-persisted flag set by ClaimInstances
 	// when this instance was reclaimed from an expired lease (its prior worker_id
 	// was non-null) rather than picked up at a clean task boundary. It signals that

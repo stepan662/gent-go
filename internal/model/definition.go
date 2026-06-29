@@ -862,7 +862,8 @@ func envToken(s string) string {
 }
 
 // SecretConfigValues returns the resolved values of config properties marked
-// secret:true, formatted as strings, for redaction from log payloads.
+// secret:true, formatted as strings, used to scrub config-resolution error
+// messages (which gojsonschema generates and we cannot obscure at eval time).
 func (d *ProcessDefinition) SecretConfigValues(resolved map[string]any) []string {
 	if d.ConfigSchema == nil {
 		return nil

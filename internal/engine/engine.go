@@ -101,21 +101,10 @@ func (e *Engine) schemaFile(inst *model.ProcessInstance) (validation.SchemaFile,
 	return sf, true
 }
 
-// snippetInput redacts a task's resolved input (the request body) against its
-// inferred input schema, then returns the capped JSON snippet.
-func (e *Engine) snippetInput(inst *model.ProcessInstance, taskID string, data any) string {
-	if e.logCfg.Payloads {
-		if sf, ok := e.schemaFile(inst); ok {
-			if ts, ok := sf.Tasks[taskID]; ok && ts.Input != nil {
-				data = schema.Redact(data, ts.Input, sf.Defs)
-			}
-		}
-	}
-	return e.snippet(data)
-}
-
 // snippetResult redacts an action's raw result body against its result_schema
 // (which may mark response fields secret), then returns the capped JSON snippet.
+// The response body is not part of the instance context, so it cannot be scrubbed
+// by audit's context-secret pass — it is schema-redacted here instead.
 func (e *Engine) snippetResult(task *model.Task, body any) string {
 	if e.logCfg.Payloads && task.Action != nil && task.Action.ResultSchema != nil {
 		body = schema.Redact(body, task.Action.ResultSchema, task.Action.ResultSchema.Defs)
@@ -459,7 +448,6 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 			return e.failInstance(inst, fmt.Sprintf("config: %v", err))
 		}
 		inst.Config = cfg
-		inst.ConfigSecrets = def.SecretConfigValues(cfg)
 	}
 
 	// Lease takeover: this instance was reclaimed from an expired lease, so its
@@ -647,8 +635,8 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		Data:       data,
 	}
 
-	// Resolve the endpoint template first (e.g. a base URL from config or input),
-	// so the trail logs the real URL and the request goes to the right place.
+	// Resolve the endpoint template (e.g. a base URL from config or input). Secret
+	// values it carries are scrubbed from the logged URL/errors in audit().
 	endpoint, err := e.resolveEndpoint(inst, task.Action)
 	if err != nil {
 		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q endpoint: %v", task.ID, err)))
@@ -662,7 +650,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	if task.Action.Type == model.ActionTypeREST {
 		startMeta = map[string]any{"url": endpoint}
 	}
-	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionStarted, Task: task.ID, Msg: string(task.Action.Type), Data: e.snippetInput(inst, task.ID, data), Meta: startMeta})
+	e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionStarted, Task: task.ID, Msg: string(task.Action.Type), Data: e.snippet(data), Meta: startMeta})
 
 	resolvedHeaders, err := e.resolveHeaders(inst, task.Action)
 	if err != nil {
@@ -672,7 +660,7 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 	resp, err := transport.Send(taskCtx, task.Action, endpoint, resolvedHeaders, req)
 	if err != nil {
 		code := transport.ClassifyGoError(err)
-		// action_failed (debug) records the raw call failure — error detail in data,
+		// action_failed (debug) records the call failure — error detail in data,
 		// code in code — separate from the operational retry/route event that follows.
 		// A transport error has no HTTP status, so meta stays absent.
 		e.audit(inst, logEvent{Level: model.LogDebug, Event: model.EventActionFailed, Task: task.ID, Code: code, Data: e.snippetRaw(err.Error())})
@@ -1012,9 +1000,15 @@ type logEvent struct {
 // swallowed so audit logging can never abort an advance.
 func (e *Engine) audit(inst *model.ProcessInstance, ev logEvent) {
 	ev.ID = inst.ID
-	if len(inst.ConfigSecrets) > 0 {
-		ev.Data = redactSecrets(ev.Data, inst.ConfigSecrets)
-		ev.Msg = redactSecrets(ev.Msg, inst.ConfigSecrets)
+	// Scrub every secret value (config + input + output, identified by the taint
+	// schemas) from the log before it is emitted or stored. A single sink here is
+	// the robust choice: gent expressions have no functions, so a secret always
+	// appears verbatim (or as a substring) in any logged value — there is no way for
+	// it to reach a log line in a form a string-replace would miss.
+	if secrets := e.contextSecrets(inst); len(secrets) > 0 {
+		ev.Data = redactSecrets(ev.Data, secrets)
+		ev.Msg = redactSecrets(ev.Msg, secrets)
+		ev.Meta = redactMeta(ev.Meta, secrets)
 	}
 	e.emit(ev)
 	if err := e.db.AppendLog(&model.LogEntry{
@@ -1031,8 +1025,34 @@ func (e *Engine) audit(inst *model.ProcessInstance, ev logEvent) {
 	}
 }
 
-// redactSecrets replaces each secret config value in s with "***" so secret
-// values never reach the console or the persisted audit trail.
+// contextSecrets gathers every secret value currently in the instance's context —
+// config secrets, plus input/output values whose inferred schema is marked secret —
+// so audit can scrub them from log text. (The action response body is not in the
+// context; it is schema-redacted at its log site via snippetResult.)
+func (e *Engine) contextSecrets(inst *model.ProcessInstance) []string {
+	def, err := e.db.GetDefinition(inst.ProcessName, inst.ProcessVersion)
+	if err != nil {
+		return nil
+	}
+	out := def.SecretConfigValues(inst.Config)
+	sf, ok := e.schemaFile(inst)
+	if !ok {
+		return out
+	}
+	if v, ok := inst.ContextData["input"]; ok {
+		schema.CollectSecrets(v, sf.ProcessInput, sf.Defs, &out)
+	}
+	if outs, ok := inst.ContextData["outputs"].(map[string]any); ok {
+		for tid, v := range outs {
+			if ts, ok := sf.Tasks[tid]; ok {
+				schema.CollectSecrets(v, ts.Output, sf.Defs, &out)
+			}
+		}
+	}
+	return out
+}
+
+// redactSecrets replaces each secret value in s with "***".
 func redactSecrets(s string, secrets []string) string {
 	for _, sv := range secrets {
 		if sv != "" {
@@ -1040,6 +1060,23 @@ func redactSecrets(s string, secrets []string) string {
 		}
 	}
 	return s
+}
+
+// redactMeta returns a copy of meta with secret values scrubbed from its string
+// values (e.g. the resolved endpoint URL). The original map is left unchanged.
+func redactMeta(meta map[string]any, secrets []string) map[string]any {
+	if len(meta) == 0 || len(secrets) == 0 {
+		return meta
+	}
+	out := make(map[string]any, len(meta))
+	for k, v := range meta {
+		if s, ok := v.(string); ok {
+			out[k] = redactSecrets(s, secrets)
+		} else {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // logOnly records a console-only line (server lifecycle / operational events not in
@@ -1126,13 +1163,7 @@ func statusMeta(status int) map[string]any {
 // for each spawned child. It bookends the trail with instance_completed, which
 // carries the final output.
 func (e *Engine) AuditCreated(inst *model.ProcessInstance) {
-	input := inst.ContextData["input"]
-	if e.logCfg.Payloads {
-		if sf, ok := e.schemaFile(inst); ok && sf.ProcessInput != nil {
-			input = schema.Redact(input, sf.ProcessInput, sf.Defs)
-		}
-	}
-	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventInstanceCreated, Data: e.snippet(input)})
+	e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventInstanceCreated, Data: e.snippet(inst.ContextData["input"])})
 }
 
 // outputData captures the process's final output for the instance_completed event:
@@ -1140,13 +1171,7 @@ func (e *Engine) AuditCreated(inst *model.ProcessInstance) {
 // definition's output projection), or "" when the process defines no output (or
 // payload logging is off).
 func (e *Engine) outputData(inst *model.ProcessInstance) string {
-	out := inst.ContextData["output"]
-	if e.logCfg.Payloads {
-		if sf, ok := e.schemaFile(inst); ok && sf.ProcessOutput != nil {
-			out = schema.Redact(out, sf.ProcessOutput, sf.Defs)
-		}
-	}
-	return e.snippet(out)
+	return e.snippet(inst.ContextData["output"])
 }
 
 // snippet renders v as JSON capped to the configured payload size for inclusion
@@ -1487,7 +1512,8 @@ func (e *Engine) computeOutput(inst *model.ProcessInstance) error {
 
 // resolveEndpoint evaluates the REST endpoint as a template so a base URL can come
 // from config or input (e.g. "{{ config.server_url }}/path"), returning the
-// resolved URL. Returns "" for actions without an endpoint.
+// resolved URL. Returns "" for actions without an endpoint. Secret values it
+// carries are scrubbed from logged URLs/errors by audit().
 func (e *Engine) resolveEndpoint(inst *model.ProcessInstance, call *model.Action) (string, error) {
 	if call.Endpoint == "" {
 		return "", nil
