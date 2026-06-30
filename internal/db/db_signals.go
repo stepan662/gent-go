@@ -131,13 +131,13 @@ func (db *DB) DeliverSignal(ctx context.Context, instanceID, taskID, signalID st
 	if db.dialect == "postgres" {
 		lock = " FOR UPDATE"
 	}
-	var status, waitState, taskQueue, externalData string
+	var status, waitState, currentTask, externalData string
 	var workerID sql.NullString
 	var leaseExpiresAt sql.NullInt64
 	switch err := raw.QueryRowContext(ctx,
-		`SELECT status, wait_state, task_queue, external_data, worker_id, lease_expires_at
+		`SELECT status, wait_state, task, external_data, worker_id, lease_expires_at
 		   FROM process_instances WHERE id = ?`+lock, instanceID).
-		Scan(&status, &waitState, &taskQueue, &externalData, &workerID, &leaseExpiresAt); err {
+		Scan(&status, &waitState, &currentTask, &externalData, &workerID, &leaseExpiresAt); err {
 	case nil:
 	case sql.ErrNoRows:
 		return false, fmt.Errorf("instance not found")
@@ -148,11 +148,9 @@ func (db *DB) DeliverSignal(ctx context.Context, instanceID, taskID, signalID st
 		return false, fmt.Errorf("instance is not running (status %s); cannot signal", status)
 	}
 
-	var queue []*model.Task
-	if err := json.Unmarshal([]byte(taskQueue), &queue); err != nil {
-		return false, fmt.Errorf("decode task queue: %w", err)
-	}
-	armed := model.WaitState(waitState) == model.WaitStateExternal && len(queue) > 0 && queue[0].ID == taskID
+	// The `task` column is the current task id, so the instance is armed for this
+	// signal iff it is parked on an external wait at exactly that task.
+	armed := model.WaitState(waitState) == model.WaitStateExternal && currentTask == taskID
 	// A live lease means a worker is mid-advance on this row (a timeout firing); don't race
 	// it — buffer instead, and the signal is consumed if the task re-arms.
 	liveLeased := workerID.Valid && leaseExpiresAt.Valid && leaseExpiresAt.Int64 > nowMillis()

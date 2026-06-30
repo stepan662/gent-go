@@ -36,7 +36,6 @@ type ProcessInstance struct {
 	ID             string
 	ProcessName    string
 	ProcessVersion int64
-	TaskQueue      string
 	ParentID       string
 	CallStack      string
 	RetryCount     int64
@@ -55,6 +54,7 @@ type ProcessInstance struct {
 	ErrorData      string
 	ExternalData   string
 	EngineState    string
+	Task           string
 }
 
 type ProcessLog struct {

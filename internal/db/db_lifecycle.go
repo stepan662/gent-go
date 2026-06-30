@@ -338,6 +338,37 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 		return fmt.Errorf("instance not found")
 	}
 
+	// loadTask resolves a node's current task object via the transaction's own
+	// connection. The pooled db.GetDefinition must NOT be used here: this runs inside
+	// the tree-locking transaction, which on SQLite holds the single pooled connection
+	// db.GetDefinition would block waiting for — a deadlock. Definitions are immutable,
+	// so a per-call cache keyed by name+version avoids re-reading shared defs.
+	defCache := map[string]*model.ProcessDefinition{}
+	loadTask := func(node *model.ProcessInstance) (*model.Task, error) {
+		if node.Task == "" {
+			return nil, nil
+		}
+		key := fmt.Sprintf("%s\x00%d", node.ProcessName, node.ProcessVersion)
+		def, ok := defCache[key]
+		if !ok {
+			row, err := qtx.GetDefinition(ctx, dbgen.GetDefinitionParams{Name: node.ProcessName, Version: int64(node.ProcessVersion)})
+			if err != nil {
+				return nil, fmt.Errorf("load definition for %q: %w", node.ID, err)
+			}
+			def = &model.ProcessDefinition{}
+			if err := json.Unmarshal([]byte(row.Definition), def); err != nil {
+				return nil, fmt.Errorf("decode definition for %q: %w", node.ID, err)
+			}
+			defCache[key] = def
+		}
+		for _, t := range def.Tasks {
+			if t.ID == node.Task {
+				return t, nil
+			}
+		}
+		return nil, fmt.Errorf("task %q not found in %s v%d", node.Task, node.ProcessName, node.ProcessVersion)
+	}
+
 	// Walk the tree top-down, reviving the interrupted path. Only the root and
 	// the front-task children of revived nodes are visited, so completed tasks
 	// and finished side branches are never touched.
@@ -354,9 +385,8 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 		}
 		// node is failed or cancelled
 		newWaitState := model.WaitStateNone
-		if len(node.TaskQueue) > 0 {
-			front := node.TaskQueue[0]
-			kids := children[node.ID][front.ID]
+		if node.Task != "" {
+			kids := children[node.ID][node.Task]
 			if len(kids) > 0 {
 				// Interrupted inside this spawn task's wait/collect cycle —
 				// revive the batch and reconstruct the wait state. (Kids exist
@@ -375,12 +405,20 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 				} else {
 					newWaitState = model.WaitStateCollecting // re-run the lost collect
 				}
-			} else if front.OnlyOnce != nil && *front.OnlyOnce && !force {
-				// Reviving with wait_state none re-executes the front task.
-				return fmt.Errorf("instance %q task %q is marked only_once and may have already been attempted; use force to override", node.ID, front.ID)
+			} else if !force {
+				// Reviving with wait_state none re-executes the front task, so a
+				// only_once task that may already have run is rejected unless forced.
+				// (force skips the lookup — it overrides the check regardless.)
+				front, err := loadTask(node)
+				if err != nil {
+					return err
+				}
+				if front != nil && front.OnlyOnce != nil && *front.OnlyOnce {
+					return fmt.Errorf("instance %q task %q is marked only_once and may have already been attempted; use force to override", node.ID, node.Task)
+				}
 			}
 		}
-		// Empty queue: interrupted between the last task and the completed
+		// No current task: interrupted between the last task and the completed
 		// write — advance() completes it on the next claim.
 		node.Status = model.StatusRunning
 		node.WaitState = newWaitState
@@ -412,7 +450,7 @@ func (db *DB) RetryProcess(ctx context.Context, id string, force bool) error {
 		raw := rawRows[node.ID]
 		if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
 			ID:           node.ID,
-			TaskQueue:    raw.TaskQueue,
+			Task:         raw.Task,
 			OutputsData:  raw.OutputsData,
 			OutputData:   raw.OutputData,
 			ErrorData:    raw.ErrorData,
@@ -489,13 +527,9 @@ func (db *DB) SpawnChildrenAndWait(ctx context.Context, parent *model.ProcessIns
 	if err != nil {
 		return err
 	}
-	parentQueue, err := marshalTaskQueue(parent)
-	if err != nil {
-		return err
-	}
 	if err := qtx.UpdateInstance(ctx, dbgen.UpdateInstanceParams{
 		ID:           parent.ID,
-		TaskQueue:    parentQueue,
+		Task:         parent.Task,
 		OutputsData:  parentCols.OutputsData,
 		OutputData:   parentCols.OutputData,
 		ErrorData:    parentCols.ErrorData,

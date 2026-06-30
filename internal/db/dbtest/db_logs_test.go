@@ -34,7 +34,7 @@ func spawnInstance(t *testing.T, db *dbpkg.DB, id, parentID string) {
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		TaskQueue:      []*model.Task{},
+		Task:           "",
 		ContextData:    map[string]any{},
 		ParentID:       parentID,
 		Status:         model.StatusRunning,

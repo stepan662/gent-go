@@ -11,7 +11,7 @@ import (
 )
 
 // instancePaginator is the pagination policy for ListInstances. It selects only
-// the summary columns (no context_data/task_queue/call_stack — see
+// the summary columns (no context_data/task/call_stack — see
 // instanceSummaryColumns) so listing many instances never fetches a potentially
 // huge context. Two index-backed sorts: created keys on (created_at, id) and
 // updated on (updated_at, id) — backed by idx_instances_updated_at — each with the
@@ -58,13 +58,13 @@ func instanceSummaryCursorVals(sort string, s *model.InstanceSummary) []any {
 // instanceColumns is the full process_instances column list, in the order
 // scanInstance reads them. Shared by the hand-written ClaimInstances and
 // RetryProcess queries so adding a column touches one place.
-const instanceColumns = `id, process_name, process_version, task_queue, parent_id,
+const instanceColumns = `id, process_name, process_version, parent_id,
 	call_stack, retry_count, wake_at, status, error,
 	created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id,
-	input_data, outputs_data, output_data, error_data, external_data, engine_state`
+	input_data, outputs_data, output_data, error_data, external_data, engine_state, task`
 
 // instanceSummaryColumns is the lightweight projection used by ListInstances: no
-// context_data/task_queue/call_stack, so a list never reads or unmarshals a
+// context_data/task/call_stack, so a list never reads or unmarshals a
 // potentially huge context blob. Order matches scanInstanceSummary.
 const instanceSummaryColumns = `id, process_name, process_version, retry_count,
 	status, wait_state, error, created_at, updated_at`
@@ -98,10 +98,10 @@ func scanInstanceSummary(s interface{ Scan(...any) error }) (*model.InstanceSumm
 func scanInstance(s interface{ Scan(...any) error }) (dbgen.ProcessInstance, error) {
 	var r dbgen.ProcessInstance
 	err := s.Scan(
-		&r.ID, &r.ProcessName, &r.ProcessVersion, &r.TaskQueue, &r.ParentID,
+		&r.ID, &r.ProcessName, &r.ProcessVersion, &r.ParentID,
 		&r.CallStack, &r.RetryCount, &r.WakeAt, &r.Status, &r.Error,
 		&r.CreatedAt, &r.UpdatedAt, &r.WorkerID, &r.LeaseExpiresAt, &r.WaitState, &r.SpawnTaskID,
-		&r.InputData, &r.OutputsData, &r.OutputData, &r.ErrorData, &r.ExternalData, &r.EngineState,
+		&r.InputData, &r.OutputsData, &r.OutputData, &r.ErrorData, &r.ExternalData, &r.EngineState, &r.Task,
 	)
 	return r, err
 }
@@ -119,9 +119,25 @@ type outputsColumn struct {
 	Items map[string]json.RawMessage `json:"items,omitempty"`
 }
 
-func marshalTaskQueue(inst *model.ProcessInstance) (string, error) {
-	b, err := json.Marshal(inst.TaskQueue)
-	return string(b), err
+// CurrentTask resolves an instance's current task object from its (immutable,
+// version-pinned) definition, or nil when the instance has no current task (Task == "",
+// i.e. completed or drained). Only the current task is ever needed; its successors are
+// implied by the definition's task order, so no queue is materialised. Used by callers
+// that need the task's shape (action, only_once) rather than just its id.
+func (db *DB) CurrentTask(inst *model.ProcessInstance) (*model.Task, error) {
+	if inst.Task == "" {
+		return nil, nil
+	}
+	def, err := db.GetDefinition(inst.ProcessName, inst.ProcessVersion)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range def.Tasks {
+		if t.ID == inst.Task {
+			return t, nil
+		}
+	}
+	return nil, fmt.Errorf("task %q not found in %s v%d", inst.Task, inst.ProcessName, inst.ProcessVersion)
 }
 
 // encodeValueSlot externalizes a value-bearing slot (input / a task output / the
@@ -316,13 +332,9 @@ func (db *DB) persistContext(ctx context.Context, qtx *dbgen.Queries, inst *mode
 // updateInstanceParams builds UpdateInstance params from inst + already-encoded
 // columns, stamping updated_at with now.
 func updateInstanceParams(inst *model.ProcessInstance, cols contextCols, now int64) (dbgen.UpdateInstanceParams, error) {
-	queue, err := marshalTaskQueue(inst)
-	if err != nil {
-		return dbgen.UpdateInstanceParams{}, err
-	}
 	return dbgen.UpdateInstanceParams{
 		ID:           inst.ID,
-		TaskQueue:    queue,
+		Task:         inst.Task,
 		OutputsData:  cols.OutputsData,
 		OutputData:   cols.OutputData,
 		ErrorData:    cols.ErrorData,
@@ -342,10 +354,6 @@ func updateInstanceParams(inst *model.ProcessInstance, cols contextCols, now int
 // children inherit the parent's status); created/updated timestamps are passed for
 // the same reason.
 func insertInstanceParams(inst *model.ProcessInstance, cols contextCols, status string, createdAt, updatedAt int64) (dbgen.InsertInstanceParams, error) {
-	queue, err := marshalTaskQueue(inst)
-	if err != nil {
-		return dbgen.InsertInstanceParams{}, err
-	}
 	callStack, err := json.Marshal(inst.CallStack)
 	if err != nil {
 		return dbgen.InsertInstanceParams{}, err
@@ -354,7 +362,7 @@ func insertInstanceParams(inst *model.ProcessInstance, cols contextCols, status 
 		ID:             inst.ID,
 		ProcessName:    inst.ProcessName,
 		ProcessVersion: int64(inst.ProcessVersion),
-		TaskQueue:      queue,
+		Task:           inst.Task,
 		InputData:      cols.InputData,
 		OutputsData:    cols.OutputsData,
 		OutputData:     cols.OutputData,
@@ -438,13 +446,9 @@ func (db *DB) UpdateInstanceProgress(inst *model.ProcessInstance) error {
 	if err != nil {
 		return err
 	}
-	queue, err := marshalTaskQueue(inst)
-	if err != nil {
-		return err
-	}
 	if err := qtx.UpdateInstanceProgress(ctx, dbgen.UpdateInstanceProgressParams{
 		ID:           inst.ID,
-		TaskQueue:    queue,
+		Task:         inst.Task,
 		OutputsData:  cols.OutputsData,
 		ErrorData:    cols.ErrorData,
 		ExternalData: cols.ExternalData,
@@ -563,6 +567,7 @@ func toInstance(r dbgen.ProcessInstance) (*model.ProcessInstance, error) {
 		ID:             r.ID,
 		ProcessName:    r.ProcessName,
 		ProcessVersion: int(r.ProcessVersion),
+		Task:           r.Task,
 		ParentID:       r.ParentID,
 		SpawnTaskID:    r.SpawnTaskID,
 		RetryCount:     int(r.RetryCount),
@@ -574,9 +579,6 @@ func toInstance(r dbgen.ProcessInstance) (*model.ProcessInstance, error) {
 		WakeAt:    toTimePtr(r.WakeAt),
 		WorkerID:       nullStringPtr(r.WorkerID),
 		LeaseExpiresAt: toTimePtr(r.LeaseExpiresAt),
-	}
-	if err := json.Unmarshal([]byte(r.TaskQueue), &inst.TaskQueue); err != nil {
-		return nil, fmt.Errorf("unmarshal task_queue: %w", err)
 	}
 	cd, loaded, err := decodeContext(r)
 	if err != nil {

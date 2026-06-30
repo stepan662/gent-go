@@ -18,11 +18,7 @@ func insertExternalParked(t *testing.T, db *dbpkg.DB, id, token string, wakeAt *
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		TaskQueue: []*model.Task{{
-			ID:     "approval",
-			Action: &model.Action{Type: model.ActionTypeExternal},
-			Switch: model.SwitchMap{{Goto: model.GotoEnd}},
-		}},
+		Task:           "approval",
 		ContextData: map[string]any{
 			model.CtxExternal: map[string]any{
 				"task_id": "approval",

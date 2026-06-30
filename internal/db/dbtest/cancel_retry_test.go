@@ -16,7 +16,7 @@ func insertInst(t *testing.T, db *dbpkg.DB, id string, status model.Status, pare
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		TaskQueue:      []*model.Task{{ID: "step1"}},
+		Task:           "step1",
 		ContextData:    map[string]any{},
 		Status:         status,
 		ParentID:       parentID,
@@ -62,7 +62,7 @@ func insertInstW(t *testing.T, db *dbpkg.DB, id string, status model.Status, wai
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		TaskQueue:      []*model.Task{{ID: "step1"}},
+		Task:           "step1",
 		ContextData:    map[string]any{},
 		Status:         status,
 		WaitState:      waitState,
@@ -241,7 +241,7 @@ func TestSpawnChildrenAndWait_RunningParent(t *testing.T) {
 			child := &model.ProcessInstance{
 				ID:          "child",
 				ProcessName: "test",
-				TaskQueue:   []*model.Task{{ID: "step1"}},
+				Task:        "step1",
 				ContextData: map[string]any{},
 				ParentID:    "parent",
 				CallStack:   []string{"parent"},
@@ -279,7 +279,7 @@ func TestSpawnChildrenAndWait_CancellingParent(t *testing.T) {
 			child := &model.ProcessInstance{
 				ID:          "child",
 				ProcessName: "test",
-				TaskQueue:   []*model.Task{{ID: "step1"}},
+				Task:        "step1",
 				ContextData: map[string]any{},
 				ParentID:    "parent",
 				CallStack:   []string{"parent"},
@@ -312,7 +312,7 @@ func insertChild(t *testing.T, db *dbpkg.DB, id string, status model.Status, par
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		TaskQueue:      []*model.Task{{ID: "step1"}},
+		Task:           "step1",
 		ContextData:    map[string]any{},
 		Status:         status,
 		ParentID:       parentID,
@@ -564,7 +564,7 @@ func TestRetryProcess_EmptyQueue(t *testing.T) {
 			inst := &model.ProcessInstance{
 				ID:          "root",
 				ProcessName: "test",
-				TaskQueue:   []*model.Task{},
+				Task:        "",
 				ContextData: map[string]any{},
 				Status:      model.StatusCancelled,
 			}
@@ -692,13 +692,16 @@ func TestRetryProcess_OnlyOnce_RejectedUnlessForced(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			trueVal := true
+			// only_once now lives in the definition, not on the instance.
+			saveDef(t, b.db, "oo", 1, []*model.Task{{ID: "step1", OnlyOnce: &trueVal}})
 			inst := &model.ProcessInstance{
-				ID:          "locked",
-				ProcessName: "test",
-				TaskQueue:   []*model.Task{{ID: "step1", OnlyOnce: &trueVal}},
-				ContextData: map[string]any{},
-				Status:      model.StatusFailed,
-				Error:       "failed on only_once task",
+				ID:             "locked",
+				ProcessName:    "oo",
+				ProcessVersion: 1,
+				Task:           "step1",
+				ContextData:    map[string]any{},
+				Status:         model.StatusFailed,
+				Error:          "failed on only_once task",
 			}
 			if err := b.db.SaveInstance(inst); err != nil {
 				t.Fatalf("SaveInstance: %v", err)
@@ -729,17 +732,20 @@ func TestRetryProcess_OnlyOnceDeep_RollsBack(t *testing.T) {
 	for _, b := range testBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
 			trueVal := true
+			// only_once now lives in the definition, not on the instance.
+			saveDef(t, b.db, "oo", 1, []*model.Task{{ID: "step1", OnlyOnce: &trueVal}})
 			insertInst(t, b.db, "root", model.StatusFailed, "", nil, "child failed")
 			leaf := &model.ProcessInstance{
-				ID:          "leaf",
-				ProcessName: "test",
-				TaskQueue:   []*model.Task{{ID: "step1", OnlyOnce: &trueVal}},
-				ContextData: map[string]any{},
-				Status:      model.StatusFailed,
-				ParentID:    "root",
-				SpawnTaskID: "step1",
-				CallStack:   []string{"root"},
-				Error:       "boom",
+				ID:             "leaf",
+				ProcessName:    "oo",
+				ProcessVersion: 1,
+				Task:           "step1",
+				ContextData:    map[string]any{},
+				Status:         model.StatusFailed,
+				ParentID:       "root",
+				SpawnTaskID:    "step1",
+				CallStack:      []string{"root"},
+				Error:          "boom",
 			}
 			if err := b.db.SaveInstance(leaf); err != nil {
 				t.Fatalf("SaveInstance: %v", err)
@@ -809,13 +815,13 @@ func TestChildrenForStep_StepScoped(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			insertInst(t, b.db, "parent", model.StatusRunning, "", nil, "")
 			oldChild := &model.ProcessInstance{
-				ID: "old", ProcessName: "test", TaskQueue: []*model.Task{},
+				ID: "old", ProcessName: "test", Task: "",
 				ContextData: map[string]any{"output": "stale"},
 				Status:      model.StatusCompleted,
 				ParentID:    "parent", SpawnTaskID: "taskA", CallStack: []string{"parent"},
 			}
 			newChild := &model.ProcessInstance{
-				ID: "new", ProcessName: "test", TaskQueue: []*model.Task{},
+				ID: "new", ProcessName: "test", Task: "",
 				ContextData: map[string]any{"output": "fresh"},
 				Status:      model.StatusCompleted,
 				ParentID:    "parent", SpawnTaskID: "taskB", CallStack: []string{"parent"},

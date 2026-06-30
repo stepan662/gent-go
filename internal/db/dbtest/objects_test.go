@@ -27,7 +27,7 @@ func TestObjects_BigValueRoundTrip(t *testing.T) {
 			inst := &model.ProcessInstance{
 				ID:          "inst-big",
 				ProcessName: "test",
-				TaskQueue:   []*model.Task{},
+				Task:        "",
 				ContextData: map[string]any{
 					"input":   big,
 					"outputs": map[string]any{"small": "tiny", "huge": bigString("out")},
@@ -78,7 +78,7 @@ func TestObjects_DerefDeletesImmediately(t *testing.T) {
 			inst := &model.ProcessInstance{
 				ID:          "inst-deref",
 				ProcessName: "test",
-				TaskQueue:   []*model.Task{},
+				Task:        "",
 				ContextData: map[string]any{"outputs": map[string]any{"loop": bigString("v1")}},
 				Status:      model.StatusRunning,
 			}
@@ -137,7 +137,7 @@ func TestObjects_LogReferencedSurvivesDeref(t *testing.T) {
 			inst := &model.ProcessInstance{
 				ID:          "inst-shared",
 				ProcessName: "test",
-				TaskQueue:   []*model.Task{},
+				Task:        "",
 				ContextData: map[string]any{"outputs": map[string]any{"out": val}},
 				Status:      model.StatusRunning,
 			}

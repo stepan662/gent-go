@@ -17,7 +17,7 @@ func saveInstance(t *testing.T, db *dbpkg.DB, process string) *model.ProcessInst
 		ID:             idgen.New(),
 		ProcessName:    process,
 		ProcessVersion: 1,
-		TaskQueue:      []*model.Task{},
+		Task:           "",
 		ContextData: map[string]any{
 			"input":   map[string]any{"secret": "do-not-leak-in-list"},
 			"outputs": map[string]any{},

@@ -48,9 +48,12 @@ type ProcessInstance struct {
 	ProcessName    string
 	ProcessVersion int
 
-	// TaskQueue holds the remaining tasks to execute, serialized as JSON.
-	// A switch goto replaces this slice with the target task and all tasks after it.
-	TaskQueue []*Task
+	// Task is the id of the instance's current task — its position in the definition's
+	// ordered task list. The remaining "queue" is not stored: it is always the
+	// definition's tasks from here onward (the list is immutable and version-pinned),
+	// and a switch only ever moves this pointer — to the next task or to a goto target.
+	// An empty Task means the instance has run off the end (completed / nothing left).
+	Task string
 
 	// ContextData is the accumulated key/value state passed between tasks.
 	ContextData map[string]any
@@ -103,9 +106,9 @@ type ProcessInstance struct {
 }
 
 // InstanceSummary is the lightweight projection of a ProcessInstance used by list
-// endpoints. It deliberately omits the heavy JSON blobs (context_data, task_queue,
-// call_stack) so listing many instances never fetches or unmarshals a potentially
-// huge context — those are only loaded for single-instance detail (GetInstance).
+// endpoints. It deliberately omits the heavy JSON blobs (context_data, call_stack)
+// so listing many instances never fetches or unmarshals a potentially huge context —
+// those are only loaded for single-instance detail (GetInstance).
 type InstanceSummary struct {
 	ID             string
 	ProcessName    string

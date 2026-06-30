@@ -57,12 +57,12 @@ ORDER BY pc.name;
 
 -- name: InsertInstance :exec
 INSERT INTO process_instances
-    (id, process_name, process_version, task_queue,
+    (id, process_name, process_version, task,
      input_data, outputs_data, output_data, error_data, external_data, engine_state,
      parent_id, spawn_task_id,
      call_stack, retry_count, wake_at, status, wait_state, error, created_at, updated_at)
 VALUES
-    (sqlc.arg(id), sqlc.arg(process_name), sqlc.arg(process_version), sqlc.arg(task_queue),
+    (sqlc.arg(id), sqlc.arg(process_name), sqlc.arg(process_version), sqlc.arg(task),
      sqlc.arg(input_data), sqlc.arg(outputs_data), sqlc.arg(output_data),
      sqlc.arg(error_data), sqlc.arg(external_data), sqlc.arg(engine_state),
      sqlc.arg(parent_id), sqlc.arg(spawn_task_id),
@@ -73,7 +73,7 @@ VALUES
 -- input_data is intentionally NOT written: the process input is immutable after
 -- creation, so re-writing it every update would be pure churn.
 UPDATE process_instances
-SET task_queue       = sqlc.arg(task_queue),
+SET task             = sqlc.arg(task),
     outputs_data     = sqlc.arg(outputs_data),
     output_data      = sqlc.arg(output_data),
     error_data       = sqlc.arg(error_data),
@@ -93,7 +93,7 @@ WHERE id = sqlc.arg(id);
 -- Mid-process write: neither input_data (immutable) nor output_data (only set on
 -- completion, which goes through UpdateInstance with a status change) is touched.
 UPDATE process_instances
-SET task_queue       = sqlc.arg(task_queue),
+SET task             = sqlc.arg(task),
     outputs_data     = sqlc.arg(outputs_data),
     error_data       = sqlc.arg(error_data),
     external_data    = sqlc.arg(external_data),
@@ -107,12 +107,12 @@ SET task_queue       = sqlc.arg(task_queue),
 WHERE id = sqlc.arg(id);
 
 -- name: GetInstance :one
--- Column order matches the process_instances row struct (context columns last, as
--- appended by migration 019) so sqlc returns dbgen.ProcessInstance directly.
-SELECT id, process_name, process_version, task_queue, parent_id,
+-- Column order matches the process_instances row struct (context columns then task,
+-- appended by migrations 019 and 020) so sqlc returns dbgen.ProcessInstance directly.
+SELECT id, process_name, process_version, parent_id,
        call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id,
-       input_data, outputs_data, output_data, error_data, external_data, engine_state
+       input_data, outputs_data, output_data, error_data, external_data, engine_state, task
 FROM process_instances
 WHERE id = sqlc.arg(id);
 
@@ -183,10 +183,10 @@ SET wait_state = CASE WHEN status = 'running' THEN 'collecting' ELSE '' END,
 WHERE id = sqlc.arg(id);
 
 -- name: GetChildrenForTask :many
-SELECT id, process_name, process_version, task_queue, parent_id,
+SELECT id, process_name, process_version, parent_id,
        call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id,
-       input_data, outputs_data, output_data, error_data, external_data, engine_state
+       input_data, outputs_data, output_data, error_data, external_data, engine_state, task
 FROM process_instances
 WHERE parent_id = sqlc.arg(parent_id)
   AND spawn_task_id = sqlc.arg(spawn_task_id);

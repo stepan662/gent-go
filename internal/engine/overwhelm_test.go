@@ -44,7 +44,7 @@ func TestGracefulShutdown_ReleasesLeases(t *testing.T) {
 	processName := fmt.Sprintf("graceful-%d", time.Now().UnixNano())
 	tasks := []*model.Task{{
 		ID:     "work",
-		Action:   &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
+		Action: &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
 		Switch: model.SwitchMap{{Goto: model.GotoEnd}},
 	}}
 	if err := database.SaveDefinition(&model.ProcessDefinition{Name: processName, Tasks: tasks}, 1, nil, "graceful-hash", ""); err != nil {
@@ -56,7 +56,7 @@ func TestGracefulShutdown_ReleasesLeases(t *testing.T) {
 		ID:             instID,
 		ProcessName:    processName,
 		ProcessVersion: 1,
-		TaskQueue:      tasks,
+		Task:           tasks[0].ID,
 		ContextData:    map[string]any{},
 		Status:         model.StatusRunning,
 	}); err != nil {
@@ -127,7 +127,7 @@ func TestOverwhelm_GracefulExit(t *testing.T) {
 	name := fmt.Sprintf("overwhelm-%d", time.Now().UnixNano())
 	tasks := []*model.Task{{
 		ID:     "slow",
-		Action:   &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
+		Action: &model.Action{Type: model.ActionTypeREST, Endpoint: srv.URL},
 		Switch: model.SwitchMap{{Goto: model.GotoEnd}},
 	}}
 	if err := database.SaveDefinition(&model.ProcessDefinition{Name: name, Tasks: tasks}, 1, nil, "overwhelm-hash", ""); err != nil {
@@ -136,17 +136,17 @@ func TestOverwhelm_GracefulExit(t *testing.T) {
 	id := fmt.Sprintf("oi-%d", time.Now().UnixNano())
 	if err := database.SaveInstance(&model.ProcessInstance{
 		ID: id, ProcessName: name, ProcessVersion: 1,
-		TaskQueue: tasks, ContextData: map[string]any{}, Status: model.StatusRunning,
+		Task: tasks[0].ID, ContextData: map[string]any{}, Status: model.StatusRunning,
 	}); err != nil {
 		t.Fatalf("SaveInstance: %v", err)
 	}
 
-	// 1s lease, renew interval a minute out (so the renewer never re-stamps it),
+	// 100ms lease, renew interval a minute out (so the renewer never re-stamps it),
 	// maxConcurrent=2 (a free slot to re-claim on), fast poll. The test asserts the
 	// behaviour and t.Logf's the captured error, so the engine's own logs are
 	// discarded to keep passing runs quiet.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	eng := New(database, 10*time.Millisecond, 2, true /* immediateRetries */, 1*time.Second, time.Minute, LogConfig{}, log)
+	eng := New(database, 10*time.Millisecond, 2, true /* immediateRetries */, 100*time.Millisecond, time.Minute, LogConfig{}, log)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

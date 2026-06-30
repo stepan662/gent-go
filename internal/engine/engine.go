@@ -478,12 +478,20 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 		return e.cancelInstance(inst)
 	}
 
+	// Load the definition once for the whole tick: it drives config resolution and
+	// is the source of truth for the task list (the instance stores only its current
+	// task id; successors are implied by definition order). An instance whose
+	// definition cannot be loaded cannot run, so fail it with a clear reason.
+	def, err := e.db.GetDefinition(inst.ProcessName, inst.ProcessVersion)
+	if err != nil {
+		return e.failInstance(inst, fmt.Sprintf("load definition: %v", err))
+	}
+
 	// Resolve config from the OS environment for this tick. Config is never
 	// persisted — it is re-resolved every tick and exposed to expressions as
 	// "config". A resolution failure (missing required var, bad coercion) fails
-	// the instance with a clear reason. A definition-load error is left to the
-	// existing lazy load downstream, preserving current behaviour.
-	if def, err := e.db.GetDefinition(inst.ProcessName, inst.ProcessVersion); err == nil && def.ConfigSchema != nil {
+	// the instance with a clear reason.
+	if def.ConfigSchema != nil {
 		cfg, err := def.ResolveConfig(os.LookupEnv)
 		if err != nil {
 			return e.failInstance(inst, fmt.Sprintf("config: %v", err))
@@ -491,21 +499,25 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 		inst.Config = cfg
 	}
 
+	// Resolve the instance's position in the task list. An empty Task means it has
+	// run off the end (nothing left) — the loop below completes it. A non-empty Task
+	// that isn't in the definition is a corrupt/mismatched row: fail it.
+	idx := taskIndex(def.Tasks, inst.Task)
+	if inst.Task != "" && idx < 0 {
+		return e.failInstance(inst, fmt.Sprintf("current task %q not found in definition", inst.Task))
+	}
+
 	// Lease takeover: this instance was reclaimed from an expired lease, so its
-	// front task (TaskQueue[0]) may have started executing on the previous owner
-	// before it crashed/stalled. Re-running is fine for idempotent tasks, but an
-	// only_once (non-idempotent) call task cannot be safely re-executed — the call
-	// may already have happened — so fail the instance to honour at-most-once.
+	// current task may have started executing on the previous owner before it
+	// crashed/stalled. Re-running is fine for idempotent tasks, but an only_once
+	// (non-idempotent) call task cannot be safely re-executed — the call may already
+	// have happened — so fail the instance to honour at-most-once.
 	if inst.ReclaimedExpired {
-		taskID := ""
-		if len(inst.TaskQueue) > 0 {
-			taskID = inst.TaskQueue[0].ID
-		}
 		e.logOnly(logEvent{Level: model.LogWarn, ID: inst.ID,
 			Msg:  "reclaimed expired lease; previous owner crashed or stalled mid-task",
-			Meta: map[string]any{"task": taskID, "process": inst.ProcessName}})
-		if len(inst.TaskQueue) > 0 {
-			s := inst.TaskQueue[0]
+			Meta: map[string]any{"task": inst.Task, "process": inst.ProcessName}})
+		if idx >= 0 {
+			s := def.Tasks[idx]
 			if s.Action != nil && s.OnlyOnce != nil && *s.OnlyOnce {
 				return e.failInstance(inst, fmt.Sprintf(
 					"task %q is only_once and was interrupted by a lease takeover; cannot re-execute", s.ID))
@@ -516,8 +528,8 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 	// work_started: a worker has picked this instance up and is about to work its
 	// current task. One per work session (a resume after parking emits it again),
 	// tagged with the worker so the unified log shows who is doing what.
-	if len(inst.TaskQueue) > 0 {
-		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventWorkStarted, Task: inst.TaskQueue[0].ID, Meta: map[string]any{"worker": e.workerID}})
+	if idx >= 0 {
+		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventWorkStarted, Task: inst.Task, Meta: map[string]any{"worker": e.workerID}})
 	}
 
 	// Process tasks in a loop. A call-less task (pure switch/routing) has no
@@ -530,12 +542,14 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 	//
 	// This is crash-safe: skipping persistence between call-less tasks is fine
 	// because they only re-evaluate switches against already-persisted context, so
-	// resuming from the last persisted task queue is deterministic. Durable state
-	// only changes at the boundaries (spawn txn, action result, terminal save),
-	// each of which writes the live task queue.
+	// resuming from the last persisted task position is deterministic. Durable state
+	// only changes at the boundaries (spawn txn, action result, terminal save), each
+	// of which writes inst.Task — the current position in the definition's task list.
 	const maxInlineTasks = 1000
 	for i := 0; ; i++ {
-		if len(inst.TaskQueue) == 0 {
+		if idx < 0 || idx >= len(def.Tasks) {
+			// Ran off the end of the task list: nothing left to do.
+			inst.Task = ""
 			inst.Status = model.StatusCompleted
 			inst.WakeAt = nil
 			if err := e.computeOutput(inst); err != nil {
@@ -545,7 +559,10 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 			return advanceOutcome{kind: outcomeTerminal}
 		}
 
-		task := inst.TaskQueue[0]
+		task := def.Tasks[idx]
+		// Point the instance at the task about to run, so any mid-task persist (park,
+		// retry, error route, fail) records this task as the resume point.
+		inst.Task = task.ID
 		hasCall := task.Action != nil
 		var actionResult any
 
@@ -629,15 +646,16 @@ func (e *Engine) advance(ctx context.Context, inst *model.ProcessInstance) advan
 		}
 
 		if gotoID == model.GotoNext {
-			inst.TaskQueue = inst.TaskQueue[1:]
+			idx++
 		} else {
 			// gotoID is a task reference like "$ship" — strip the sigil.
-			newQueue, err := e.queueFromTask(inst, gotoID[1:])
-			if err != nil {
-				return e.failInstance(inst, err.Error())
+			if idx = taskIndex(def.Tasks, gotoID[1:]); idx < 0 {
+				return e.failInstance(inst, fmt.Sprintf("goto task %q not found in %q v%d", gotoID[1:], inst.ProcessName, inst.ProcessVersion))
 			}
-			inst.TaskQueue = newQueue
 		}
+		// Reflect the new position (empty once we run past the last task) so a
+		// checkpoint here persists the next task to run, not the one just completed.
+		inst.Task = taskIDAt(def.Tasks, idx)
 
 		inst.RetryCount = 0
 		inst.WakeAt = nil
@@ -788,20 +806,41 @@ func (e *Engine) evalSwitch(inst *model.ProcessInstance, task *model.Task, selfO
 	return "", nil
 }
 
-// queueFromTask looks up the process definition and returns all tasks starting
-// from the one with the given ID. Used to implement switch goto jumps (including
-// loops back to earlier tasks).
-func (e *Engine) queueFromTask(inst *model.ProcessInstance, taskID string) ([]*model.Task, error) {
-	def, err := e.db.GetDefinition(inst.ProcessName, inst.ProcessVersion)
-	if err != nil {
-		return nil, fmt.Errorf("resolve goto: %w", err)
+// taskIndex returns the position of taskID in tasks, or -1 if absent (the empty id —
+// "no current task" — is always absent).
+func taskIndex(tasks []*model.Task, taskID string) int {
+	if taskID == "" {
+		return -1
 	}
-	for i, s := range def.Tasks {
-		if s.ID == taskID {
-			return def.Tasks[i:], nil
+	for i, t := range tasks {
+		if t.ID == taskID {
+			return i
 		}
 	}
-	return nil, fmt.Errorf("goto task %q not found in %q v%d", taskID, inst.ProcessName, inst.ProcessVersion)
+	return -1
+}
+
+// taskIDAt returns the id of the task at idx, or "" when idx is out of range (the
+// instance has advanced past the last task).
+func taskIDAt(tasks []*model.Task, idx int) string {
+	if idx < 0 || idx >= len(tasks) {
+		return ""
+	}
+	return tasks[idx].ID
+}
+
+// resolveGoto validates that the instance's definition contains taskID, so the engine
+// can point the instance at it. No queue is built — the remaining tasks are implied by
+// definition order. Used by the on-error route, which has no definition in scope.
+func (e *Engine) resolveGoto(inst *model.ProcessInstance, taskID string) error {
+	def, err := e.db.GetDefinition(inst.ProcessName, inst.ProcessVersion)
+	if err != nil {
+		return fmt.Errorf("resolve goto: %w", err)
+	}
+	if taskIndex(def.Tasks, taskID) < 0 {
+		return fmt.Errorf("goto task %q not found in %q v%d", taskID, inst.ProcessName, inst.ProcessVersion)
+	}
+	return nil
 }
 
 // isRetryAllowed reports whether a retry is safe for the given task and error.
@@ -876,11 +915,10 @@ func (e *Engine) handleCallError(inst *model.ProcessInstance, task *model.Task, 
 			e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventErrorCompleted, Task: task.ID, Msg: errMsg, Code: errCode})
 			return advanceOutcome{kind: outcomeTerminal}
 		}
-		newQueue, err := e.queueFromTask(inst, matched.Goto)
-		if err != nil {
+		if err := e.resolveGoto(inst, matched.Goto); err != nil {
 			return e.failInstance(inst, err.Error())
 		}
-		inst.TaskQueue = newQueue
+		inst.Task = matched.Goto
 		inst.RetryCount = 0
 		inst.WakeAt = nil
 		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventErrorRoute, Task: task.ID, Msg: errMsg + " → " + matched.Goto, Code: errCode})
@@ -1519,7 +1557,7 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 		ID:             idgen.ChildBase(inst.ID).String(), // sorts after the parent
 		ProcessName:    def.Name,
 		ProcessVersion: version,
-		TaskQueue:      def.Tasks,
+		Task:           def.Tasks[0].ID,
 		ContextData:    childCtx,
 		Status:         model.StatusRunning,
 		ParentID:       inst.ID,
@@ -1589,7 +1627,7 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 			ID:             idgen.Add(base, uint64(i)).String(),
 			ProcessName:    def.Name,
 			ProcessVersion: version,
-			TaskQueue:      def.Tasks,
+			Task:           def.Tasks[0].ID,
 			ContextData:    childCtx,
 			Status:         model.StatusRunning,
 			ParentID:       inst.ID,

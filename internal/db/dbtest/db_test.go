@@ -77,7 +77,25 @@ func testBackends(t *testing.T) []backend {
 		out = append(out, backend{sharedPgDB, "postgres"})
 	}
 
+	// Register the baseline definition the fixtures reference (process "test" v1 with a
+	// single task "step1"). Instances store only their current task id now, so the task
+	// list is resolved from the definition — a fixture with no backing definition is
+	// malformed. Tests needing different task shapes (e.g. only_once) register their own.
+	for _, b := range out {
+		saveDef(t, b.db, "test", 1, []*model.Task{{ID: "step1"}})
+	}
+
 	return out
+}
+
+// saveDef registers a process definition so instance fixtures referencing
+// (name, version) can resolve their current task.
+func saveDef(t *testing.T, db *dbpkg.DB, name string, version int, tasks []*model.Task) {
+	t.Helper()
+	def := &model.ProcessDefinition{Name: name, Tasks: tasks}
+	if err := db.SaveDefinition(def, version, nil, name+"-hash", ""); err != nil {
+		t.Fatalf("saveDef %q v%d: %v", name, version, err)
+	}
 }
 
 func insertRunning(t *testing.T, db *dbpkg.DB, id string) {
@@ -86,7 +104,7 @@ func insertRunning(t *testing.T, db *dbpkg.DB, id string) {
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		TaskQueue:      []*model.Task{},
+		Task:           "",
 		ContextData:    map[string]any{},
 		Status:         model.StatusRunning,
 	}

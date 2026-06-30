@@ -386,7 +386,7 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 		ID:             idgen.New(),
 		ProcessName:    def.Name,
 		ProcessVersion: version,
-		TaskQueue:      def.Tasks,
+		Task:           def.Tasks[0].ID,
 		ContextData:    map[string]any{"input": input, "outputs": map[string]any{}, "error": nil},
 		Status:         model.StatusRunning,
 		CreatedAt:      time.Now(),
@@ -572,27 +572,24 @@ func (h *Handlers) listExternalTasks(raw json.RawMessage) Reply {
 	}
 	resp := make([]ExternalTaskResp, 0, len(instances))
 	for _, inst := range instances {
-		item, ok := externalTaskToResp(inst)
-		if !ok {
+		task, err := h.db.CurrentTask(inst)
+		if err != nil || task == nil {
+			// Not a resolvable external task (no current task), which a concurrent
+			// transition could momentarily produce — skip it.
 			continue
 		}
-		// task_id is not a column (it lives in the task queue), so filter it here.
-		if req.Task != "" && item.TaskID != req.Task {
+		// task_id is the current task, not a filterable column, so filter it here.
+		if req.Task != "" && task.ID != req.Task {
 			continue
 		}
-		resp = append(resp, item)
+		resp = append(resp, externalTaskToResp(inst, task))
 	}
 	return okReply(PageResp[ExternalTaskResp]{Items: resp, Page: info})
 }
 
-// externalTaskToResp projects a parked external instance to a queue entry. ok is false
-// when the row is not actually a resolvable external task (no front task), which a
-// concurrent transition could momentarily produce.
-func externalTaskToResp(inst *model.ProcessInstance) (ExternalTaskResp, bool) {
-	if len(inst.TaskQueue) == 0 {
-		return ExternalTaskResp{}, false
-	}
-	task := inst.TaskQueue[0]
+// externalTaskToResp projects a parked external instance and its current task to a
+// queue entry.
+func externalTaskToResp(inst *model.ProcessInstance, task *model.Task) ExternalTaskResp {
 	ext, _ := inst.ContextData[model.CtxExternal].(map[string]any)
 	token, _ := ext["token"].(string)
 	var resultSchema *schema.SchemaNode
@@ -607,7 +604,7 @@ func externalTaskToResp(inst *model.ProcessInstance) (ExternalTaskResp, bool) {
 		Input:        ext["input"],
 		ResultSchema: resultSchema,
 		WaitingSince: inst.UpdatedAt.Format(time.RFC3339),
-	}, true
+	}
 }
 
 func (h *Handlers) resolveExternalTask(raw json.RawMessage) Reply {
@@ -629,13 +626,17 @@ func (h *Handlers) resolveExternalTask(raw json.RawMessage) Reply {
 	if err != nil {
 		return errReply(err)
 	}
-	if inst.Status != model.StatusRunning || inst.WaitState != model.WaitStateExternal || len(inst.TaskQueue) == 0 {
+	task, err := h.db.CurrentTask(inst)
+	if err != nil {
+		return errReply(err)
+	}
+	if inst.Status != model.StatusRunning || inst.WaitState != model.WaitStateExternal || task == nil {
 		return errReply(fmt.Errorf("task is not waiting for an external result"))
 	}
 	// Validate the submitted result against the parked task's result_schema (no-op when
 	// absent). The task definition is immutable, so validating the pre-lock snapshot is
 	// safe; ResolveExternalTask re-checks the parked state + token atomically.
-	if task := inst.TaskQueue[0]; task.Action != nil {
+	if task.Action != nil {
 		if err := task.Action.ValidateOutput(req.Result); err != nil {
 			return errReply(fmt.Errorf("result validation: %w", err))
 		}

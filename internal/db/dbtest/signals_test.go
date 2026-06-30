@@ -16,13 +16,9 @@ func insertExternalRunning(t *testing.T, db *dbpkg.DB, id string) {
 		ID:             id,
 		ProcessName:    "test",
 		ProcessVersion: 1,
-		TaskQueue: []*model.Task{{
-			ID:     "approval",
-			Action: &model.Action{Type: model.ActionTypeExternal},
-			Switch: model.SwitchMap{{Goto: model.GotoEnd}},
-		}},
-		ContextData: map[string]any{},
-		Status:      model.StatusRunning,
+		Task:           "approval",
+		ContextData:    map[string]any{},
+		Status:         model.StatusRunning,
 	}
 	if err := db.SaveInstance(inst); err != nil {
 		t.Fatalf("SaveInstance: %v", err)

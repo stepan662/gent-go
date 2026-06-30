@@ -102,10 +102,10 @@ func (db *DB) ClaimInstances(workerID string, leaseDur time.Duration, limit int)
 			var r dbgen.ProcessInstance
 			var prevWorker sql.NullString
 			if err := rows.Scan(
-				&r.ID, &r.ProcessName, &r.ProcessVersion, &r.TaskQueue, &r.ParentID,
+				&r.ID, &r.ProcessName, &r.ProcessVersion, &r.ParentID,
 				&r.CallStack, &r.RetryCount, &r.WakeAt, &r.Status, &r.Error,
 				&r.CreatedAt, &r.UpdatedAt, &r.WorkerID, &r.LeaseExpiresAt, &r.WaitState, &r.SpawnTaskID,
-				&r.InputData, &r.OutputsData, &r.OutputData, &r.ErrorData, &r.ExternalData, &r.EngineState,
+				&r.InputData, &r.OutputsData, &r.OutputData, &r.ErrorData, &r.ExternalData, &r.EngineState, &r.Task,
 				&prevWorker,
 			); err != nil {
 				return nil, err

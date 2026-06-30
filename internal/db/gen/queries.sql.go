@@ -284,10 +284,10 @@ func (q *Queries) GetChannel(ctx context.Context, arg GetChannelParams) (int64, 
 }
 
 const getChildrenForTask = `-- name: GetChildrenForTask :many
-SELECT id, process_name, process_version, task_queue, parent_id,
+SELECT id, process_name, process_version, parent_id,
        call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id,
-       input_data, outputs_data, output_data, error_data, external_data, engine_state
+       input_data, outputs_data, output_data, error_data, external_data, engine_state, task
 FROM process_instances
 WHERE parent_id = ?1
   AND spawn_task_id = ?2
@@ -311,7 +311,6 @@ func (q *Queries) GetChildrenForTask(ctx context.Context, arg GetChildrenForTask
 			&i.ID,
 			&i.ProcessName,
 			&i.ProcessVersion,
-			&i.TaskQueue,
 			&i.ParentID,
 			&i.CallStack,
 			&i.RetryCount,
@@ -330,6 +329,7 @@ func (q *Queries) GetChildrenForTask(ctx context.Context, arg GetChildrenForTask
 			&i.ErrorData,
 			&i.ExternalData,
 			&i.EngineState,
+			&i.Task,
 		); err != nil {
 			return nil, err
 		}
@@ -396,16 +396,16 @@ func (q *Queries) GetDependencyVersion(ctx context.Context, arg GetDependencyVer
 }
 
 const getInstance = `-- name: GetInstance :one
-SELECT id, process_name, process_version, task_queue, parent_id,
+SELECT id, process_name, process_version, parent_id,
        call_stack, retry_count, wake_at, status, error,
        created_at, updated_at, worker_id, lease_expires_at, wait_state, spawn_task_id,
-       input_data, outputs_data, output_data, error_data, external_data, engine_state
+       input_data, outputs_data, output_data, error_data, external_data, engine_state, task
 FROM process_instances
 WHERE id = ?1
 `
 
-// Column order matches the process_instances row struct (context columns last, as
-// appended by migration 019) so sqlc returns dbgen.ProcessInstance directly.
+// Column order matches the process_instances row struct (context columns then task,
+// appended by migrations 019 and 020) so sqlc returns dbgen.ProcessInstance directly.
 func (q *Queries) GetInstance(ctx context.Context, id string) (ProcessInstance, error) {
 	row := q.db.QueryRowContext(ctx, getInstance, id)
 	var i ProcessInstance
@@ -413,7 +413,6 @@ func (q *Queries) GetInstance(ctx context.Context, id string) (ProcessInstance, 
 		&i.ID,
 		&i.ProcessName,
 		&i.ProcessVersion,
-		&i.TaskQueue,
 		&i.ParentID,
 		&i.CallStack,
 		&i.RetryCount,
@@ -432,6 +431,7 @@ func (q *Queries) GetInstance(ctx context.Context, id string) (ProcessInstance, 
 		&i.ErrorData,
 		&i.ExternalData,
 		&i.EngineState,
+		&i.Task,
 	)
 	return i, err
 }
@@ -536,7 +536,7 @@ func (q *Queries) InsertDependency(ctx context.Context, arg InsertDependencyPara
 
 const insertInstance = `-- name: InsertInstance :exec
 INSERT INTO process_instances
-    (id, process_name, process_version, task_queue,
+    (id, process_name, process_version, task,
      input_data, outputs_data, output_data, error_data, external_data, engine_state,
      parent_id, spawn_task_id,
      call_stack, retry_count, wake_at, status, wait_state, error, created_at, updated_at)
@@ -553,7 +553,7 @@ type InsertInstanceParams struct {
 	ID             string
 	ProcessName    string
 	ProcessVersion int64
-	TaskQueue      string
+	Task           string
 	InputData      string
 	OutputsData    string
 	OutputData     string
@@ -577,7 +577,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 		arg.ID,
 		arg.ProcessName,
 		arg.ProcessVersion,
-		arg.TaskQueue,
+		arg.Task,
 		arg.InputData,
 		arg.OutputsData,
 		arg.OutputData,
@@ -870,7 +870,7 @@ func (q *Queries) UnpinObject(ctx context.Context, arg UnpinObjectParams) error 
 
 const updateInstance = `-- name: UpdateInstance :exec
 UPDATE process_instances
-SET task_queue       = ?1,
+SET task             = ?1,
     outputs_data     = ?2,
     output_data      = ?3,
     error_data       = ?4,
@@ -888,7 +888,7 @@ WHERE id = ?13
 `
 
 type UpdateInstanceParams struct {
-	TaskQueue    string
+	Task         string
 	OutputsData  string
 	OutputData   string
 	ErrorData    string
@@ -907,7 +907,7 @@ type UpdateInstanceParams struct {
 // creation, so re-writing it every update would be pure churn.
 func (q *Queries) UpdateInstance(ctx context.Context, arg UpdateInstanceParams) error {
 	_, err := q.db.ExecContext(ctx, updateInstance,
-		arg.TaskQueue,
+		arg.Task,
 		arg.OutputsData,
 		arg.OutputData,
 		arg.ErrorData,
@@ -926,7 +926,7 @@ func (q *Queries) UpdateInstance(ctx context.Context, arg UpdateInstanceParams) 
 
 const updateInstanceProgress = `-- name: UpdateInstanceProgress :exec
 UPDATE process_instances
-SET task_queue       = ?1,
+SET task             = ?1,
     outputs_data     = ?2,
     error_data       = ?3,
     external_data    = ?4,
@@ -941,7 +941,7 @@ WHERE id = ?10
 `
 
 type UpdateInstanceProgressParams struct {
-	TaskQueue    string
+	Task         string
 	OutputsData  string
 	ErrorData    string
 	ExternalData string
@@ -957,7 +957,7 @@ type UpdateInstanceProgressParams struct {
 // completion, which goes through UpdateInstance with a status change) is touched.
 func (q *Queries) UpdateInstanceProgress(ctx context.Context, arg UpdateInstanceProgressParams) error {
 	_, err := q.db.ExecContext(ctx, updateInstanceProgress,
-		arg.TaskQueue,
+		arg.Task,
 		arg.OutputsData,
 		arg.ErrorData,
 		arg.ExternalData,
