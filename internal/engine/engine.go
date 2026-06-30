@@ -69,6 +69,7 @@ type Engine struct {
 	logCfg             LogConfig     // audit-log persistence settings
 	log                *slog.Logger
 	sem                chan struct{}
+	wake               chan struct{} // buffer-1 nudge: "runnable work may exist, re-scan now" (see signalWork)
 	workerID           string
 	inflight           sync.Map // instance IDs this worker is currently advancing (detects overwhelm via self-reclaim)
 	// schemaCache caches the inferred SchemaFile per (process,version) so logged
@@ -140,9 +141,26 @@ func New(database *db.DB, pollEvery time.Duration, maxConcurrent int, immediateR
 		logCfg:             logCfg,
 		log:                log,
 		sem:                make(chan struct{}, maxConcurrent),
+		wake:               make(chan struct{}, 1),
 		workerID:           workerID,
 	}
 }
+
+// signalWork nudges the pump to re-scan for runnable work immediately instead of
+// waiting out the poll interval. The send is non-blocking and the channel is buffer-1,
+// so concurrent nudges coalesce into one pending wake and a nudge with no pump parked
+// on it (it is busy, or this is manual/tick mode with no pump) is harmlessly dropped —
+// the ticker is still the idle floor.
+func (e *Engine) signalWork() {
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
+}
+
+// NotifyWork tells the engine that new runnable work may exist (e.g. a freshly created
+// instance), so its pump claims it without waiting for the next poll tick.
+func (e *Engine) NotifyWork() { e.signalWork() }
 
 func (e *Engine) retryDelay(attempt int) time.Duration {
 	if e.immediateRetries {
@@ -231,9 +249,13 @@ func (e *Engine) runPump(ctx context.Context) error {
 			if err != nil {
 				e.logOnly(logEvent{Level: model.LogError, Msg: "claim instances: " + err.Error()})
 			}
+			// Nothing claimable right now: wait for the next tick, or wake early when
+			// signalWork reports freshly-runnable work (a self-requeued loop, spawned
+			// children, an un-parked parent, or a newly created instance).
 			select {
 			case <-ctx.Done():
 				return nil
+			case <-e.wake:
 			case <-ticker.C:
 			}
 			continue
@@ -430,7 +452,16 @@ func (e *Engine) persist(inst *model.ProcessInstance, o advanceOutcome) error {
 func (e *Engine) runAdvance(ctx context.Context, inst *model.ProcessInstance) error {
 	outcome := e.advance(ctx, inst)
 	e.inflight.Delete(inst.ID)
-	return e.persist(inst, outcome)
+	if err := e.persist(inst, outcome); err != nil {
+		return err
+	}
+	// A persisted advance may have produced immediately-runnable work: this instance
+	// again (a running checkpoint), children spawned by a parked parent, or a parent
+	// un-parked by this instance finishing. Nudge the pump to re-scan now rather than
+	// idle until the next tick. A spurious nudge (nothing actually runnable) costs only
+	// one empty claim, so signalling unconditionally keeps this correct and simple.
+	e.signalWork()
+	return nil
 }
 
 // advance executes the next task in the instance's queue, returning the outcome to

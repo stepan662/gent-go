@@ -11,9 +11,8 @@ import { client, startMockService, waitForInstance } from "../helpers/client.ts"
 // outputs[<task>] externalizes and reloads as an *ObjectRef — which self.previous must
 // resolve exactly like outputs.<id> does (the regression scenario 2 guards).
 
-// A big chunk so the accumulator crosses the 8 KiB threshold in few iterations: scenario 2
-// persists+reclaims once per iteration and a single looping instance advances at roughly
-// one engine poll per iteration, so the count must stay small to keep the test quick.
+// A big chunk so the accumulator crosses the 8 KiB threshold within a handful of
+// iterations (each iteration appends CHUNK), keeping the server-side work modest.
 const CHUNK = "0123456789".repeat(100); // 1000 chars
 
 // makeDef builds a process whose single "append" task loops on itself, appending CHUNK to
@@ -88,10 +87,10 @@ test("self.previous accumulates across an in-memory loop (single advance)", asyn
 });
 
 test("self.previous accumulates across DB persist+reclaim (action each iteration)", async () => {
-  // text crosses 8 KiB at iteration 9, so the last few iterations reload self.previous as
-  // an externalized ref that must resolve — without the resolve it would silently reset
-  // to "" and the final text would be short.
-  const n = 12;
+  // text crosses 8 KiB at iteration 9, so the remaining iterations reload self.previous as
+  // an externalized ref that must resolve — without the resolve it would silently reset to
+  // "" (and the counter with it, so the loop would never even terminate).
+  const n = 20;
   const mock = await startMockService(0, { response: { ok: true } });
   try {
     const name = `loop_db_${crypto.randomUUID()}`;

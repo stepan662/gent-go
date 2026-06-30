@@ -452,12 +452,17 @@ test(
       expect(row!.logUntil, `log ref ${k} has a null log_until`).not.toBeNull();
     }
 
-    // 3. No orphans / leaks: every row is reachable from a context slot or a log.
+    // 3. No leaked objects: every row must be kept alive by a context pin OR a log
+    //    horizon (the real invariant — alive iff pinned OR log_until set). An unpinned,
+    //    unlogged row is a dereference that failed to delete immediately; it would linger
+    //    only until the sweep. This deliberately tolerates a crash-orphaned log object
+    //    (log_until set, but its async-buffered log row lost to a SIGKILL): that row is
+    //    horizon-alive and reclaimed by the sweep at log_until, not a leak — so we check
+    //    log_until is set rather than that a current log row still references it.
     for (const o of objs) {
-      const k = key(o.instanceId, o.hash);
       expect(
-        contextRefs.has(k) || logRefs.has(k),
-        `object ${k} (pinned=${o.pinned}, log_until=${o.logUntil}) is referenced by neither a context slot nor a log`,
+        o.pinned === 1 || o.logUntil !== null,
+        `object ${key(o.instanceId, o.hash)} is unpinned and unlogged (pinned=${o.pinned}, log_until=${o.logUntil}) — a dereferenced object was not deleted`,
       ).toBe(true);
     }
 

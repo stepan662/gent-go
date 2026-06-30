@@ -28,6 +28,7 @@ type engineService interface {
 	Tick(ctx context.Context) (int, error)
 	ManualTick() bool
 	AuditCreated(inst *model.ProcessInstance)
+	NotifyWork()
 }
 
 // Handlers holds business logic for all API operations.
@@ -396,6 +397,7 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 	}
 	if h.engine != nil {
 		h.engine.AuditCreated(inst) // bookend: instance_created with the process input
+		h.engine.NotifyWork()       // start advancing now instead of waiting for the next poll tick
 	}
 
 	return okReply(StartInstanceResp{
