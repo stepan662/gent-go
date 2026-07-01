@@ -184,8 +184,8 @@ type ResolveExternalTaskReq struct {
 }
 
 type SignalInstanceReq struct {
-	TaskID  string `json:"task_id"` // the external task to deliver to (addressed, not by token)
-	Payload any    `json:"payload"` // the result payload, validated against the task's result_schema
+	TaskID string `json:"task_id"` // the external task to deliver to (addressed, not by token)
+	Result any    `json:"result"`  // the result, validated against the task's result_schema
 }
 
 type ListLogsReq struct {
@@ -681,10 +681,10 @@ func (h *Handlers) signalInstance(id string, raw json.RawMessage) Reply {
 	if target.Action == nil || target.Action.Type != model.ActionTypeExternal {
 		return errReply(fmt.Errorf("task %q is not an external task", req.TaskID))
 	}
-	if err := target.Action.ValidateOutput(req.Payload); err != nil {
-		return errReply(fmt.Errorf("payload validation: %w", err))
+	if err := target.Action.ValidateOutput(req.Result); err != nil {
+		return errReply(fmt.Errorf("result validation: %w", err))
 	}
-	delivered, err := h.db.DeliverSignal(context.Background(), id, req.TaskID, idgen.New(), req.Payload)
+	delivered, err := h.db.DeliverSignal(context.Background(), id, req.TaskID, idgen.New(), req.Result)
 	if err != nil {
 		return errReply(err)
 	}

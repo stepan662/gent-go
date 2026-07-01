@@ -84,6 +84,6 @@ type ProcessSignal struct {
 	ID         string
 	InstanceID string
 	TaskID     string
-	Payload    string
+	Result     string
 	CreatedAt  int64
 }

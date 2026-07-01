@@ -6,7 +6,9 @@
 //
 //	genctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
 //	genctl validate -f file.yaml [-f file2.yaml ...]
-//	genctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]
+//	genctl run      <process> [--channel C | --version N] [--input <json|-> | -f file] [--set k=v ...] [-q]
+//	genctl resolve  <token> [--result <json|-> | -f file] [--set k=v ...] [-q]
+//	genctl signal   <instance-id> --task <task-id> [--result <json|-> | -f file] [--set k=v ...] [-q]
 //	genctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
 //	genctl get      <instance-id> [--json]
 //	genctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--recursive] [--mode basic|detail|json] <instance-id>
@@ -14,7 +16,7 @@
 //	genctl retry    [--force] <instance-id>
 //	genctl last
 //
-// get/logs/cancel/retry require an instance id; pass @last for the most recently
+// get/logs/cancel/retry/signal require an instance id; pass @last for the most recently
 // started instance (recorded by run). `genctl last` prints that id.
 //
 //	genctl channel list   <process>
@@ -72,6 +74,10 @@ func main() {
 		runValidateCmd(server, args)
 	case "run":
 		runRunCmd(server, args)
+	case "resolve":
+		runResolveCmd(server, args)
+	case "signal":
+		runSignalCmd(server, args)
 	case "get":
 		runGetCmd(server, args)
 	case "channel":
@@ -297,11 +303,11 @@ func runStatusCmd(server string, args []string) {
 
 // runRunCmd starts a new process instance. The process name is the first
 // argument; flags follow it (e.g. `genctl run greeter --set name=Sam`). Input is
-// assembled from --input (a JSON/YAML literal, @file, or - for stdin) and any
-// number of --set key=value overrides; see buildInput.
+// assembled from --input (a JSON/YAML literal, or - for stdin) or -f (a file path),
+// plus any number of --set key=value overrides; see buildInput.
 func runRunCmd(server string, args []string) {
 	if len(args) == 0 {
-		fatal("usage: genctl run <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]")
+		fatal("usage: genctl run <process> [--channel C | --version N] [--input <json|-> | -f file] [--set k=v ...] [-q]")
 	}
 	process := args[0]
 
@@ -309,14 +315,15 @@ func runRunCmd(server string, args []string) {
 	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	channelFlag := fs.String("channel", "", "resolve the version via this channel")
 	versionFlag := fs.Int("version", 0, "pin an explicit process version")
-	inputFlag := fs.String("input", "", "input as a JSON/YAML literal, @file, or - for stdin")
+	inputFlag := fs.String("input", "", "input as a JSON/YAML literal, or - for stdin")
+	fileFlag := fs.String("f", "", "read input from a file (path)")
 	var sets multiFlag
 	fs.Var(&sets, "set", "set an input field: key=value (repeatable; dotted keys nest, values are type-inferred)")
 	quietFlag := fs.Bool("quiet", false, "print only the new instance id, e.g. id=$(genctl run NAME -q)")
 	fs.BoolVar(quietFlag, "q", false, "shorthand for --quiet")
 	fs.Parse(args[1:])
 
-	input, hasInput, err := buildInput(*inputFlag, sets)
+	input, hasInput, err := buildInput(*inputFlag, *fileFlag, sets)
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -357,6 +364,103 @@ func runRunCmd(server string, args []string) {
 		return
 	}
 	fmt.Printf("started: %s  %s@v%d  (%s)\n", resp.ID, resp.Process, resp.Version, resp.Status)
+}
+
+// runResolveCmd submits a result for a task parked on an external action, resuming its
+// process. The task's resolve token (from the external-task queue, GET /external-tasks)
+// is the first argument; the result payload is assembled from --result (a JSON/YAML
+// literal, or - for stdin) or -f (a file path), plus any number of --set key=value
+// overrides — exactly like run assembles its input.
+func runResolveCmd(server string, args []string) {
+	if len(args) == 0 {
+		fatal("usage: genctl resolve <token> [--result <json|-> | -f file] [--set k=v ...] [-q]")
+	}
+	token := args[0]
+
+	fs := flag.NewFlagSet("resolve", flag.ExitOnError)
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
+	resultFlag := fs.String("result", "", "result as a JSON/YAML literal, or - for stdin")
+	fileFlag := fs.String("f", "", "read result from a file (path)")
+	var sets multiFlag
+	fs.Var(&sets, "set", "set a result field: key=value (repeatable; dotted keys nest, values are type-inferred)")
+	quietFlag := fs.Bool("quiet", false, "on success print nothing (exit 0); by default prints a confirmation line")
+	fs.BoolVar(quietFlag, "q", false, "shorthand for --quiet")
+	fs.Parse(args[1:])
+
+	// A missing --result/-f/--set means an empty result: valid for a task with no
+	// result_schema, and rejected by the server otherwise (surfaced below).
+	result, _, err := buildInput(*resultFlag, *fileFlag, sets)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	body := map[string]any{"token": token, "result": result}
+
+	var resp struct {
+		Resolved bool `json:"resolved"`
+	}
+	if err := call(*serverFlag+"/external-tasks/resolve", http.MethodPost, body, &resp); err != nil {
+		// Surface a result-schema mismatch as a clear, dedicated message instead of the
+		// generic "server: ..." wrapper (mirrors run's input-validation handling).
+		if detail, ok := resultValidationError(err); ok {
+			fatal("result is not valid for this task:\n  %s", detail)
+		}
+		fatal("%v", err)
+	}
+	if *quietFlag {
+		return
+	}
+	fmt.Printf("resolved: %s\n", token)
+}
+
+// runSignalCmd delivers a result to a named external task of an instance, addressed by
+// instance id (accepts @last) + --task, rather than by a queue token like resolve. If the
+// task is armed now the signal resolves it immediately; otherwise the server buffers it
+// FIFO until the task next arms. The result is assembled from --result (a JSON/YAML
+// literal, or - for stdin) or -f (a file path), plus any --set key=value overrides.
+func runSignalCmd(server string, args []string) {
+	fs := flag.NewFlagSet("signal", flag.ExitOnError)
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
+	taskFlag := fs.String("task", "", "the external task id to signal")
+	resultFlag := fs.String("result", "", "result as a JSON/YAML literal, or - for stdin")
+	fileFlag := fs.String("f", "", "read result from a file (path)")
+	var sets multiFlag
+	fs.Var(&sets, "set", "set a result field: key=value (repeatable; dotted keys nest, values are type-inferred)")
+	quietFlag := fs.Bool("quiet", false, "on success print nothing (exit 0); by default prints a confirmation line")
+	fs.BoolVar(quietFlag, "q", false, "shorthand for --quiet")
+	// The instance id is the sole positional (before or after flags); resolves @last.
+	id := instanceIDAndFlags(fs, args)
+
+	if *taskFlag == "" {
+		fatal("usage: genctl signal <instance-id> --task <task-id> [--result <json|-> | -f file] [--set k=v ...] [-q]")
+	}
+
+	result, _, err := buildInput(*resultFlag, *fileFlag, sets)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	body := map[string]any{"task_id": *taskFlag, "result": result}
+
+	var resp struct {
+		Delivered bool `json:"delivered"`
+		Buffered  bool `json:"buffered"`
+	}
+	if err := call(*serverFlag+"/instances/"+url.PathEscape(id)+"/signal", http.MethodPost, body, &resp); err != nil {
+		// Surface a result-schema mismatch as a dedicated message (mirrors resolve/run).
+		if detail, ok := resultValidationError(err); ok {
+			fatal("result is not valid for task %q:\n  %s", *taskFlag, detail)
+		}
+		fatal("%v", err)
+	}
+	if *quietFlag {
+		return
+	}
+	state := "delivered"
+	if resp.Buffered {
+		state = "buffered"
+	}
+	fmt.Printf("signaled: %s  task=%s  (%s)\n", id, *taskFlag, state)
 }
 
 // runGetCmd prints a single instance's details, including its full context. The
@@ -604,25 +708,16 @@ func shortID(id string) string {
 
 // ── input assembly (genctl run) ────────────────────────────────────────────────
 
-// buildInput assembles the process input from --input and any --set overrides. The
-// --input value (a JSON/YAML literal, @file, or - for stdin) is the base; each
-// --set key=value is then applied on top (requiring the base to be an object).
-// Returns (value, present, error): present is false when neither flag was given,
-// so the input is omitted entirely for processes that take none.
-func buildInput(inputFlag string, sets []string) (any, bool, error) {
-	var base any
-	present := false
-	if inputFlag != "" {
-		data, err := readInputSource(inputFlag)
-		if err != nil {
-			return nil, false, err
-		}
-		v, err := parseRelaxed(data)
-		if err != nil {
-			return nil, false, fmt.Errorf("parse --input: %w", err)
-		}
-		base = v
-		present = true
+// buildInput assembles an input/result value from a base source and any --set
+// overrides. The base comes from exactly one of: literal (a JSON/YAML literal passed to
+// --input/--result, or "-" for stdin) or file (a path passed to -f). Each --set
+// key=value is then applied on top (requiring the base to be an object). Returns
+// (value, present, error): present is false when no source and no --set was given, so
+// the value is omitted entirely for processes/tasks that take none.
+func buildInput(literal, file string, sets []string) (any, bool, error) {
+	base, present, err := readBase(literal, file)
+	if err != nil {
+		return nil, false, err
 	}
 	if len(sets) > 0 {
 		m, ok := base.(map[string]any)
@@ -630,7 +725,7 @@ func buildInput(inputFlag string, sets []string) (any, bool, error) {
 			m, ok = map[string]any{}, true
 		}
 		if !ok {
-			return nil, false, fmt.Errorf("--set needs the input to be an object, but --input is %T", base)
+			return nil, false, fmt.Errorf("--set needs the base to be an object, but it is %T", base)
 		}
 		for _, s := range sets {
 			if err := applySet(m, s); err != nil {
@@ -642,17 +737,37 @@ func buildInput(inputFlag string, sets []string) (any, bool, error) {
 	return base, present, nil
 }
 
-// readInputSource resolves an --input value: "-" reads stdin, "@path" reads a file,
-// anything else is the literal string.
-func readInputSource(val string) ([]byte, error) {
-	switch {
-	case val == "-":
-		return io.ReadAll(os.Stdin)
-	case strings.HasPrefix(val, "@"):
-		return os.ReadFile(val[1:])
-	default:
-		return []byte(val), nil
+// readBase resolves the base value from the mutually-exclusive literal (a JSON/YAML
+// literal, or "-" for stdin) and file (a path — bare, so the shell tab-completes it)
+// sources. Returns present=false when neither is set.
+func readBase(literal, file string) (any, bool, error) {
+	if literal != "" && file != "" {
+		return nil, false, fmt.Errorf("provide the value inline or with -f, not both")
 	}
+	var data []byte
+	switch {
+	case file != "":
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return nil, false, err
+		}
+		data = b
+	case literal == "-":
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, false, err
+		}
+		data = b
+	case literal != "":
+		data = []byte(literal)
+	default:
+		return nil, false, nil
+	}
+	v, err := parseRelaxed(data)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse value: %w", err)
+	}
+	return v, true, nil
 }
 
 // parseRelaxed parses data as YAML — a superset of JSON, so strict JSON works while
@@ -732,7 +847,17 @@ func inferScalar(s string) any {
 // inputValidationError extracts the detail of a server-side input-schema rejection
 // ("input validation: <detail>") so run can present it as its own message.
 func inputValidationError(err error) (string, bool) {
-	const marker = "input validation: "
+	return serverErrorDetail(err, "input validation: ")
+}
+
+// resultValidationError extracts the detail of a server-side external-task result
+// rejection ("result validation: <detail>") so resolve can present it as its own message.
+func resultValidationError(err error) (string, bool) {
+	return serverErrorDetail(err, "result validation: ")
+}
+
+// serverErrorDetail returns the part of err's message after marker, if present.
+func serverErrorDetail(err error, marker string) (string, bool) {
 	s := err.Error()
 	if i := strings.Index(s, marker); i >= 0 {
 		return s[i+len(marker):], true
@@ -1151,7 +1276,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `Usage:
   genctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
   genctl validate -f file.yaml [-f file2.yaml ...]
-  genctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]
+  genctl run      <process> [--channel C | --version N] [--input <json|-> | -f file] [--set k=v ...] [-q]
+  genctl resolve  <token> [--result <json|-> | -f file] [--set k=v ...] [-q]
+  genctl signal   <instance-id> --task <task-id> [--result <json|-> | -f file] [--set k=v ...] [-q]
   genctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
   genctl get      <instance-id> [--json]
   genctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--recursive] [--mode basic|detail|json] <instance-id>
@@ -1167,15 +1294,24 @@ func usage() {
   genctl config   set <key> <value>
 
 Flags:
-  -f        definition file (YAML or JSON, multi-doc --- supported)
-  --input   process input: a JSON/YAML literal, @file, or - for stdin
-  --set     input field key=value (repeatable; dotted keys nest, values type-inferred)
+  -f        apply: definition file(s), YAML or JSON, multi-doc --- (repeatable);
+            run/resolve/signal: read the input/result from a file (path — tab-completes)
+  --input   process input: a JSON/YAML literal, or - for stdin
+  --result  external-task result (resolve/signal): a JSON/YAML literal, or - for stdin
+  --task    the external task id to signal
+  --set     input/result field key=value (repeatable; dotted keys nest, values type-inferred)
   --server  genroc server URL (overrides $GENROC_SERVER and config file)
-  -q        with run, print only the new instance id (id=$(genctl run NAME -q))
+  -q        with run, print only the new instance id (id=$(genctl run NAME -q));
+            with resolve/signal, suppress the confirmation line
 
 Instance id:
-  get/logs/cancel/retry require an instance id; pass @last for the most recently
+  get/logs/cancel/retry/signal require an instance id; pass @last for the most recently
   started instance (recorded by run), or run "genctl last" to print it.
+
+External tasks:
+  resolve takes a task's resolve token (the "<instance-id>.<nonce>" from the
+  external-task queue, GET /external-tasks); signal addresses a task by instance id
+  + --task and buffers the result if the task is not armed yet.
 
 Config keys:
   server    genroc server base URL`)

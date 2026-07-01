@@ -637,7 +637,7 @@ func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
 
 const insertSignal = `-- name: InsertSignal :exec
 
-INSERT INTO process_signals (id, instance_id, task_id, payload, created_at)
+INSERT INTO process_signals (id, instance_id, task_id, result, created_at)
 VALUES (?1, ?2, ?3, ?4, ?5)
 `
 
@@ -645,7 +645,7 @@ type InsertSignalParams struct {
 	ID         string
 	InstanceID string
 	TaskID     string
-	Payload    string
+	Result     string
 	CreatedAt  int64
 }
 
@@ -657,7 +657,7 @@ func (q *Queries) InsertSignal(ctx context.Context, arg InsertSignalParams) erro
 		arg.ID,
 		arg.InstanceID,
 		arg.TaskID,
-		arg.Payload,
+		arg.Result,
 		arg.CreatedAt,
 	)
 	return err
@@ -749,7 +749,7 @@ WHERE id = (
     WHERE s.instance_id = ?1 AND s.task_id = ?2
     ORDER BY s.created_at, s.id LIMIT 1
 )
-RETURNING payload
+RETURNING result
 `
 
 type PopOldestSignalParams struct {
@@ -761,9 +761,9 @@ type PopOldestSignalParams struct {
 // delivery. Run inside the arm transaction, which already holds the instance row lock.
 func (q *Queries) PopOldestSignal(ctx context.Context, arg PopOldestSignalParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, popOldestSignal, arg.InstanceID, arg.TaskID)
-	var payload string
-	err := row.Scan(&payload)
-	return payload, err
+	var result string
+	err := row.Scan(&result)
+	return result, err
 }
 
 const referenceLogObject = `-- name: ReferenceLogObject :exec

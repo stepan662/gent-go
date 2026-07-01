@@ -468,7 +468,7 @@ var registry = func() []actionDef {
 			PathQuery: struct {
 				ID string `path:"id" format:"uuid"`
 			}{},
-			Req:  SignalInstanceReq{TaskID: "approval", Payload: map[string]any{"approved": true}},
+			Req:  SignalInstanceReq{TaskID: "approval", Result: map[string]any{"approved": true}},
 			Resp: map[string]any{"delivered": true, "buffered": false},
 			fromHTTP: func(r *http.Request) (Envelope, error) {
 				var payload json.RawMessage

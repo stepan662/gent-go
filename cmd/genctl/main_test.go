@@ -62,13 +62,13 @@ func TestApplySetNesting(t *testing.T) {
 }
 
 func TestBuildInput(t *testing.T) {
-	// Neither flag: input is absent.
-	if v, present, err := buildInput("", nil); err != nil || present || v != nil {
+	// Neither source nor --set: value is absent.
+	if v, present, err := buildInput("", "", nil); err != nil || present || v != nil {
 		t.Errorf("buildInput(empty) = %v, present=%v, err=%v", v, present, err)
 	}
 
 	// Relaxed JSON literal (unquoted keys, bare values).
-	v, present, err := buildInput("{name: Sam, count: 3}", nil)
+	v, present, err := buildInput("{name: Sam, count: 3}", "", nil)
 	if err != nil || !present {
 		t.Fatalf("relaxed input: present=%v err=%v", present, err)
 	}
@@ -76,8 +76,8 @@ func TestBuildInput(t *testing.T) {
 		t.Errorf("relaxed input:\n got %s\nwant %s", got, want)
 	}
 
-	// --set overrides a field from --input and adds a new one.
-	v, _, err = buildInput("{count: 1}", []string{"count=2", "active=true"})
+	// --set overrides a field from the literal and adds a new one.
+	v, _, err = buildInput("{count: 1}", "", []string{"count=2", "active=true"})
 	if err != nil {
 		t.Fatalf("override: %v", err)
 	}
@@ -85,8 +85,8 @@ func TestBuildInput(t *testing.T) {
 		t.Errorf("override:\n got %s\nwant %s", got, want)
 	}
 
-	// --set with no --input builds an object from scratch.
-	v, _, err = buildInput("", []string{"x.y=1"})
+	// --set with no base builds an object from scratch.
+	v, _, err = buildInput("", "", []string{"x.y=1"})
 	if err != nil {
 		t.Fatalf("set-only: %v", err)
 	}
@@ -95,26 +95,45 @@ func TestBuildInput(t *testing.T) {
 	}
 
 	// --set requires the base to be an object.
-	if _, _, err := buildInput("5", []string{"a=1"}); err == nil {
-		t.Error("expected error: --set on a non-object --input")
+	if _, _, err := buildInput("5", "", []string{"a=1"}); err == nil {
+		t.Error("expected error: --set on a non-object base")
+	}
+
+	// The literal and file sources are mutually exclusive.
+	if _, _, err := buildInput("{a: 1}", "some/path.json", nil); err == nil {
+		t.Error("expected error: both a literal and -f given")
 	}
 }
 
-func TestReadInputSourceFile(t *testing.T) {
+func TestBuildInputFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "in.json")
-	if err := os.WriteFile(path, []byte(`{"k":1}`), 0600); err != nil {
+	// JSON content parses via the YAML (superset) parser.
+	if err := os.WriteFile(path, []byte(`{"k": 1}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	data, err := readInputSource("@" + path)
+
+	// -f reads the base from a bare file path...
+	v, present, err := buildInput("", path, nil)
+	if err != nil || !present {
+		t.Fatalf("read -f file: present=%v err=%v", present, err)
+	}
+	if got, want := toJSON(t, v), `{"k":1}`; got != want {
+		t.Errorf("read -f file:\n got %s\nwant %s", got, want)
+	}
+
+	// ...and --set still overlays on top of the file base.
+	v, _, err = buildInput("", path, []string{"k=2", "extra=true"})
 	if err != nil {
-		t.Fatalf("read @file: %v", err)
+		t.Fatalf("file + set: %v", err)
 	}
-	if string(data) != `{"k":1}` {
-		t.Errorf("read @file = %q", data)
+	if got, want := toJSON(t, v), `{"extra":true,"k":2}`; got != want {
+		t.Errorf("file + set:\n got %s\nwant %s", got, want)
 	}
-	if data, _ := readInputSource("literal"); string(data) != "literal" {
-		t.Errorf("literal = %q", data)
+
+	// A missing file surfaces as an error.
+	if _, _, err := buildInput("", filepath.Join(dir, "nope.json"), nil); err == nil {
+		t.Error("expected error for a missing -f file")
 	}
 }
 

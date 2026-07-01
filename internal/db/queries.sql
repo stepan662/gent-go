@@ -121,8 +121,8 @@ WHERE id = sqlc.arg(id);
 -- external-task queue is still served by the partial idx_external_queue index.
 
 -- name: InsertSignal :exec
-INSERT INTO process_signals (id, instance_id, task_id, payload, created_at)
-VALUES (sqlc.arg(id), sqlc.arg(instance_id), sqlc.arg(task_id), sqlc.arg(payload), sqlc.arg(created_at));
+INSERT INTO process_signals (id, instance_id, task_id, result, created_at)
+VALUES (sqlc.arg(id), sqlc.arg(instance_id), sqlc.arg(task_id), sqlc.arg(result), sqlc.arg(created_at));
 
 -- name: PopOldestSignal :one
 -- Deletes and returns the oldest buffered signal for (instance, task), giving FIFO
@@ -133,7 +133,7 @@ WHERE id = (
     WHERE s.instance_id = sqlc.arg(instance_id) AND s.task_id = sqlc.arg(task_id)
     ORDER BY s.created_at, s.id LIMIT 1
 )
-RETURNING payload;
+RETURNING result;
 
 -- name: SetExternalResult :exec
 -- Un-parks an external task by storing the submitted/buffered result in external_data

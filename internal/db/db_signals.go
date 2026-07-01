@@ -26,7 +26,7 @@ import (
 // Popping the signal and writing its result is one commit, so a crash after this returns
 // (but before the engine's progress write) still resumes via runExternal phase 2 — the
 // signal is never lost. Mirrors the two-writer coordination of FinishChild / SpawnChildren.
-func (db *DB) ArmExternalOrConsumeSignal(ctx context.Context, inst *model.ProcessInstance, taskID, token string, input any, wakeAt *time.Time) (consumed bool, payload any, err error) {
+func (db *DB) ArmExternalOrConsumeSignal(ctx context.Context, inst *model.ProcessInstance, taskID, token string, input any, wakeAt *time.Time) (consumed bool, result any, err error) {
 	tx, qtx, raw, err := db.beginTx(ctx, nil)
 	if err != nil {
 		return false, nil, err
@@ -51,7 +51,7 @@ func (db *DB) ArmExternalOrConsumeSignal(ctx context.Context, inst *model.Proces
 	}
 
 	// Pop the oldest buffered signal for this (instance, task), if any.
-	payloadStr, popErr := qtx.PopOldestSignal(ctx, dbgen.PopOldestSignalParams{InstanceID: inst.ID, TaskID: taskID})
+	resultStr, popErr := qtx.PopOldestSignal(ctx, dbgen.PopOldestSignalParams{InstanceID: inst.ID, TaskID: taskID})
 	if popErr != nil && popErr != sql.ErrNoRows {
 		return false, nil, fmt.Errorf("pop signal: %w", popErr)
 	}
@@ -63,7 +63,7 @@ func (db *DB) ArmExternalOrConsumeSignal(ctx context.Context, inst *model.Proces
 		// durably but leaves worker_id/lease untouched, so this worker keeps the lease and
 		// the instance stays non-claimable until the engine finishes advancing and releases it.
 		var p any
-		if err := json.Unmarshal([]byte(payloadStr), &p); err != nil {
+		if err := json.Unmarshal([]byte(resultStr), &p); err != nil {
 			return false, nil, fmt.Errorf("decode buffered signal: %w", err)
 		}
 		cd := cloneContext(inst.ContextData)
@@ -112,13 +112,13 @@ func (db *DB) ArmExternalOrConsumeSignal(ctx context.Context, inst *model.Proces
 
 // DeliverSignal delivers a signal addressed to (instance, external task). Under the
 // instance row lock it resolves the task immediately when it is armed right now (and not
-// mid-timeout-claim), otherwise it buffers the payload FIFO for the task's next arming.
+// mid-timeout-claim), otherwise it buffers the result FIFO for the task's next arming.
 // Returns delivered=true when it resolved immediately, false when it was buffered. The
-// caller validates the payload against the task's result_schema before calling.
-func (db *DB) DeliverSignal(ctx context.Context, instanceID, taskID, signalID string, payload any) (delivered bool, err error) {
-	payloadJSON, err := json.Marshal(payload)
+// caller validates the result against the task's result_schema before calling.
+func (db *DB) DeliverSignal(ctx context.Context, instanceID, taskID, signalID string, result any) (delivered bool, err error) {
+	resultJSON, err := json.Marshal(result)
 	if err != nil {
-		return false, fmt.Errorf("marshal payload: %w", err)
+		return false, fmt.Errorf("marshal result: %w", err)
 	}
 
 	tx, qtx, raw, err := db.beginTx(ctx, nil)
@@ -156,7 +156,7 @@ func (db *DB) DeliverSignal(ctx context.Context, instanceID, taskID, signalID st
 	liveLeased := workerID.Valid && leaseExpiresAt.Valid && leaseExpiresAt.Int64 > nowMillis()
 
 	if armed && !liveLeased {
-		newExt, err := withExternalResult(externalData, payload)
+		newExt, err := withExternalResult(externalData, result)
 		if err != nil {
 			return false, err
 		}
@@ -178,7 +178,7 @@ func (db *DB) DeliverSignal(ctx context.Context, instanceID, taskID, signalID st
 		ID:         signalID,
 		InstanceID: instanceID,
 		TaskID:     taskID,
-		Payload:    string(payloadJSON),
+		Result:     string(resultJSON),
 		CreatedAt:  nowMillis(),
 	}); err != nil {
 		return false, fmt.Errorf("buffer signal: %w", err)

@@ -59,18 +59,18 @@ func TestSignals_BufferThenConsumeFIFO(t *testing.T) {
 			}
 
 			// First arming consumes the oldest (FIFO).
-			consumed, payload, err := b.db.ArmExternalOrConsumeSignal(ctx, inst, "approval", "tok1", map[string]any{}, nil)
+			consumed, result, err := b.db.ArmExternalOrConsumeSignal(ctx, inst, "approval", "tok1", map[string]any{}, nil)
 			if err != nil || !consumed {
 				t.Fatalf("arm 1: consumed=%v err=%v (want consumed)", consumed, err)
 			}
-			if n(payload) != 1 {
-				t.Fatalf("FIFO: expected first signal n=1, got %v", payload)
+			if n(result) != 1 {
+				t.Fatalf("FIFO: expected first signal n=1, got %v", result)
 			}
 
 			// Second arming consumes the next.
-			consumed, payload, err = b.db.ArmExternalOrConsumeSignal(ctx, inst, "approval", "tok2", map[string]any{}, nil)
-			if err != nil || !consumed || n(payload) != 2 {
-				t.Fatalf("arm 2: consumed=%v payload=%v err=%v (want consumed n=2)", consumed, payload, err)
+			consumed, result, err = b.db.ArmExternalOrConsumeSignal(ctx, inst, "approval", "tok2", map[string]any{}, nil)
+			if err != nil || !consumed || n(result) != 2 {
+				t.Fatalf("arm 2: consumed=%v result=%v err=%v (want consumed n=2)", consumed, result, err)
 			}
 
 			// Buffer drained -> the next arming parks.

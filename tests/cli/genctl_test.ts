@@ -1,9 +1,9 @@
-import { mkdtempSync } from "fs";
+import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { beforeAll, expect, test } from "vitest";
 import { buildGenctlBinary, runCli, writeDefs } from "../helpers/cli.ts";
-import { client } from "../helpers/client.ts";
+import { client, waitForInstance } from "../helpers/client.ts";
 
 let bin: string;
 
@@ -47,11 +47,52 @@ function inputDef(name: string) {
   };
 }
 
+// A process whose only task parks on an external action (awaiting an approved:boolean
+// result), so it stays `running external` until a caller resolves it.
+function externalDef(name: string) {
+  return {
+    name,
+    tasks: [
+      {
+        id: "approval",
+        action: {
+          type: "external",
+          input: { msg: "approve me" },
+          result_schema: {
+            type: "object",
+            properties: { approved: { type: "boolean" } },
+            required: ["approved"],
+          },
+        },
+        output: "{{ self.result }}",
+        switch: [{ goto: "end" }],
+      },
+    ],
+  };
+}
+
 // Pull the instance id out of a `started: <id>  proc@vN  (status)` line.
 function startedID(stdout: string): string {
   const m = stdout.match(/started:\s+(\S+)/);
   if (!m) throw new Error(`no started id in: ${stdout}`);
   return m[1];
+}
+
+// Poll the external-task queue until the instance's entry is armed and return its
+// resolve token (`<instance-id>.<nonce>`). The shared server auto-polls, so parking
+// happens a poll cycle or two after run.
+async function waitForExternalToken(id: string, timeoutMs = 5000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { data, error } = await client.GET("/external-tasks", {});
+    if (error) throw new Error(`list external tasks failed: ${JSON.stringify(error)}`);
+    const entry = (data?.items ?? []).find(
+      (t) => typeof t.token === "string" && t.token.startsWith(`${id}.`),
+    );
+    if (entry?.token) return entry.token;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`external task for ${id} was not queued within ${timeoutMs}ms`);
 }
 
 // ── apply ─────────────────────────────────────────────────────────────────────
@@ -267,6 +308,30 @@ test("run --input — accepts relaxed JSON", () => {
   expect(r.stdout).toContain(`${name}@v1`);
 });
 
+test("run -f — reads input from a (bare, tab-completable) file", () => {
+  const name = uid("proc");
+  runCli(bin, ["apply", "-f", writeDefs([inputDef(name)])]);
+  const file = join(tmpdir(), `genroc_input_${Date.now()}.json`);
+  writeFileSync(file, JSON.stringify({ count: 9, name: "Ada" }), "utf8");
+
+  const r = runCli(bin, ["run", name, "-f", file]);
+
+  expect(r.ok).toBe(true);
+  expect(r.stdout).toContain(`${name}@v1`);
+});
+
+test("run — rejects passing both --input and -f", () => {
+  const name = uid("proc");
+  runCli(bin, ["apply", "-f", writeDefs([inputDef(name)])]);
+  const file = join(tmpdir(), `genroc_input_${Date.now()}.json`);
+  writeFileSync(file, JSON.stringify({ count: 1 }), "utf8");
+
+  const r = runCli(bin, ["run", name, "--input", "{count: 1}", "-f", file]);
+
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("not both");
+});
+
 test("run — prints a friendly error when input does not match the schema", () => {
   const name = uid("proc");
   runCli(bin, ["apply", "-f", writeDefs([inputDef(name)])]);
@@ -397,4 +462,127 @@ test("status -- reports stale ref after child is advanced without updating paren
   expect(r.stdout).toContain("STALE");
   expect(r.stdout).toContain(parentName);
   expect(r.stdout).toContain(childName);
+});
+
+// ── resolve (external tasks) ────────────────────────────────────────────────────
+
+test("resolve — delivers a result to a parked external task and resumes it", async () => {
+  const name = uid("ext");
+  runCli(bin, ["apply", "-f", writeDefs([externalDef(name)])]);
+  const id = startedID(runCli(bin, ["run", name]).stdout);
+
+  const token = await waitForExternalToken(id);
+
+  const r = runCli(bin, ["resolve", token, "--set", "approved=true"]);
+  expect(r.ok).toBe(true);
+  expect(r.stdout).toContain("resolved:");
+
+  // Resolving un-parks it; the process now runs to completion.
+  expect(await waitForInstance(id)).toBe("completed");
+});
+
+test("resolve -f — reads the result from a file", async () => {
+  const name = uid("ext");
+  runCli(bin, ["apply", "-f", writeDefs([externalDef(name)])]);
+  const id = startedID(runCli(bin, ["run", name]).stdout);
+  const token = await waitForExternalToken(id);
+
+  const file = join(tmpdir(), `genroc_result_${Date.now()}.json`);
+  writeFileSync(file, JSON.stringify({ approved: true }), "utf8");
+
+  const r = runCli(bin, ["resolve", token, "-f", file]);
+  expect(r.ok).toBe(true);
+  expect(await waitForInstance(id)).toBe("completed");
+});
+
+test("resolve -q — succeeds silently", async () => {
+  const name = uid("ext");
+  runCli(bin, ["apply", "-f", writeDefs([externalDef(name)])]);
+  const id = startedID(runCli(bin, ["run", name]).stdout);
+  const token = await waitForExternalToken(id);
+
+  const r = runCli(bin, ["resolve", token, "--set", "approved=true", "-q"]);
+  expect(r.ok).toBe(true);
+  expect(r.stdout.trim()).toBe("");
+  expect(await waitForInstance(id)).toBe("completed");
+});
+
+test("resolve — prints a friendly error when the result does not match result_schema", async () => {
+  const name = uid("ext");
+  runCli(bin, ["apply", "-f", writeDefs([externalDef(name)])]);
+  const id = startedID(runCli(bin, ["run", name]).stdout);
+  const token = await waitForExternalToken(id);
+
+  // approved must be a boolean; a string fails the task's result_schema.
+  const r = runCli(bin, ["resolve", token, "--set", "approved=notabool"]);
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("result is not valid for this task");
+});
+
+test("resolve — exits non-zero for an unknown token", () => {
+  const r = runCli(bin, [
+    "resolve",
+    "00000000-0000-0000-0000-000000000000.deadbeef",
+    "--set",
+    "approved=true",
+  ]);
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("genctl:");
+});
+
+test("resolve — errors without a token argument", () => {
+  const r = runCli(bin, ["resolve"]);
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("usage: genctl resolve");
+});
+
+// ── signal (external tasks by instance id) ──────────────────────────────────────
+
+test("signal — delivers a result to an armed external task and resumes it", async () => {
+  const name = uid("ext");
+  runCli(bin, ["apply", "-f", writeDefs([externalDef(name)])]);
+  const id = startedID(runCli(bin, ["run", name]).stdout);
+  await waitForExternalToken(id); // wait until the task has armed
+
+  const r = runCli(bin, ["signal", id, "--task", "approval", "--set", "approved=true"]);
+  expect(r.ok).toBe(true);
+  expect(r.stdout).toContain("signaled:");
+  expect(r.stdout).toContain("(delivered)");
+
+  expect(await waitForInstance(id)).toBe("completed");
+});
+
+test("signal @last -f — addresses @last and reads the result from a file", async () => {
+  const name = uid("ext");
+  runCli(bin, ["apply", "-f", writeDefs([externalDef(name)])]);
+  const id = startedID(runCli(bin, ["run", name]).stdout);
+  await waitForExternalToken(id);
+
+  const file = join(tmpdir(), `genroc_signal_${Date.now()}.json`);
+  writeFileSync(file, JSON.stringify({ approved: true }), "utf8");
+
+  const r = runCli(bin, ["signal", "@last", "--task", "approval", "-f", file]);
+  expect(r.ok).toBe(true);
+  expect(await waitForInstance(id)).toBe("completed");
+});
+
+test("signal — errors without --task", () => {
+  const name = uid("ext");
+  runCli(bin, ["apply", "-f", writeDefs([externalDef(name)])]);
+  const id = startedID(runCli(bin, ["run", name]).stdout);
+
+  const r = runCli(bin, ["signal", id, "--set", "approved=true"]);
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("usage: genctl signal");
+});
+
+test("signal — prints a friendly error when the result does not match result_schema", async () => {
+  const name = uid("ext");
+  runCli(bin, ["apply", "-f", writeDefs([externalDef(name)])]);
+  const id = startedID(runCli(bin, ["run", name]).stdout);
+  await waitForExternalToken(id);
+
+  const r = runCli(bin, ["signal", id, "--task", "approval", "--set", "approved=notabool"]);
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("result is not valid for task");
 });

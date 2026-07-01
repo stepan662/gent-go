@@ -1006,7 +1006,7 @@ func (e *Engine) runExternal(ctx context.Context, inst *model.ProcessInstance, t
 		wake := db.Now().Add(time.Duration(task.TimeoutMs) * time.Millisecond)
 		wakeAt = &wake
 	}
-	consumed, payload, err := e.db.ArmExternalOrConsumeSignal(ctx, inst, task.ID, token, input, wakeAt)
+	consumed, result, err := e.db.ArmExternalOrConsumeSignal(ctx, inst, task.ID, token, input, wakeAt)
 	if err != nil {
 		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q arm: %v", task.ID, err)))
 	}
@@ -1016,7 +1016,7 @@ func (e *Engine) runExternal(ctx context.Context, inst *model.ProcessInstance, t
 		// progress/terminal write at the end of advance releases it — the instance never
 		// sits claimable while still in flight.
 		e.audit(inst, logEvent{Level: model.LogInfo, Event: model.EventExternalResolved, Task: task.ID, Msg: "buffered"})
-		return payload, nil
+		return result, nil
 	}
 	// Parked. ArmExternalOrConsumeSignal persisted the parked state and released the lease,
 	// so (like a child spawn) advance returns noop and writes nothing further.

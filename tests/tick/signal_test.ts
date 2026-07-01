@@ -14,11 +14,11 @@ const approvedSchema: any = {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function signal(id: string, taskId: string, payload: unknown) {
+async function signal(id: string, taskId: string, result: unknown) {
   return ctx.env.client.POST("/instances/{id}/signal", {
     params: { path: { id } },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    body: { task_id: taskId, payload } as any,
+    body: { task_id: taskId, result } as any,
   });
 }
 
