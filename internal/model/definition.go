@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/xeipuuv/gojsonschema"
@@ -430,7 +430,7 @@ type ProcessDefinition struct {
 	Name         string             `json:"name"         validate:"required" description:"Unique process identifier."`
 	Tasks        []*Task            `json:"tasks"        validate:"required,min=1,dive" description:"Ordered list of execution tasks. Control advances linearly unless a switch case redirects."`
 	InputSchema  *schema.SchemaNode `json:"input_schema,omitempty"          description:"JSON Schema used to validate the input payload when starting a new instance."`
-	ConfigSchema *schema.SchemaNode `json:"config_schema,omitempty"         description:"JSON Schema — a flat object whose properties are primitive values (string/integer/number/boolean) — declaring configuration variables. Each is resolved at runtime from GENT_<PROCESS>_<NAME> (falling back to GENT_GLOBAL_<NAME>) in the server environment, coerced to its declared type, and exposed to expressions as config.<NAME>. A property may set secret:true to redact its value from logs."`
+	ConfigSchema *schema.SchemaNode `json:"config_schema,omitempty"         description:"JSON Schema — a flat object whose properties are primitive values (string/integer/number/boolean) — declaring configuration variables. Each is resolved at runtime from GENROC_<PROCESS>_<NAME> (falling back to GENROC_GLOBAL_<NAME>) in the server environment, coerced to its declared type, and exposed to expressions as config.<NAME>. A property may set secret:true to redact its value from logs."`
 	Output       *Shape             `json:"output,omitempty"                description:"Templated value (a string expression or nested object of expressions) evaluated at completion to produce the process output."`
 }
 
@@ -684,7 +684,7 @@ func validAcceptedStatusPattern(p string) bool {
 }
 
 // configNameRe matches a valid config var name; it is used in the
-// GENT_<PROCESS>_<NAME> / GENT_GLOBAL_<NAME> environment variable names, so it
+// GENROC_<PROCESS>_<NAME> / GENROC_GLOBAL_<NAME> environment variable names, so it
 // must be an identifier.
 var configNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
@@ -758,8 +758,8 @@ func (d *ProcessDefinition) ValidateInput(input any) error {
 // environment via lookup (os.LookupEnv in production; injectable for tests). Both
 // the process name and the var name are run through envToken (normalized to
 // UPPER_SNAKE — camelCase split, non-alphanumerics → '_'), so the schema may use
-// any case: config.apiKey reads a process-scoped GENT_<PROCESS>_API_KEY, falling
-// back to a shared GENT_GLOBAL_API_KEY, then the property's default, else an error
+// any case: config.apiKey reads a process-scoped GENROC_<PROCESS>_API_KEY, falling
+// back to a shared GENROC_GLOBAL_API_KEY, then the property's default, else an error
 // if required. The string is coerced to the declared type, and the assembled
 // object is validated against ConfigSchema (required/enum/ranges). The returned
 // map is keyed by the declared name (the "config" namespace for expressions).
@@ -769,8 +769,8 @@ func (d *ProcessDefinition) ResolveConfig(lookup func(string) (string, bool)) (m
 	if d.ConfigSchema == nil {
 		return map[string]any{}, nil
 	}
-	procPrefix := "GENT_" + envToken(d.Name) + "_"
-	const globalPrefix = "GENT_GLOBAL_"
+	procPrefix := "GENROC_" + envToken(d.Name) + "_"
+	const globalPrefix = "GENROC_GLOBAL_"
 	required := make(map[string]bool, len(d.ConfigSchema.Required))
 	for _, r := range d.ConfigSchema.Required {
 		required[r] = true

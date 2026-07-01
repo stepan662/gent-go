@@ -12,20 +12,20 @@ import (
 	"syscall"
 	"time"
 
-	"gent/internal/api"
-	"gent/internal/db"
-	"gent/internal/engine"
-	"gent/internal/logview"
+	"genroc/internal/api"
+	"genroc/internal/db"
+	"genroc/internal/engine"
+	"genroc/internal/logview"
 )
 
 func main() {
-	dbPath := flag.String("db", "gent.db", "SQLite database file path")
+	dbPath := flag.String("db", "genroc.db", "SQLite database file path")
 	pgDSN := flag.String("pg", "", "PostgreSQL DSN (e.g. postgres://user:pass@host/db). When set, --db is ignored.")
 	pgMaxOpenConns := flag.Int("pg-max-open-conns", 50, "PostgreSQL connection pool size. Size a worker fleet so workers*pg-max-open-conns stays under the server's max_connections. Ignored for SQLite.")
 	sqliteSync := flag.String("sqlite-synchronous", "FULL", "SQLite durability (PRAGMA synchronous): FULL (default; fsync every commit for full power-loss durability, matching Postgres synchronous_commit=on) or NORMAL (faster; durable across a process crash but may lose the last commits on power loss). Ignored for PostgreSQL.")
 	httpAddr := flag.String("http", ":8448", "HTTP listen address (empty to disable)")
 	tcpAddr := flag.String("tcp", "", "TCP listen address, e.g. 127.0.0.1:9090 (empty to disable)")
-	udsPath := flag.String("uds", "", "Unix socket path, e.g. /tmp/gent.sock (empty to disable)")
+	udsPath := flag.String("uds", "", "Unix socket path, e.g. /tmp/genroc.sock (empty to disable)")
 	pollMs := flag.Int("poll", 500, "Engine poll interval in milliseconds")
 	maxConcurrent := flag.Int("max-concurrent", 200, "Max instances advanced concurrently. Too high overwhelms the DB/lease renewer and the engine will exit; raise --lease-duration or the DB connection pool before raising this much further.")
 	immediateRetries := flag.Bool("immediate-retries", false, "Disable retry backoff (retries fire instantly); for testing only")
@@ -33,7 +33,7 @@ func main() {
 	leaseRenewInterval := flag.Duration("lease-renew-interval", 3*time.Second, "How often a worker re-stamps its leases; must be comfortably shorter than --lease-duration")
 	pprofAddr := flag.String("pprof", "", "pprof listen address, e.g. localhost:6060 (empty to disable)")
 	logLevel := flag.String("log", "info", "Log level: debug, info, warn, error")
-	logMode := flag.String("log-mode", "basic", "Console output: basic (no data body), detail (+ data body), or json (one JSON object per line); same modes as gentctl logs")
+	logMode := flag.String("log-mode", "basic", "Console output: basic (no data body), detail (+ data body), or json (one JSON object per line); same modes as genctl logs")
 	logPayloads := flag.Bool("log-payloads", true, "Capture truncated request/response snippets in per-instance audit logs")
 	logPayloadBytes := flag.Int("log-payload-bytes", 2048, "Max bytes per captured request/response snippet in audit logs")
 	logRetention := flag.Duration("log-retention", 168*time.Hour, "Delete per-instance audit logs older than this; 0 = keep forever")
@@ -149,7 +149,7 @@ func main() {
 }
 
 // newLogger builds the server console logger via the shared logview handler, so its
-// rows are the same layout gentctl logs prints. The level is the orthogonal severity
+// rows are the same layout genctl logs prints. The level is the orthogonal severity
 // threshold; mode picks the layout (basic/detail columns, or json one object per
 // line). The engine's emit decides which fields each record carries (basic omits the
 // data body) and whether it's a columnar audit event or a free-form operational line.

@@ -4,7 +4,7 @@ import { client, waitForInstance } from "../helpers/client.ts";
 // A config var marked secret:true, interpolated into the process output, must be
 // redacted ("***") when the context is returned over the API — even though it is
 // stored plainly in the DB. The non-secret sibling is returned as-is.
-// Fixture: GENT_GLOBAL_API_KEY = "supersecret-api-key" (see helpers/server.ts).
+// Fixture: GENROC_GLOBAL_API_KEY = "supersecret-api-key" (see helpers/server.ts).
 test("a secret config value is redacted from the API context", async () => {
   const name = `secret_redact_${crypto.randomUUID()}`;
   const { error: putErr } = await client.PUT("/definitions", {

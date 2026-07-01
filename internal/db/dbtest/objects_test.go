@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	dbpkg "gent/internal/db"
-	"gent/internal/model"
+	dbpkg "genroc/internal/db"
+	"genroc/internal/model"
 )
 
 // bigString returns a value larger than the externalization threshold (8 KiB) so it

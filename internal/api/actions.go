@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"gent/internal/model"
-	"gent/internal/schema"
+	"genroc/internal/model"
+	"genroc/internal/schema"
 )
 
 // actionDef is the single source of truth for one API action.

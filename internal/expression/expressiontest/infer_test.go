@@ -3,7 +3,7 @@ package expressiontest
 import (
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 // --- Literals ---

@@ -5,9 +5,9 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import {
-  buildGentBinary,
-  startGent,
-  type GentProcess,
+  buildGenrocBinary,
+  startGenroc,
+  type GenrocProcess,
 } from "../helpers/server.ts";
 import { createClientTyped, listAllInstances } from "../helpers/client.ts";
 
@@ -101,9 +101,9 @@ function startGenMock() {
 }
 
 let bin = "";
-const dbPath = join(tmpdir(), `gent_gc_chaos_${Date.now()}.db`);
+const dbPath = join(tmpdir(), `genroc_gc_chaos_${Date.now()}.db`);
 const api = createClientTyped({ baseUrl: BASE_URL });
-let server: GentProcess | undefined;
+let server: GenrocProcess | undefined;
 let mock: ReturnType<typeof startGenMock>;
 let mockPort = 0;
 
@@ -111,15 +111,15 @@ let mockPort = 0;
 // after a crash happens within a couple of seconds. The lease is passed through the
 // env knobs spawnProc already reads, set only across the spawn so no other stress
 // file inherits them.
-async function spawn(): Promise<GentProcess> {
+async function spawn(): Promise<GenrocProcess> {
   const prev = {
-    d: process.env.GENT_LEASE_DURATION,
-    r: process.env.GENT_LEASE_RENEW_INTERVAL,
+    d: process.env.GENROC_LEASE_DURATION,
+    r: process.env.GENROC_LEASE_RENEW_INTERVAL,
   };
-  process.env.GENT_LEASE_DURATION = "2s";
-  process.env.GENT_LEASE_RENEW_INTERVAL = "500ms";
+  process.env.GENROC_LEASE_DURATION = "2s";
+  process.env.GENROC_LEASE_RENEW_INTERVAL = "500ms";
   try {
-    return await startGent(
+    return await startGenroc(
       bin,
       PORT,
       dbPath,
@@ -129,10 +129,10 @@ async function spawn(): Promise<GentProcess> {
       true /* immediate retries */,
     );
   } finally {
-    const restore = (k: "GENT_LEASE_DURATION" | "GENT_LEASE_RENEW_INTERVAL", v?: string) =>
+    const restore = (k: "GENROC_LEASE_DURATION" | "GENROC_LEASE_RENEW_INTERVAL", v?: string) =>
       v === undefined ? delete process.env[k] : (process.env[k] = v);
-    restore("GENT_LEASE_DURATION", prev.d);
-    restore("GENT_LEASE_RENEW_INTERVAL", prev.r);
+    restore("GENROC_LEASE_DURATION", prev.d);
+    restore("GENROC_LEASE_RENEW_INTERVAL", prev.r);
   }
 }
 
@@ -150,7 +150,7 @@ async function waitDown(timeoutMs = 5_000) {
 }
 
 beforeAll(async () => {
-  bin = await buildGentBinary();
+  bin = await buildGenrocBinary();
   mock = startGenMock();
   mockPort = await mock.listen();
   server = await spawn();

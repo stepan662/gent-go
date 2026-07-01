@@ -1,18 +1,18 @@
 import { expect, test, beforeAll } from "vitest";
 import { join } from "path";
 import { tmpdir } from "os";
-import { buildGentBinary, startGent, type GentProcess } from "../helpers/server.ts";
+import { buildGenrocBinary, startGenroc, type GenrocProcess } from "../helpers/server.ts";
 import { client, startMockService, waitForInstance, tick } from "../helpers/client.ts";
 
 const TICK_PORT = 20017;
 
-let gentBin: string;
+let genrocBin: string;
 beforeAll(async () => {
-  gentBin = await buildGentBinary();
+  genrocBin = await buildGenrocBinary();
 }, 60_000);
 
-async function getStatus(gent: GentProcess, id: string) {
-  const { data, error } = await gent.client.GET("/instances/{id}", {
+async function getStatus(genroc: GenrocProcess, id: string) {
+  const { data, error } = await genroc.client.GET("/instances/{id}", {
     params: { path: { id } },
   });
   if (error) throw new Error(`get_instance failed: ${JSON.stringify(error)}`);
@@ -74,14 +74,14 @@ test("retry failed instance — resumes from the failed task", async () => {
 // Manual tick mode makes the cancel land deterministically between tasks.
 test("retry cancelled instance — resumes where the cancel interrupted", async () => {
   const name = `retry_cancelled_${crypto.randomUUID()}`;
-  const db = join(tmpdir(), `gent_retry_${Date.now()}.db`);
-  const gent = await startGent(gentBin, TICK_PORT, db, undefined, 0);
+  const db = join(tmpdir(), `genroc_retry_${Date.now()}.db`);
+  const genroc = await startGenroc(genrocBin, TICK_PORT, db, undefined, 0);
 
   const step1Mock = await startMockService(0, { response: { ok: true } });
   const step2Mock = await startMockService(0, { response: { done: true } });
 
   try {
-    await gent.client.PUT("/definitions", {
+    await genroc.client.PUT("/definitions", {
       body: {
         name,
         tasks: [
@@ -101,32 +101,32 @@ test("retry cancelled instance — resumes where the cancel interrupted", async 
       },
     });
 
-    const { data: startData } = await gent.client.POST("/instances", { body: { process: name } });
+    const { data: startData } = await genroc.client.POST("/instances", { body: { process: name } });
     const id = startData!.id;
 
     // Tick 1 — step1 executes; cancel lands between tasks.
-    expect(await tick(gent.client)).toBe(1);
+    expect(await tick(genroc.client)).toBe(1);
     expect(step1Mock.requestCount()).toBe(1);
-    await gent.client.POST("/instances/{id}/cancel", { params: { path: { id } } });
+    await genroc.client.POST("/instances/{id}/cancel", { params: { path: { id } } });
 
     // Tick 2 — engine finalises the cancellation.
-    await tick(gent.client);
-    expect((await getStatus(gent, id)).status).toBe("cancelled");
+    await tick(genroc.client);
+    expect((await getStatus(genroc, id)).status).toBe("cancelled");
     expect(step2Mock.requestCount()).toBe(0);
 
-    const { error: retryErr } = await gent.client.POST("/instances/{id}/retry", {
+    const { error: retryErr } = await genroc.client.POST("/instances/{id}/retry", {
       params: { path: { id } },
     });
     expect(retryErr).toBeUndefined();
-    expect((await getStatus(gent, id)).status).toBe("running");
+    expect((await getStatus(genroc, id)).status).toBe("running");
 
     // Tick 3 — step2 executes; the process completes without re-running step1.
-    await tick(gent.client);
-    expect((await getStatus(gent, id)).status).toBe("completed");
+    await tick(genroc.client);
+    expect((await getStatus(genroc, id)).status).toBe("completed");
     expect(step1Mock.requestCount()).toBe(1);
     expect(step2Mock.requestCount()).toBe(1);
   } finally {
-    gent.stop();
+    genroc.stop();
     await step1Mock.stop();
     await step2Mock.stop();
   }
@@ -136,14 +136,14 @@ test("retry cancelled instance — resumes where the cancel interrupted", async 
 // once it settles to 'cancelled' the same retry succeeds.
 test("retry during cancelling — rejected until the tree settles", async () => {
   const name = `retry_cancelling_${crypto.randomUUID()}`;
-  const db = join(tmpdir(), `gent_retry_cancelling_${Date.now()}.db`);
-  const gent = await startGent(gentBin, TICK_PORT + 1, db, undefined, 0);
+  const db = join(tmpdir(), `genroc_retry_cancelling_${Date.now()}.db`);
+  const genroc = await startGenroc(genrocBin, TICK_PORT + 1, db, undefined, 0);
 
   const step1Mock = await startMockService(0, { response: { ok: true } });
   const step2Mock = await startMockService(0, { response: { done: true } });
 
   try {
-    await gent.client.PUT("/definitions", {
+    await genroc.client.PUT("/definitions", {
       body: {
         name,
         tasks: [
@@ -163,37 +163,37 @@ test("retry during cancelling — rejected until the tree settles", async () => 
       },
     });
 
-    const { data: startData } = await gent.client.POST("/instances", { body: { process: name } });
+    const { data: startData } = await genroc.client.POST("/instances", { body: { process: name } });
     const id = startData!.id;
 
     // Tick 1 — step1 executes; cancel lands between tasks → 'cancelling'.
-    await tick(gent.client);
-    await gent.client.POST("/instances/{id}/cancel", { params: { path: { id } } });
-    expect((await getStatus(gent, id)).status).toBe("cancelling");
+    await tick(genroc.client);
+    await genroc.client.POST("/instances/{id}/cancel", { params: { path: { id } } });
+    expect((await getStatus(genroc, id)).status).toBe("cancelling");
 
     // Retry while still draining is rejected; status is untouched.
-    const { error: earlyErr } = await gent.client.POST("/instances/{id}/retry", {
+    const { error: earlyErr } = await genroc.client.POST("/instances/{id}/retry", {
       params: { path: { id } },
     });
     expect(earlyErr).toBeDefined();
     expect(JSON.stringify(earlyErr)).toContain("not retryable");
-    expect((await getStatus(gent, id)).status).toBe("cancelling");
+    expect((await getStatus(genroc, id)).status).toBe("cancelling");
 
     // Tick 2 — the engine settles the instance to 'cancelled'; now retry works.
-    await tick(gent.client);
-    expect((await getStatus(gent, id)).status).toBe("cancelled");
+    await tick(genroc.client);
+    expect((await getStatus(genroc, id)).status).toBe("cancelled");
 
-    const { error: retryErr } = await gent.client.POST("/instances/{id}/retry", {
+    const { error: retryErr } = await genroc.client.POST("/instances/{id}/retry", {
       params: { path: { id } },
     });
     expect(retryErr).toBeUndefined();
 
     // Tick 3 — step2 executes and the process completes.
-    await tick(gent.client);
-    expect((await getStatus(gent, id)).status).toBe("completed");
+    await tick(genroc.client);
+    expect((await getStatus(genroc, id)).status).toBe("completed");
     expect(step1Mock.requestCount()).toBe(1);
   } finally {
-    gent.stop();
+    genroc.stop();
     await step1Mock.stop();
     await step2Mock.stop();
   }
@@ -390,14 +390,14 @@ test("retry with parallel children — only the failed child re-runs", async () 
 // /tick is a manual-mode tool: when the continuous pump is running (poll > 0),
 // an out-of-band tick would race it, so the endpoint refuses.
 test("tick is rejected when the engine runs the continuous pump", async () => {
-  const db = join(tmpdir(), `gent_tick_guard_${Date.now()}.db`);
+  const db = join(tmpdir(), `genroc_tick_guard_${Date.now()}.db`);
   // No poll arg → server uses its default poll interval (continuous mode).
-  const gent = await startGent(gentBin, TICK_PORT + 2, db);
+  const genroc = await startGenroc(genrocBin, TICK_PORT + 2, db);
   try {
-    const { error } = await gent.client.POST("/tick", { body: { advance_ms: 0 } });
+    const { error } = await genroc.client.POST("/tick", { body: { advance_ms: 0 } });
     expect(error).toBeDefined();
     expect(JSON.stringify(error)).toContain("manual mode");
   } finally {
-    gent.stop();
+    genroc.stop();
   }
 }, 30_000);

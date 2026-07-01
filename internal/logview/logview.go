@@ -1,6 +1,6 @@
 // Package logview is the single source of truth for how an instance's audit trail
 // is presented, shared by the two surfaces that show it: the server console
-// (engine → slog, streaming) and gentctl logs (CLI → batch). Both build the same
+// (engine → slog, streaming) and genctl logs (CLI → batch). Both build the same
 // fields and render them through the same fixed-width column layout, so a row looks
 // identical in either place. The CLI adds a header (it has the whole page); the
 // streaming server can't, and its operational (non-event) logs render free-form.
@@ -238,7 +238,7 @@ func valToString(v any) string {
 
 // ShortID is the compact, distinguishing id tag shown in the ID column — the id's
 // random tail, not its timestamp-prefixed head, so a parent and a same-millisecond
-// child differ. The full id is available via the API / gentctl logs --json.
+// child differ. The full id is available via the API / genctl logs --json.
 func ShortID(id string) string {
 	if len(id) > colID {
 		return id[len(id)-colID:]

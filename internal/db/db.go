@@ -13,7 +13,7 @@ import (
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 
-	dbgen "gent/internal/db/gen"
+	dbgen "genroc/internal/db/gen"
 )
 
 //go:embed migrations/*.sql
@@ -66,7 +66,7 @@ type defKey struct {
 
 // OpenSQLite opens (or creates) the SQLite database at path and runs migrations.
 // synchronous picks the PRAGMA synchronous durability level (empty = NORMAL). The
-// gent binary defaults its --sqlite-synchronous flag to FULL (full power-loss
+// genroc binary defaults its --sqlite-synchronous flag to FULL (full power-loss
 // durability, matching Postgres); empty is the relaxed level used by internal tests
 // that don't need it. Levels:
 //   - NORMAL: in WAL mode the WAL is fsync'd only at checkpoints, not per commit, so
@@ -157,8 +157,8 @@ func open(sqldb *sql.DB, dialect string) (*DB, error) {
 
 // pgBootstrapLockKey is the advisory-lock key that serializes bootstrapPostgres
 // across concurrently-starting workers. Any fixed int64 works (it only needs to be
-// the same for every worker); this one spells "gent".
-const pgBootstrapLockKey int64 = 0x67656E74 // "gent"
+// the same for every worker); this one spells "genroc".
+const pgBootstrapLockKey int64 = 0x67656E74 // "genroc"
 
 // bootstrapPostgres runs the post-migration Postgres-only setup: the json_each
 // helper function and aggressive autovacuum on process_instances. Both statements

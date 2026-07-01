@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"slices"
 
-	"gent/internal/model"
-	"gent/internal/schema"
+	"genroc/internal/model"
+	"genroc/internal/schema"
 )
 
 // TaskSchemas holds the schemas associated with a single task task.

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	dbpkg "gent/internal/db"
-	"gent/internal/model"
+	dbpkg "genroc/internal/db"
+	"genroc/internal/model"
 )
 
 // insertExternalParked saves an instance parked on an external task: status=running,

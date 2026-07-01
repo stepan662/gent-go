@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"gent/internal/db"
-	"gent/internal/model"
+	"genroc/internal/db"
+	"genroc/internal/model"
 )
 
 // TestGracefulShutdown_ReleasesLeases verifies that a clean shutdown (ctx cancel)
@@ -183,7 +183,7 @@ func TestOverwhelm_GracefulExit(t *testing.T) {
 
 func openTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	f, err := os.CreateTemp("", "gent-test-*.db")
+	f, err := os.CreateTemp("", "genroc-test-*.db")
 	if err != nil {
 		t.Fatalf("create temp db: %v", err)
 	}

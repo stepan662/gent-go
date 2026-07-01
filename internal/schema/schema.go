@@ -52,7 +52,7 @@ func (t SchemaType) Contains(s string) bool {
 }
 
 // allowedKeywords is the set of JSON Schema keywords accepted by SchemaNode.
-// "default" is the standard annotation; "secret" is a gent extension that is only
+// "default" is the standard annotation; "secret" is a genroc extension that is only
 // meaningful inside a process config_schema (it drives log redaction) and ignored
 // elsewhere.
 var allowedKeywords = map[string]bool{

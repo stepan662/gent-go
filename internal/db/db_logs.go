@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	dbgen "gent/internal/db/gen"
-	"gent/internal/idgen"
-	"gent/internal/model"
+	dbgen "genroc/internal/db/gen"
+	"genroc/internal/idgen"
+	"genroc/internal/model"
 )
 
 // LogQuery holds the optional filters shared by ListLogs and ListTreeLogs plus

@@ -4,7 +4,7 @@ import type { AddressInfo } from "net";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { buildGentBinary, startGent, type GentProcess } from "../helpers/server.ts";
+import { buildGenrocBinary, startGenroc, type GenrocProcess } from "../helpers/server.ts";
 
 // Deterministic object-store GC test (SQLite, single server, no chaos).
 //
@@ -25,8 +25,8 @@ const BLOB = "B".repeat(12 * 1024); // over the 8 KiB externalization threshold
 const ROUNDS = 8;
 
 let bin = "";
-const dbPath = join(tmpdir(), `gent_obj_deref_${Date.now()}.db`);
-let server: GentProcess | undefined;
+const dbPath = join(tmpdir(), `genroc_obj_deref_${Date.now()}.db`);
+let server: GenrocProcess | undefined;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -68,7 +68,7 @@ async function waitDown(timeoutMs = 5000) {
 }
 
 beforeAll(async () => {
-  bin = await buildGentBinary();
+  bin = await buildGenrocBinary();
 });
 
 afterAll(() => {
@@ -78,7 +78,7 @@ afterAll(() => {
 test("a dereferenced, unlogged context object is deleted immediately (not left for the sweep)", async () => {
   const mock = startCountingMock(ROUNDS);
   const mockPort = await mock.listen();
-  server = await startGent(bin, PORT, dbPath, undefined, 50 /* poll */, 8 /* max-concurrent */);
+  server = await startGenroc(bin, PORT, dbPath, undefined, 50 /* poll */, 8 /* max-concurrent */);
   const client = server.client;
 
   try {

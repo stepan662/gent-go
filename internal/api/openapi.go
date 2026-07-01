@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"gent/internal/model"
+	"genroc/internal/model"
 
 	"github.com/swaggest/jsonschema-go"
 	"github.com/swaggest/openapi-go"
@@ -111,7 +111,7 @@ func buildSpec() []byte {
 		r.Spec = &openapi31.Spec{Openapi: "3.1.0"}
 
 		desc := "Minimalist business process orchestrator. HTTP endpoints are generated from the action registry."
-		r.Spec.Info.Title = "gent"
+		r.Spec.Info.Title = "genroc"
 		r.Spec.Info.Description = &desc
 		r.Spec.Info.Version = "1.0.0"
 

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	dbgen "gent/internal/db/gen"
+	dbgen "genroc/internal/db/gen"
 )
 
 // pgRewriter wraps a DBTX and translates SQLite-style placeholders (?N / ?)

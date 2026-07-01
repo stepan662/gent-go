@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 func canonJSON(t *testing.T, n *schema.SchemaNode) string {

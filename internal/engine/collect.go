@@ -8,7 +8,7 @@ import (
 
 	"github.com/xeipuuv/gojsonschema"
 
-	"gent/internal/model"
+	"genroc/internal/model"
 )
 
 // collectChildOutputs is called when a parent instance is in WaitStateCollecting.

@@ -1,4 +1,4 @@
-db      ?= gent.db
+db      ?= genroc.db
 http    ?= :8080
 tcp     ?=
 uds     ?=
@@ -10,7 +10,7 @@ log     ?= info
 .PHONY: run build test test-unit test-int test-stress bench-recursive bench-deep bench-drain bench-drain-big swagger client clean generate
 
 run:
-	$(BUILD_FLAGS) go run ./cmd/gent \
+	$(BUILD_FLAGS) go run ./cmd/genroc \
 		-db $(db) \
 		-http $(http) \
 		$(if $(tcp),-tcp $(tcp)) \
@@ -20,8 +20,8 @@ run:
 		$(ARGS)
 
 build: sqlc
-	$(BUILD_FLAGS) go build -tags "sqlite_omit_load_extension" -ldflags="-s -w" -o gent ./cmd/gent
-	$(BUILD_FLAGS) go build -ldflags="-s -w" -o gentctl ./cmd/gentctl
+	$(BUILD_FLAGS) go build -tags "sqlite_omit_load_extension" -ldflags="-s -w" -o genroc ./cmd/genroc
+	$(BUILD_FLAGS) go build -ldflags="-s -w" -o genctl ./cmd/genctl
 
 test: test-unit test-int
 
@@ -32,10 +32,10 @@ test-stress:
 	$(BUILD_FLAGS) go test ./internal/db/... ./internal/engine/... -run TestStress -v --count=3
 
 swagger:
-	$(BUILD_FLAGS) go run ./cmd/gentspec
+	$(BUILD_FLAGS) go run ./cmd/genrocspec
 
 schema:
-	$(BUILD_FLAGS) go run ./cmd/gentschema $(ARGS)
+	$(BUILD_FLAGS) go run ./cmd/genrocschema $(ARGS)
 
 client: swagger
 	cd tests && bun run generate
@@ -68,4 +68,4 @@ sqlc:
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
 
 clean:
-	rm -f gent gentctl $(db)
+	rm -f genroc genctl $(db)

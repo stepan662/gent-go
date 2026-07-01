@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"gent/internal/schema"
-	"gent/internal/validation"
+	"genroc/internal/schema"
+	"genroc/internal/validation"
 )
 
 func mustMarshal(n *schema.SchemaNode) string {

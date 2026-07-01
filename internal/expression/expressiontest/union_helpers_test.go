@@ -7,8 +7,8 @@ import (
 
 	exprlib "github.com/expr-lang/expr"
 
-	"gent/internal/expression"
-	"gent/internal/schema"
+	"genroc/internal/expression"
+	"genroc/internal/schema"
 )
 
 // namedSchema pairs a notation label with a schema so tests can loop over

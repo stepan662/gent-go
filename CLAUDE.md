@@ -1,4 +1,4 @@
-# gent
+# genroc
 
 ## Database
 
@@ -50,14 +50,14 @@ sqlc reads the migrations directory directly, so no extra step is needed for que
 
 ## Build / test
 
-    make build      # produces ./gent and ./gentctl
+    make build      # produces ./genroc and ./genctl
     make test       # go test ./... + integration tests
 
     # Run with SQLite (default):
-    ./gent -db gent.db
+    ./genroc -db genroc.db
 
     # Run with PostgreSQL:
-    ./gent -pg postgres://user:pass@localhost/gent
+    ./genroc -pg postgres://user:pass@localhost/genroc
 
     # Run DB tests against PostgreSQL:
-    POSTGRES_DSN=postgres://user:pass@localhost/gent go test ./internal/db/...
+    POSTGRES_DSN=postgres://user:pass@localhost/genroc go test ./internal/db/...

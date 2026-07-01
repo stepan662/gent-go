@@ -1,6 +1,6 @@
 // Registers the order-pipeline and starts one instance.
-// Requires gent to be running on localhost:8888.
-//   Start gent:   go run ./cmd/gent --http :8888
+// Requires genroc to be running on localhost:8888.
+//   Start genroc:   go run ./cmd/genroc --http :8888
 //   Start tasks:  bun run playground:server   (in another terminal)
 //
 // Usage: bun run playground:run
@@ -8,7 +8,7 @@
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createClientTyped, waitForInstance } from "../helpers/client.ts";
-import { buildGentctlBinary } from "../helpers/cli.ts";
+import { buildGenctlBinary } from "../helpers/cli.ts";
 
 const PROCESS_NAME = "order-pipeline";
 const repoRoot = join(import.meta.dirname, "../..");
@@ -21,13 +21,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // ─── 1. register the process definition ────────────────────────────────────
 
 console.log(`\nRegistering "${PROCESS_NAME}"…`);
-const bin = buildGentctlBinary();
+const bin = buildGenctlBinary();
 const reg = spawnSync(
   bin,
   ["apply", "--server", "http://localhost:8888", "-f", processYaml],
   { cwd: repoRoot, encoding: "utf8", stdio: "inherit" },
 );
-if (reg.status !== 0) throw new Error("gentctl apply failed");
+if (reg.status !== 0) throw new Error("genctl apply failed");
 
 const rounds = 1;
 const maxInterval = 100;

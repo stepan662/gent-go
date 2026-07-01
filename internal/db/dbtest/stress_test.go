@@ -12,7 +12,7 @@ import (
 
 	"github.com/lib/pq"
 
-	"gent/internal/model"
+	"genroc/internal/model"
 )
 
 // pgDeadlock reports whether err is a PostgreSQL deadlock error (SQLSTATE 40P01).

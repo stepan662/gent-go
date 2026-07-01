@@ -5,10 +5,10 @@ import (
 	"slices"
 	"strings"
 
-	"gent/internal/expression"
-	"gent/internal/model"
-	"gent/internal/schema"
-	"gent/internal/template"
+	"genroc/internal/expression"
+	"genroc/internal/model"
+	"genroc/internal/schema"
+	"genroc/internal/template"
 )
 
 func buildInputs(tasks []*model.Task, taskSchemas map[string]TaskSchemas, processInput, configSchema *schema.SchemaNode, defs map[string]*schema.SchemaNode) error {

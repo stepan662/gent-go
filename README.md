@@ -1,1 +1,1 @@
-https://stepan662.github.io/gent-go/bench/
+https://stepan662.github.io/genroc/bench/

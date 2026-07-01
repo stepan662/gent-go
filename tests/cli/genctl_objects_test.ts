@@ -1,16 +1,16 @@
 import { beforeAll, expect, test } from "vitest";
-import { buildGentctlBinary, runCli, writeDefs } from "../helpers/cli.ts";
+import { buildGenctlBinary, runCli, writeDefs } from "../helpers/cli.ts";
 import { waitForInstance } from "../helpers/client.ts";
 
-// CLI rendering of externalized (object-store) payloads: by default `gentctl logs` and
-// `gentctl get` show a {ref, size} reference in place of a value too big to inline, and
+// CLI rendering of externalized (object-store) payloads: by default `genctl logs` and
+// `genctl get` show a {ref, size} reference in place of a value too big to inline, and
 // --resolve fetches and materializes the real object. Exercised through the compiled
 // binary so the data_ref → body rendering is covered, not just the HTTP layer.
 
 let bin: string;
 
 beforeAll(() => {
-  bin = buildGentctlBinary();
+  bin = buildGenctlBinary();
 }, 60_000); // first build on a cold CI cache can exceed the 10s default
 
 function uid(prefix: string) {

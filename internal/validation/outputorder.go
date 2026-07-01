@@ -5,9 +5,9 @@ import (
 	"slices"
 	"sort"
 
-	"gent/internal/model"
-	"gent/internal/schema"
-	"gent/internal/template"
+	"genroc/internal/model"
+	"genroc/internal/schema"
+	"genroc/internal/template"
 )
 
 // inferOutputs infers the type of every output-map task's output and writes it to

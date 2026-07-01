@@ -4,7 +4,7 @@
 - [] commands mirroring the API capabilities
 - [x] yaml support
 - [x] config file with the url to the server
-- [] test with different auth types + add helpers for gentctl
+- [] test with different auth types + add helpers for genctl
 
 ## server
 - [x] versioning channels
@@ -20,6 +20,6 @@
 # docs
 
 - [] write docs, plan and motivation
-- rename ideas: "a-gent", "dura-gent", "duragent", "gent-rock", "genrock", "genroc"?
+- rename ideas: "a-genroc", "dura-genroc", "duragent", "genroc-rock", "genrock", "genroc"?
 
 

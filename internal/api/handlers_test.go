@@ -4,12 +4,12 @@ import (
 	"os"
 	"testing"
 
-	"gent/internal/db"
+	"genroc/internal/db"
 )
 
 func newTestHandlers(t *testing.T) (*Handlers, func()) {
 	t.Helper()
-	f, err := os.CreateTemp("", "gent-test-*.db")
+	f, err := os.CreateTemp("", "genroc-test-*.db")
 	if err != nil {
 		t.Fatal(err)
 	}

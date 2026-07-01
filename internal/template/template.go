@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"gent/internal/expression"
-	"gent/internal/schema"
+	"genroc/internal/expression"
+	"genroc/internal/schema"
 )
 
 // EvalAny evaluates s as a template string against ctx.

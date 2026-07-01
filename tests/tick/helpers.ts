@@ -2,28 +2,28 @@ import { beforeAll, afterAll } from "vitest";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
-  buildGentBinary,
-  startGent,
-  type GentProcess,
+  buildGenrocBinary,
+  startGenroc,
+  type GenrocProcess,
 } from "../helpers/server.ts";
 
 // Cached binary — built once per Vitest worker process.
 let _bin: string | null = null;
 async function getBin(): Promise<string> {
-  if (!_bin) _bin = await buildGentBinary();
+  if (!_bin) _bin = await buildGenrocBinary();
   return _bin;
 }
 
 export class TickEnv {
-  constructor(private readonly gent: GentProcess) {}
+  constructor(private readonly genroc: GenrocProcess) {}
 
   get client() {
-    return this.gent.client;
+    return this.genroc.client;
   }
 
   // Advance one engine poll cycle. Returns the number of instances processed.
   async tick(): Promise<number> {
-    const { data, error } = await this.gent.client.POST("/tick", {});
+    const { data, error } = await this.genroc.client.POST("/tick", {});
     if (error) throw new Error(`tick failed: ${JSON.stringify(error)}`);
     return (data as { count: number }).count;
   }
@@ -37,7 +37,7 @@ export class TickEnv {
   }
 
   async status(id: string): Promise<string> {
-    const { data, error } = await this.gent.client.GET("/instances/{id}", {
+    const { data, error } = await this.genroc.client.GET("/instances/{id}", {
       params: { path: { id } },
     });
     if (error)
@@ -46,7 +46,7 @@ export class TickEnv {
   }
 
   async waitState(id: string): Promise<string> {
-    const { data, error } = await this.gent.client.GET("/instances/{id}", {
+    const { data, error } = await this.genroc.client.GET("/instances/{id}", {
       params: { path: { id } },
     });
     if (error)
@@ -69,7 +69,7 @@ export class TickEnv {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async define(name: string, tasks: object[]): Promise<void> {
-    const { error } = await this.gent.client.PUT("/definitions", {
+    const { error } = await this.genroc.client.PUT("/definitions", {
       body: { name, tasks } as any,
     });
     if (error)
@@ -77,7 +77,7 @@ export class TickEnv {
   }
 
   async start(process: string): Promise<string> {
-    const { data, error } = await this.gent.client.POST("/instances", {
+    const { data, error } = await this.genroc.client.POST("/instances", {
       body: { process },
     });
     if (error)
@@ -86,7 +86,7 @@ export class TickEnv {
   }
 
   async cancel(id: string): Promise<void> {
-    const { error } = await this.gent.client.POST("/instances/{id}/cancel", {
+    const { error } = await this.genroc.client.POST("/instances/{id}/cancel", {
       params: { path: { id } },
     });
     if (error)
@@ -96,7 +96,7 @@ export class TickEnv {
   // Returns the child instance ID recorded under the parent's "_children" key
   // after SpawnChildrenAndWait. Valid between spawn and child completion.
   async childOf(parentId: string, taskId: string): Promise<string> {
-    const { data } = await this.gent.client.GET("/instances/{id}", {
+    const { data } = await this.genroc.client.GET("/instances/{id}", {
       params: { path: { id: parentId } },
     });
     const spawned = (data!.context as Record<string, unknown> | null)
@@ -116,7 +116,7 @@ export class TickEnv {
     parentId: string,
     taskId: string,
   ): Promise<Record<string, string>> {
-    const { data } = await this.gent.client.GET("/instances/{id}", {
+    const { data } = await this.genroc.client.GET("/instances/{id}", {
       params: { path: { id: parentId } },
     });
     const spawned = (data!.context as Record<string, unknown> | null)
@@ -131,7 +131,7 @@ export class TickEnv {
   }
 
   stop() {
-    this.gent.stop();
+    this.genroc.stop();
   }
 }
 
@@ -146,11 +146,11 @@ export function useTickEnv(port: number) {
 
   beforeAll(async () => {
     const bin = await getBin();
-    const db = join(tmpdir(), `gent_tick_${Date.now()}.db`);
+    const db = join(tmpdir(), `genroc_tick_${Date.now()}.db`);
     // poll=0 → manual tick mode; max-concurrent=1 → one instance per tick (predictable ordering)
     // immediateRetries=true → no backoff, retries are claimable on the very next tick
-    const gent = await startGent(bin, port, db, undefined, 0, 1, true);
-    ctx.env = new TickEnv(gent);
+    const genroc = await startGenroc(bin, port, db, undefined, 0, 1, true);
+    ctx.env = new TickEnv(genroc);
   }, 60_000);
 
   afterAll(() => ctx.env?.stop());

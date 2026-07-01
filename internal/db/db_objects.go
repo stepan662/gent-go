@@ -11,8 +11,8 @@ import (
 	"math"
 	"time"
 
-	dbgen "gent/internal/db/gen"
-	"gent/internal/model"
+	dbgen "genroc/internal/db/gen"
+	"genroc/internal/model"
 )
 
 // contextObjectThreshold is the inline cutoff for a context value-slot: a value

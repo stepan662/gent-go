@@ -16,7 +16,7 @@ package expression
 import (
 	"fmt"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"

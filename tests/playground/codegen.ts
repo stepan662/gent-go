@@ -1,6 +1,6 @@
 // Generates TypeScript types and server infrastructure from process.yaml.
 //
-// Requires the gent server to be running (gentctl validate calls it).
+// Requires the genroc server to be running (genctl validate calls it).
 //
 // Outputs:
 //   playground/generated/types.ts   — TypeScript interfaces for all schemas
@@ -26,12 +26,12 @@ function toPascalCase(s: string): string {
     .join("");
 }
 
-// Run gentctl validate — talks to the gent server and returns inferred schemas.
+// Run genctl validate — talks to the genroc server and returns inferred schemas.
 const result = spawnSync(
   "go",
   [
     "run",
-    "./cmd/gentctl",
+    "./cmd/genctl",
     "validate",
     "--server",
     "http://localhost:8888",
@@ -42,7 +42,7 @@ const result = spawnSync(
 );
 
 if (result.status !== 0) {
-  throw new Error(`gentctl validate: ${result.stderr.trim()}`);
+  throw new Error(`genctl validate: ${result.stderr.trim()}`);
 }
 
 // validate returns []SchemaFile; we're working with a single definition file.

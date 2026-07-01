@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"gent/internal/expression"
-	"gent/internal/schema"
+	"genroc/internal/expression"
+	"genroc/internal/schema"
 )
 
 // ctx parses a JSON string into a Schema, failing on unknown keywords.

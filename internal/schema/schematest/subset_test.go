@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 func assertSubset(t *testing.T, subJSON, superJSON string, want bool) {

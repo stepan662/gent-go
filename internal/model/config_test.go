@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 func lookupFrom(m map[string]string) func(string) (string, bool) {
@@ -21,7 +21,7 @@ func cfgSchema(required []string, props map[string]*schema.SchemaNode) *schema.S
 }
 
 func TestResolveConfig(t *testing.T) {
-	// Process "billing" → process-scoped keys GENT_BILLING_<NAME>.
+	// Process "billing" → process-scoped keys GENROC_BILLING_<NAME>.
 	def := &ProcessDefinition{
 		Name: "billing",
 		ConfigSchema: cfgSchema([]string{"SERVER_URL"}, map[string]*schema.SchemaNode{
@@ -35,10 +35,10 @@ func TestResolveConfig(t *testing.T) {
 
 	t.Run("process-scoped coerces types and applies default", func(t *testing.T) {
 		cfg, err := def.ResolveConfig(lookupFrom(map[string]string{
-			"GENT_BILLING_SERVER_URL": "http://x",
-			"GENT_BILLING_PORT":       "8080",
-			"GENT_BILLING_RATE":       "1.5",
-			"GENT_BILLING_DEBUG":      "true",
+			"GENROC_BILLING_SERVER_URL": "http://x",
+			"GENROC_BILLING_PORT":       "8080",
+			"GENROC_BILLING_RATE":       "1.5",
+			"GENROC_BILLING_DEBUG":      "true",
 		}))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -60,9 +60,9 @@ func TestResolveConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to GENT_GLOBAL_ when no process-scoped var", func(t *testing.T) {
+	t.Run("falls back to GENROC_GLOBAL_ when no process-scoped var", func(t *testing.T) {
 		cfg, err := def.ResolveConfig(lookupFrom(map[string]string{
-			"GENT_GLOBAL_SERVER_URL": "http://global",
+			"GENROC_GLOBAL_SERVER_URL": "http://global",
 		}))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -74,8 +74,8 @@ func TestResolveConfig(t *testing.T) {
 
 	t.Run("process-scoped overrides global", func(t *testing.T) {
 		cfg, err := def.ResolveConfig(lookupFrom(map[string]string{
-			"GENT_GLOBAL_SERVER_URL":  "http://global",
-			"GENT_BILLING_SERVER_URL": "http://billing",
+			"GENROC_GLOBAL_SERVER_URL":  "http://global",
+			"GENROC_BILLING_SERVER_URL": "http://billing",
 		}))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -87,14 +87,14 @@ func TestResolveConfig(t *testing.T) {
 
 	t.Run("missing required in both tiers is rejected", func(t *testing.T) {
 		_, err := def.ResolveConfig(lookupFrom(map[string]string{}))
-		if err == nil || !strings.Contains(err.Error(), "GENT_BILLING_SERVER_URL") || !strings.Contains(err.Error(), "GENT_GLOBAL_SERVER_URL") {
+		if err == nil || !strings.Contains(err.Error(), "GENROC_BILLING_SERVER_URL") || !strings.Contains(err.Error(), "GENROC_GLOBAL_SERVER_URL") {
 			t.Fatalf("err = %v, want both keys named", err)
 		}
 	})
 
 	t.Run("optional unset is omitted", func(t *testing.T) {
 		cfg, err := def.ResolveConfig(lookupFrom(map[string]string{
-			"GENT_GLOBAL_SERVER_URL": "http://x",
+			"GENROC_GLOBAL_SERVER_URL": "http://x",
 		}))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -106,12 +106,12 @@ func TestResolveConfig(t *testing.T) {
 
 	t.Run("uncoercible values are rejected", func(t *testing.T) {
 		for _, tc := range []struct{ key, val string }{
-			{"GENT_GLOBAL_PORT", "notanint"},
-			{"GENT_GLOBAL_RATE", "notanumber"},
-			{"GENT_GLOBAL_DEBUG", "maybe"},
+			{"GENROC_GLOBAL_PORT", "notanint"},
+			{"GENROC_GLOBAL_RATE", "notanumber"},
+			{"GENROC_GLOBAL_DEBUG", "maybe"},
 		} {
 			_, err := def.ResolveConfig(lookupFrom(map[string]string{
-				"GENT_GLOBAL_SERVER_URL": "http://x",
+				"GENROC_GLOBAL_SERVER_URL": "http://x",
 				tc.key:                   tc.val,
 			}))
 			if err == nil {
@@ -137,10 +137,10 @@ func TestResolveConfigEnum(t *testing.T) {
 			"ENV": {Type: schema.SchemaType{"string"}, Enum: []any{"dev", "prod"}},
 		}),
 	}
-	if _, err := def.ResolveConfig(lookupFrom(map[string]string{"GENT_GLOBAL_ENV": "prod"})); err != nil {
+	if _, err := def.ResolveConfig(lookupFrom(map[string]string{"GENROC_GLOBAL_ENV": "prod"})); err != nil {
 		t.Fatalf("prod should be valid: %v", err)
 	}
-	if _, err := def.ResolveConfig(lookupFrom(map[string]string{"GENT_GLOBAL_ENV": "staging"})); err == nil {
+	if _, err := def.ResolveConfig(lookupFrom(map[string]string{"GENROC_GLOBAL_ENV": "staging"})); err == nil {
 		t.Fatal("staging should be rejected by enum")
 	}
 }
@@ -152,7 +152,7 @@ func TestResolveConfigProcessNameNormalization(t *testing.T) {
 		ConfigSchema: cfgSchema([]string{"URL"}, map[string]*schema.SchemaNode{"URL": prim("string")}),
 	}
 	cfg, err := def.ResolveConfig(lookupFrom(map[string]string{
-		"GENT_ORDER_FLOW_V2_URL": "http://x",
+		"GENROC_ORDER_FLOW_V2_URL": "http://x",
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -174,21 +174,21 @@ func TestResolveConfigCaseInsensitiveName(t *testing.T) {
 		}),
 	}
 	cfg, err := def.ResolveConfig(lookupFrom(map[string]string{
-		"GENT_GLOBAL_SERVER_URL": "http://x",
-		"GENT_BILLING_E2E_PORT":  "8080",
-		"GENT_GLOBAL_API_KEY":    "k",
+		"GENROC_GLOBAL_SERVER_URL": "http://x",
+		"GENROC_BILLING_E2E_PORT":  "8080",
+		"GENROC_GLOBAL_API_KEY":    "k",
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg["server_url"] != "http://x" {
-		t.Errorf("server_url = %v, want http://x (binds to GENT_GLOBAL_SERVER_URL)", cfg["server_url"])
+		t.Errorf("server_url = %v, want http://x (binds to GENROC_GLOBAL_SERVER_URL)", cfg["server_url"])
 	}
 	if cfg["e2e_port"] != int64(8080) {
-		t.Errorf("e2e_port = %v, want 8080 (binds to GENT_BILLING_E2E_PORT)", cfg["e2e_port"])
+		t.Errorf("e2e_port = %v, want 8080 (binds to GENROC_BILLING_E2E_PORT)", cfg["e2e_port"])
 	}
 	if cfg["apiKey"] != "k" {
-		t.Errorf("apiKey = %v, want k (binds to GENT_GLOBAL_API_KEY)", cfg["apiKey"])
+		t.Errorf("apiKey = %v, want k (binds to GENROC_GLOBAL_API_KEY)", cfg["apiKey"])
 	}
 }
 
@@ -225,7 +225,7 @@ func TestResolveConfigRedactsSecretInError(t *testing.T) {
 			"API_KEY": {Type: schema.SchemaType{"number"}, Secret: true},
 		}),
 	}
-	_, err := def.ResolveConfig(lookupFrom(map[string]string{"GENT_GLOBAL_API_KEY": "supersecret"}))
+	_, err := def.ResolveConfig(lookupFrom(map[string]string{"GENROC_GLOBAL_API_KEY": "supersecret"}))
 	if err == nil {
 		t.Fatal("expected a coercion error")
 	}
@@ -243,7 +243,7 @@ func TestResolveConfigShowsNonSecretInError(t *testing.T) {
 		Name:         "p",
 		ConfigSchema: cfgSchema([]string{"PORT"}, map[string]*schema.SchemaNode{"PORT": {Type: schema.SchemaType{"integer"}}}),
 	}
-	_, err := def.ResolveConfig(lookupFrom(map[string]string{"GENT_GLOBAL_PORT": "abc"}))
+	_, err := def.ResolveConfig(lookupFrom(map[string]string{"GENROC_GLOBAL_PORT": "abc"}))
 	if err == nil || !strings.Contains(err.Error(), "abc") {
 		t.Errorf("non-secret value should be shown for debugging, got: %v", err)
 	}

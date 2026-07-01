@@ -3,7 +3,7 @@ package schematest
 import (
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 // Compositions nested inside one another (oneOf-in-anyOf, allOf-in-oneOf, …)

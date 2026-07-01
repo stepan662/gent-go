@@ -1,4 +1,4 @@
-module gent
+module genroc
 
 go 1.25.0
 

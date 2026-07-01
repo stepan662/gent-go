@@ -2,13 +2,13 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { beforeAll, expect, test } from "vitest";
-import { buildGentctlBinary, runCli, writeDefs } from "../helpers/cli.ts";
+import { buildGenctlBinary, runCli, writeDefs } from "../helpers/cli.ts";
 import { client } from "../helpers/client.ts";
 
 let bin: string;
 
 beforeAll(() => {
-  bin = buildGentctlBinary();
+  bin = buildGenctlBinary();
 }, 60_000); // first build on a cold CI cache can exceed the 10s default
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -136,7 +136,7 @@ test("apply — exits non-zero and prints error for invalid definition", () => {
   const r = runCli(bin, ["apply", "-f", file]);
 
   expect(r.ok).toBe(false);
-  expect(r.stderr).toContain("gentctl:");
+  expect(r.stderr).toContain("genctl:");
 });
 
 // ── validate ──────────────────────────────────────────────────────────────────
@@ -321,7 +321,7 @@ test("run -q — prints only the bare instance id", () => {
   const r = runCli(bin, ["run", name, "--set", "count=1", "-q"]);
 
   expect(r.ok).toBe(true);
-  // stdout is exactly the id — nothing else — so id=$(gentctl run … -q) is clean.
+  // stdout is exactly the id — nothing else — so id=$(genctl run … -q) is clean.
   expect(r.stdout.trim()).toMatch(/^[0-9a-f-]{36}$/);
   expect(r.stdout).not.toContain("started:");
 });
@@ -357,7 +357,7 @@ test("get — requires an explicit id (a bare command never implies @last)", () 
 
 test("@last — errors when no instance has been started yet", () => {
   // A pristine config home so no prior `run` leaks a last id into this case.
-  const home = mkdtempSync(join(tmpdir(), "gent_nolast_"));
+  const home = mkdtempSync(join(tmpdir(), "genroc_nolast_"));
   const r = runCli(bin, ["get", "@last"], {
     HOME: home,
     XDG_CONFIG_HOME: join(home, ".config"),

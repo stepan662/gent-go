@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 // mustParse parses JSON into a Schema, failing the test on error.

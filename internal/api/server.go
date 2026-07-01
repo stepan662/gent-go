@@ -45,7 +45,7 @@ func (s *Server) ListenHTTP(ctx context.Context, addr string) error {
 
 	mux.HandleFunc("GET /docs", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, swaggerUIHTML("gent API", "/openapi.json"))
+		fmt.Fprint(w, swaggerUIHTML("genroc API", "/openapi.json"))
 	})
 
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, _ *http.Request) {
@@ -65,7 +65,7 @@ func (s *Server) ListenHTTP(ctx context.Context, addr string) error {
 			specURL += "?version=" + v
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, swaggerUIHTML(name+" — gent API", specURL))
+		fmt.Fprint(w, swaggerUIHTML(name+" — genroc API", specURL))
 	})
 
 	mux.HandleFunc("GET /definitions/{name}/openapi.json", func(w http.ResponseWriter, r *http.Request) {

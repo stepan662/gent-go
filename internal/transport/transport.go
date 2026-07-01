@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"gent/internal/model"
+	"genroc/internal/model"
 )
 
 // Request is the message the engine sends to a service.

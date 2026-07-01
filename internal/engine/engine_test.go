@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"gent/internal/model"
+	"genroc/internal/model"
 )
 
 func TestEvaluator(t *testing.T) {

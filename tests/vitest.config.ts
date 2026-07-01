@@ -9,7 +9,7 @@ const pgProject = process.env.POSTGRES_DSN
           include: ["integration/**/*_test.ts", "cli/**/*_test.ts"],
           testTimeout: 30_000,
           env: {
-            GENT_PORT: "8889",
+            GENROC_PORT: "8889",
             POSTGRES_DSN: process.env.POSTGRES_DSN,
           },
         },
@@ -26,7 +26,7 @@ export default defineConfig({
           globalSetup: ["./helpers/server.ts"],
           include: ["integration/**/*_test.ts", "cli/**/*_test.ts", "tick/**/*_test.ts"],
           testTimeout: 60_000,
-          env: { GENT_PORT: "8888" },
+          env: { GENROC_PORT: "8888" },
         },
       },
       ...pgProject,

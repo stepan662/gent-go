@@ -3,8 +3,8 @@ package validation
 import (
 	"fmt"
 
-	"gent/internal/model"
-	"gent/internal/schema"
+	"genroc/internal/model"
+	"genroc/internal/schema"
 )
 
 // DefinitionGetter looks up process definitions. *db.DB satisfies this interface.

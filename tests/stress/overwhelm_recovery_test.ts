@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
-  buildGentBinary,
-  startGent,
+  buildGenrocBinary,
+  startGenroc,
   startSupervisedWorker,
-  type GentProcess,
+  type GenrocProcess,
 } from "../helpers/server.ts";
 import { listAllInstances } from "../helpers/client.ts";
 
@@ -45,16 +45,16 @@ const isTerminal = (s?: string) =>
   s === "completed" || s === "failed" || s === "cancelled";
 
 let binPromise: Promise<string> | undefined;
-const gentBin = () => (binPromise ??= buildGentBinary());
+const genrocBin = () => (binPromise ??= buildGenrocBinary());
 
 describe.runIf(!!DSN)("single-worker overwhelm recovery — postgres", () => {
-  let control: GentProcess; // --poll 0: serves the API, never advances
-  let recovery: GentProcess | undefined;
+  let control: GenrocProcess; // --poll 0: serves the API, never advances
+  let recovery: GenrocProcess | undefined;
   let bin = "";
 
   beforeAll(async () => {
-    bin = await gentBin();
-    control = await startGent(bin, 8940, "", DSN, 0 /* poll=0 -> API only */, 1);
+    bin = await genrocBin();
+    control = await startGenroc(bin, 8940, "", DSN, 0 /* poll=0 -> API only */, 1);
   }, 60_000);
 
   afterAll(() => {
@@ -158,7 +158,7 @@ describe.runIf(!!DSN)("single-worker overwhelm recovery — postgres", () => {
 
       // Phase 2: one normal worker recovers everything (a different processor, but
       // still only ever one at a time — no peer can double-advance).
-      recovery = await startGent(bin, 8942, "", DSN, 5 /* poll */, 20 /* max-concurrent */);
+      recovery = await startGenroc(bin, 8942, "", DSN, 5 /* poll */, 20 /* max-concurrent */);
 
       const byProcess = (i: { process?: string }) => i.process === processName;
       const deadline = Date.now() + SETTLE_MS;

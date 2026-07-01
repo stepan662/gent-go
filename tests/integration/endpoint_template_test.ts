@@ -54,7 +54,7 @@ test("rest endpoint is evaluated as a template", async () => {
 });
 
 // Regression for the playground: a config value used as the base URL in a rest
-// endpoint. config.endpoint_url resolves from GENT_GLOBAL_ENDPOINT_URL (set on the
+// endpoint. config.endpoint_url resolves from GENROC_GLOBAL_ENDPOINT_URL (set on the
 // test server to http://localhost:14101 — a port dedicated to this file so it never
 // clashes with secret_log_test's 14100 when Vitest runs the files in parallel), so
 // the request reaches the mock there.

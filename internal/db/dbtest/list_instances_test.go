@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	dbpkg "gent/internal/db"
-	"gent/internal/idgen"
-	"gent/internal/model"
+	dbpkg "genroc/internal/db"
+	"genroc/internal/idgen"
+	"genroc/internal/model"
 )
 
 // saveInstance persists a running instance with a non-trivial context (which the

@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 func TestProcessDefinition_Normalize(t *testing.T) {

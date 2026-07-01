@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	dbpkg "gent/internal/db"
-	"gent/internal/model"
+	dbpkg "genroc/internal/db"
+	"genroc/internal/model"
 )
 
 // insertExternalRunning saves a running instance sitting at (but not yet armed on) an

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"gent/internal/expression"
-	"gent/internal/model"
-	tmpl "gent/internal/template"
+	"genroc/internal/expression"
+	"genroc/internal/model"
+	tmpl "genroc/internal/template"
 )
 
 // resolveValue returns v as-is unless it is an *model.ObjectRef marker (an

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "gent-tests",
+      "name": "genroc-tests",
       "dependencies": {
         "ajv": "^8.20.0",
         "openapi-fetch": "^0.17.0",

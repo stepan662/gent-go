@@ -5,7 +5,7 @@ import { client } from "../helpers/client.ts";
 // the "latest" channel back at that older version. `run` without an explicit
 // channel/version must follow that channel — not the highest version number — so
 // it runs what apply most recently published. (Goes through /definitions/batch,
-// the dedup path used by `gentctl apply`.)
+// the dedup path used by `genctl apply`.)
 test("run follows the latest channel after a content-dedup to an older version", async () => {
   const name = `dedup_latest_${crypto.randomUUID()}`;
   const contentA = { name, output: "A", tasks: [{ id: "t", switch: "end" }] };

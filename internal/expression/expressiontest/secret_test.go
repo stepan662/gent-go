@@ -3,7 +3,7 @@ package expressiontest
 import (
 	"testing"
 
-	"gent/internal/expression"
+	"genroc/internal/expression"
 )
 
 // secretContextJSON has secret scalars (config.api_key, self.result.token), a

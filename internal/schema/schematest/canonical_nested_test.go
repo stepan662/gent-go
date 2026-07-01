@@ -3,7 +3,7 @@ package schematest
 import (
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 func anyOf(vs ...*schema.SchemaNode) *schema.SchemaNode { return &schema.SchemaNode{AnyOf: vs} }

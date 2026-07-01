@@ -1,7 +1,7 @@
 package validation
 
 import (
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 // maxRecursivePasses bounds the fixpoint iteration. Fixed-shape accumulators

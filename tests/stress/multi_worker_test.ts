@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { buildGentBinary, startGent, type GentProcess } from "../helpers/server.ts";
+import { buildGenrocBinary, startGenroc, type GenrocProcess } from "../helpers/server.ts";
 import { listAllInstances } from "../helpers/client.ts";
 
-// Multi-worker collision stress. Several independent `gent` processes — each its
+// Multi-worker collision stress. Several independent `genroc` processes — each its
 // own OS process and its own connection pool/handle — poll the same database
 // while a chaos loop randomly cancels and retries roots. Unlike the in-process
 // Go engine stress tests (engines as goroutines sharing one *db.DB), this is the
@@ -24,7 +24,7 @@ import { listAllInstances } from "../helpers/client.ts";
 //
 // Postgres only. A worker fleet is a Postgres-only deployment: separate processes
 // rely on FOR UPDATE SKIP LOCKED claims and per-row FOR UPDATE child-finish locks.
-// SQLite is single-writer/single-process — running several gent processes against
+// SQLite is single-writer/single-process — running several genroc processes against
 // one file wedges under chaos (a cancel-cascade transaction lost to
 // SQLITE_BUSY_SNAPSHOT strands a cancelling|waiting parent). The SQLite *supported*
 // multi-worker model is multiple engines in ONE process, with the same random
@@ -60,9 +60,9 @@ const backends: Backend[] = [
     pollMs: 5,
     db: "",
     pgDSN: DSN,
-    // Small pool per worker (passed to gent as --pg-max-open-conns) so
+    // Small pool per worker (passed to genroc as --pg-max-open-conns) so
     // WORKER_COUNT pools stay well under Postgres' max_connections.
-    env: { GENT_PG_MAX_OPEN_CONNS: "8" },
+    env: { GENROC_PG_MAX_OPEN_CONNS: "8" },
   },
 ];
 
@@ -71,20 +71,20 @@ const isTerminal = (s?: string) =>
   s === "completed" || s === "failed" || s === "cancelled";
 
 let binPromise: Promise<string> | undefined;
-const gentBin = () => (binPromise ??= buildGentBinary());
+const genrocBin = () => (binPromise ??= buildGenrocBinary());
 
 for (const backend of backends) {
   describe.runIf(backend.enabled)(`multi-worker chaos — ${backend.name}`, () => {
-    let workers: GentProcess[] = [];
+    let workers: GenrocProcess[] = [];
 
     beforeAll(async () => {
-      const bin = await gentBin();
+      const bin = await genrocBin();
       for (const [k, v] of Object.entries(backend.env ?? {})) process.env[k] = v;
       // Spawn sequentially: the first process runs migrations before any other
       // opens the DB, avoiding a concurrent-migration race on the same file.
       for (let i = 0; i < WORKER_COUNT; i++) {
         workers.push(
-          await startGent(
+          await startGenroc(
             bin,
             backend.basePort + i,
             backend.db,

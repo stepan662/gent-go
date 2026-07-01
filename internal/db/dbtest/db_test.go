@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	dbpkg "gent/internal/db"
-	"gent/internal/model"
+	dbpkg "genroc/internal/db"
+	"genroc/internal/model"
 )
 
 // sharedPgDB is opened once in TestMain and reused across all tests.
@@ -51,7 +51,7 @@ type backend struct {
 func testBackends(t *testing.T) []backend {
 	t.Helper()
 
-	f, err := os.CreateTemp("", "gent-test-*.db")
+	f, err := os.CreateTemp("", "genroc-test-*.db")
 	if err != nil {
 		t.Fatal(err)
 	}

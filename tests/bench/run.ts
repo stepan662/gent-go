@@ -1,5 +1,5 @@
 // Generalized spawn benchmark runner. A workload is a readable YAML file under
-// workloads/ describing a gent process (pure orchestration, no external HTTP calls)
+// workloads/ describing a genroc process (pure orchestration, no external HTTP calls)
 // plus a small bench header; this runner applies it, drives it across the selected
 // engines, and reports throughput. It isolates engine + DB throughput and compares
 // SQLite (single writer) vs Postgres (concurrent workers).
@@ -35,15 +35,15 @@
 //
 // Env is only for invocation, never workload numbers: BENCH_WORKLOAD (or argv[2])
 // selects the workload, BENCH_ENGINES filters which engines run, BENCH_JSON sets the
-// results output path, GENT_SQLITE_SYNCHRONOUS sets SQLite durability (default FULL).
+// results output path, GENROC_SQLITE_SYNCHRONOUS sets SQLite durability (default FULL).
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { arch, cpus, platform, release, tmpdir, totalmem } from "node:os";
 import {
-  buildGentBinary,
-  startGent,
-  type GentProcess,
+  buildGenrocBinary,
+  startGenroc,
+  type GenrocProcess,
 } from "../helpers/server.ts";
 
 // Workloads are statically imported (Bun parses .yaml natively) so tsc and the
@@ -65,7 +65,7 @@ interface EngineConfig {
   concurrency?: number; // max in-flight instances on this engine
 }
 
-// A workload file: a `bench` section (the whole run config) plus the gent definition(s).
+// A workload file: a `bench` section (the whole run config) plus the genroc definition(s).
 interface BenchConfig {
   input?: Record<string, unknown>; // per-instance (root) input
   roots?: number; // number of root instances to preload (default 1)
@@ -81,7 +81,7 @@ interface BenchConfig {
 
 interface Workload {
   bench: BenchConfig;
-  process?: unknown; // single gent definition
+  process?: unknown; // single genroc definition
   defs?: unknown[]; // or several (applied in order)
 }
 
@@ -103,7 +103,7 @@ const HOST = (() => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Client = GentProcess["client"];
+type Client = GenrocProcess["client"];
 
 // BENCH_WORKLOAD (or argv[2]) selects which workload YAML to run.
 const NAME = process.argv[2] ?? process.env.BENCH_WORKLOAD ?? "recursive";
@@ -245,12 +245,12 @@ async function benchEngine(
   dsn: string | undefined,
 ): Promise<EngineResult> {
   const concurrency = concurrencyFor(engine);
-  const bin = await buildGentBinary();
+  const bin = await buildGenrocBinary();
   const durations: number[] = [];
   let instances = 0;
   for (let run = 0; run < RUNS; run++) {
     // Phase 1 — load. poll=0 ⇒ manual-tick mode: the engine never auto-advances.
-    const loader = await startGent(bin, BENCH_PORT, dbPath, dsn, 0, concurrency);
+    const loader = await startGenroc(bin, BENCH_PORT, dbPath, dsn, 0, concurrency);
     let rootIds: string[];
     try {
       for (const def of DEFS) {
@@ -266,7 +266,7 @@ async function benchEngine(
     }
 
     // Phase 2 — drain. Restart with the normal poll loop and time the work-off.
-    const drainer = await startGent(bin, BENCH_PORT, dbPath, dsn, POLL_MS, concurrency);
+    const drainer = await startGenroc(bin, BENCH_PORT, dbPath, dsn, POLL_MS, concurrency);
     try {
       const start = Date.now();
       await waitDrained(drainer.client);
@@ -306,9 +306,9 @@ function report(results: EngineResult[]) {
       `load_concurrency=${LOAD_CONCURRENCY} instances=${total} poll_ms=${POLL_MS} runs=${RUNS}`,
   );
   // Both engines run fully durable by default (matched comparison): SQLite fsyncs the
-  // WAL on every commit, Postgres commits synchronously. GENT_SQLITE_SYNCHRONOUS
+  // WAL on every commit, Postgres commits synchronously. GENROC_SQLITE_SYNCHRONOUS
   // overrides SQLite's level (e.g. NORMAL for the faster, process-crash-only setting).
-  const sqliteSync = process.env.GENT_SQLITE_SYNCHRONOUS ?? "FULL";
+  const sqliteSync = process.env.GENROC_SQLITE_SYNCHRONOUS ?? "FULL";
   console.log(
     `durability: sqlite synchronous=${sqliteSync}, postgres synchronous_commit=on`,
   );
@@ -378,7 +378,7 @@ async function main() {
     .filter(Boolean);
 
   if (engines.includes("sqlite")) {
-    const sqliteDb = join(tmpdir(), `gent_bench_${Date.now()}.db`);
+    const sqliteDb = join(tmpdir(), `genroc_bench_${Date.now()}.db`);
     results.push(await benchEngine("sqlite", sqliteDb, undefined));
   }
 

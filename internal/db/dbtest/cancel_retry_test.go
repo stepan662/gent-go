@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	dbpkg "gent/internal/db"
-	"gent/internal/model"
+	dbpkg "genroc/internal/db"
+	"genroc/internal/model"
 )
 
 // insertInst inserts an instance with the given status, parent, call stack, and error.

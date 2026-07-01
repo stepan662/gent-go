@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 	"github.com/xeipuuv/gojsonschema"
 )
 

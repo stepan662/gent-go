@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"time"
 
-	dbgen "gent/internal/db/gen"
-	"gent/internal/model"
+	dbgen "genroc/internal/db/gen"
+	"genroc/internal/model"
 )
 
 // renewChunkSize bounds how many leases a single renewal transaction touches.

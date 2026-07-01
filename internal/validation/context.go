@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gent/internal/model"
+	"genroc/internal/model"
 )
 
 // predEdge is a predecessor edge in the task graph.

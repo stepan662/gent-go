@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"gent/internal/model"
-	"gent/internal/schema"
+	"genroc/internal/model"
+	"genroc/internal/schema"
 )
 
 // A result_schema field marked secret is redacted from the logged response body

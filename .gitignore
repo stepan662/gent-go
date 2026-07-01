@@ -1,7 +1,7 @@
 # Binary
-/gent
-/gentschema
-/gentctl
+/genroc
+/genrocschema
+/genctl
 
 # SQLite databases
 *.db

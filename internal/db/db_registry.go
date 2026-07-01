@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	dbgen "gent/internal/db/gen"
-	"gent/internal/model"
+	dbgen "genroc/internal/db/gen"
+	"genroc/internal/model"
 )
 
 // ── Public types ──────────────────────────────────────────────────────────────

@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	dbgen "gent/internal/db/gen"
-	"gent/internal/model"
+	dbgen "genroc/internal/db/gen"
+	"genroc/internal/model"
 )
 
 // externalPaginator is the pagination policy for the external-task queue.

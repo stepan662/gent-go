@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"gent/internal/expression"
+	"genroc/internal/expression"
 )
 
 // --- Literals ---

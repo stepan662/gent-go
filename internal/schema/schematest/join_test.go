@@ -3,7 +3,7 @@ package schematest
 import (
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 func obj(req []string, props map[string]*schema.SchemaNode) *schema.SchemaNode {

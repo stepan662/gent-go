@@ -3,7 +3,7 @@ package schematest
 import (
 	"testing"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 func TestCollectSecrets(t *testing.T) {

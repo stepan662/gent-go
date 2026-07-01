@@ -28,19 +28,19 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: gent
-          POSTGRES_PASSWORD: gent
-          POSTGRES_DB: gent_test
+          POSTGRES_USER: genroc
+          POSTGRES_PASSWORD: genroc
+          POSTGRES_DB: genroc_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U gent"
+          --health-cmd "pg_isready -U genroc"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
       CGO_ENABLED: "1"
-      POSTGRES_DSN: postgres://gent:gent@localhost:5432/gent_test?sslmode=disable
+      POSTGRES_DSN: postgres://genroc:genroc@localhost:5432/genroc_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -126,7 +126,7 @@ jobs:
       - name: Track history
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: gent throughput
+          name: genroc throughput
           tool: customBiggerIsBetter
           output-file-path: ${{ runner.temp }}/bench.json
           github-token: ${{ secrets.GITHUB_TOKEN }}

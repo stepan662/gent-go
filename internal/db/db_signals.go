@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	dbgen "gent/internal/db/gen"
-	"gent/internal/model"
+	dbgen "genroc/internal/db/gen"
+	"genroc/internal/model"
 )
 
 // ArmExternalOrConsumeSignal is the engine's atomic entry into an external task. Under

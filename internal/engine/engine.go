@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"gent/internal/db"
-	"gent/internal/idgen"
-	"gent/internal/logview"
-	"gent/internal/model"
-	"gent/internal/schema"
-	"gent/internal/transport"
-	"gent/internal/validation"
+	"genroc/internal/db"
+	"genroc/internal/idgen"
+	"genroc/internal/logview"
+	"genroc/internal/model"
+	"genroc/internal/schema"
+	"genroc/internal/transport"
+	"genroc/internal/validation"
 )
 
 const (
@@ -1096,7 +1096,7 @@ func (e *Engine) audit(inst *model.ProcessInstance, ev logEvent) {
 	ev.ID = inst.ID
 	// Scrub every secret value (config + input + output, identified by the taint
 	// schemas) from the log before it is emitted or stored. A single sink here is
-	// the robust choice: gent expressions have no functions, so a secret always
+	// the robust choice: genroc expressions have no functions, so a secret always
 	// appears verbatim (or as a substring) in any logged value — there is no way for
 	// it to reach a log line in a form a string-replace would miss.
 	if secrets := e.contextSecrets(inst); len(secrets) > 0 {

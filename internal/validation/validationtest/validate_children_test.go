@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"gent/internal/model"
-	"gent/internal/schema"
-	"gent/internal/validation"
+	"genroc/internal/model"
+	"genroc/internal/schema"
+	"genroc/internal/validation"
 )
 
 // inputShape wraps a flat expression map as a model.Shape (object form), the way

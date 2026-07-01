@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dbpkg "gent/internal/db"
+	dbpkg "genroc/internal/db"
 )
 
 // TestConcurrentOpenPostgres reproduces the fleet cold-start race: several workers
@@ -70,7 +70,7 @@ func freshDatabase(t *testing.T, dsn string) (string, func()) {
 		t.Fatalf("parse POSTGRES_DSN: %v", err)
 	}
 	// time-based name; digits only, so no injection risk in the CREATE/DROP below.
-	name := fmt.Sprintf("gent_bootstrap_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("genroc_bootstrap_%d", time.Now().UnixNano())
 
 	admin := *u
 	admin.Path = "/postgres"

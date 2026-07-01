@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	dbpkg "gent/internal/db"
-	"gent/internal/model"
+	dbpkg "genroc/internal/db"
+	"genroc/internal/model"
 )
 
 // appendLog writes one entry with an explicit timestamp so ordering and

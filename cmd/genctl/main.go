@@ -1,31 +1,31 @@
-// gentctl is a command-line gateway to a running gent server, inspired by kubectl.
+// genctl is a command-line gateway to a running genroc server, inspired by kubectl.
 // It reads process definition files (YAML or JSON, multi-document via ---) and
 // forwards them to the server in a single API call.
 //
 // Usage:
 //
-//	gentctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
-//	gentctl validate -f file.yaml [-f file2.yaml ...]
-//	gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]
-//	gentctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
-//	gentctl get      <instance-id> [--json]
-//	gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--recursive] [--mode basic|detail|json] <instance-id>
-//	gentctl cancel   <instance-id>
-//	gentctl retry    [--force] <instance-id>
-//	gentctl last
+//	genctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
+//	genctl validate -f file.yaml [-f file2.yaml ...]
+//	genctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]
+//	genctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
+//	genctl get      <instance-id> [--json]
+//	genctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--recursive] [--mode basic|detail|json] <instance-id>
+//	genctl cancel   <instance-id>
+//	genctl retry    [--force] <instance-id>
+//	genctl last
 //
 // get/logs/cancel/retry require an instance id; pass @last for the most recently
-// started instance (recorded by run). `gentctl last` prints that id.
+// started instance (recorded by run). `genctl last` prints that id.
 //
-//	gentctl channel list   <process>
-//	gentctl channel set    <process> <channel> <version>
-//	gentctl channel delete <process> <channel>
-//	gentctl promote  --from <channel> --to <channel> [--process <name>]
-//	gentctl status   --channel <channel>
+//	genctl channel list   <process>
+//	genctl channel set    <process> <channel> <version>
+//	genctl channel delete <process> <channel>
+//	genctl promote  --from <channel> --to <channel> [--process <name>]
+//	genctl status   --channel <channel>
 //
 // Environment:
 //
-//	GENT_SERVER  base URL of the gent server (default: http://localhost:8448)
+//	GENROC_SERVER  base URL of the genroc server (default: http://localhost:8448)
 package main
 
 import (
@@ -43,7 +43,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"gent/internal/logview"
+	"genroc/internal/logview"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,7 +54,7 @@ func main() {
 	}
 
 	cfg := loadConfig()
-	server := os.Getenv("GENT_SERVER")
+	server := os.Getenv("GENROC_SERVER")
 	if server == "" {
 		server = cfg.Server
 	}
@@ -93,7 +93,7 @@ func main() {
 	case "config":
 		runConfigCmd(args)
 	default:
-		fmt.Fprintf(os.Stderr, "gentctl: unknown command %q\n", cmd)
+		fmt.Fprintf(os.Stderr, "genctl: unknown command %q\n", cmd)
 		usage()
 		os.Exit(1)
 	}
@@ -103,13 +103,13 @@ func runApplyCmd(server string, args []string) {
 	fs := flag.NewFlagSet("apply", flag.ExitOnError)
 	var files multiFlag
 	fs.Var(&files, "f", "definition file (YAML or JSON); repeat for multiple files")
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	channelFlag := fs.String("channel", "latest", "channel to apply definitions to")
 	autoUpdateFlag := fs.Bool("auto-update-parents", false, "auto-update parent processes on the same channel")
 	fs.Parse(args)
 
 	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "gentctl: -f is required")
+		fmt.Fprintln(os.Stderr, "genctl: -f is required")
 		os.Exit(1)
 	}
 
@@ -145,11 +145,11 @@ func runValidateCmd(server string, args []string) {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
 	var files multiFlag
 	fs.Var(&files, "f", "definition file (YAML or JSON); repeat for multiple files")
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	fs.Parse(args)
 
 	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "gentctl: -f is required")
+		fmt.Fprintln(os.Stderr, "genctl: -f is required")
 		os.Exit(1)
 	}
 
@@ -170,12 +170,12 @@ func runValidateCmd(server string, args []string) {
 
 func runChannelCmd(server string, args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gentctl channel <list|set|delete> ...")
+		fmt.Fprintln(os.Stderr, "Usage: genctl channel <list|set|delete> ...")
 		os.Exit(1)
 	}
 
 	fs := flag.NewFlagSet("channel", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	fs.Parse(args[1:])
 	rest := fs.Args()
 
@@ -183,7 +183,7 @@ func runChannelCmd(server string, args []string) {
 	switch sub {
 	case "list":
 		if len(rest) < 1 {
-			fatal("usage: gentctl channel list <process>")
+			fatal("usage: genctl channel list <process>")
 		}
 		type channelRow struct {
 			Channel string `json:"channel"`
@@ -200,7 +200,7 @@ func runChannelCmd(server string, args []string) {
 
 	case "set":
 		if len(rest) < 3 {
-			fatal("usage: gentctl channel set <process> <channel> <version>")
+			fatal("usage: genctl channel set <process> <channel> <version>")
 		}
 		v, err := strconv.Atoi(rest[2])
 		if err != nil || v < 1 {
@@ -214,7 +214,7 @@ func runChannelCmd(server string, args []string) {
 
 	case "delete":
 		if len(rest) < 2 {
-			fatal("usage: gentctl channel delete <process> <channel>")
+			fatal("usage: genctl channel delete <process> <channel>")
 		}
 		if err := call(*serverFlag+"/channels", http.MethodDelete,
 			map[string]any{"name": rest[0], "channel": rest[1]}, nil); err != nil {
@@ -229,7 +229,7 @@ func runChannelCmd(server string, args []string) {
 
 func runPromoteCmd(server string, args []string) {
 	fs := flag.NewFlagSet("promote", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	fromFlag := fs.String("from", "", "source channel")
 	toFlag := fs.String("to", "", "target channel")
 	processFlag := fs.String("process", "", "limit to this process and its dependency subtree (optional)")
@@ -259,7 +259,7 @@ func runPromoteCmd(server string, args []string) {
 
 func runStatusCmd(server string, args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	channelFlag := fs.String("channel", "latest", "channel to inspect")
 	fs.Parse(args)
 
@@ -296,23 +296,23 @@ func runStatusCmd(server string, args []string) {
 }
 
 // runRunCmd starts a new process instance. The process name is the first
-// argument; flags follow it (e.g. `gentctl run greeter --set name=Sam`). Input is
+// argument; flags follow it (e.g. `genctl run greeter --set name=Sam`). Input is
 // assembled from --input (a JSON/YAML literal, @file, or - for stdin) and any
 // number of --set key=value overrides; see buildInput.
 func runRunCmd(server string, args []string) {
 	if len(args) == 0 {
-		fatal("usage: gentctl run <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]")
+		fatal("usage: genctl run <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]")
 	}
 	process := args[0]
 
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	channelFlag := fs.String("channel", "", "resolve the version via this channel")
 	versionFlag := fs.Int("version", 0, "pin an explicit process version")
 	inputFlag := fs.String("input", "", "input as a JSON/YAML literal, @file, or - for stdin")
 	var sets multiFlag
 	fs.Var(&sets, "set", "set an input field: key=value (repeatable; dotted keys nest, values are type-inferred)")
-	quietFlag := fs.Bool("quiet", false, "print only the new instance id, e.g. id=$(gentctl run NAME -q)")
+	quietFlag := fs.Bool("quiet", false, "print only the new instance id, e.g. id=$(genctl run NAME -q)")
 	fs.BoolVar(quietFlag, "q", false, "shorthand for --quiet")
 	fs.Parse(args[1:])
 
@@ -349,9 +349,9 @@ func runRunCmd(server string, args []string) {
 	// Record the id so a follow-up command can resolve @last (or a bare-id default)
 	// without copy-pasting. Best-effort: an unwritable state dir must not fail run.
 	if err := saveLastInstance(resp.ID); err != nil {
-		fmt.Fprintf(os.Stderr, "gentctl: warning: could not record last instance id: %v\n", err)
+		fmt.Fprintf(os.Stderr, "genctl: warning: could not record last instance id: %v\n", err)
 	}
-	// -q prints just the id so it composes: id=$(gentctl run NAME -q).
+	// -q prints just the id so it composes: id=$(genctl run NAME -q).
 	if *quietFlag {
 		fmt.Println(resp.ID)
 		return
@@ -363,7 +363,7 @@ func runRunCmd(server string, args []string) {
 // instance id is the first argument; pass --json for the raw response.
 func runGetCmd(server string, args []string) {
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	jsonFlag := fs.Bool("json", false, "print the raw JSON response")
 	resolveFlag := fs.Bool("resolve", false, "resolve externalized context values inline instead of {ref, size} references")
 	id := instanceIDAndFlags(fs, args)
@@ -427,7 +427,7 @@ func runGetCmd(server string, args []string) {
 
 func runInstancesCmd(server string, args []string) {
 	fs := flag.NewFlagSet("instances", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	statusFlag := fs.String("status", "", "filter by status (running, completed, failing, failed, cancelling, cancelled)")
 	sortFlag := fs.String("sort", "created", "sort key: created (newest first) or updated (most recently active)")
 	limitFlag := fs.Int("limit", 20, "max instances to show (server caps a page at 100; use --all for more)")
@@ -489,7 +489,7 @@ func runInstancesCmd(server string, args []string) {
 
 func runLogsCmd(server string, args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	levelFlag := fs.String("level", "", "filter by level (debug, info, warn, error); empty = all")
 	sinceFlag := fs.Int64("since", 0, "only logs at/after this unix-millis timestamp")
 	limitFlag := fs.Int("limit", 200, "max entries to return")
@@ -602,7 +602,7 @@ func shortID(id string) string {
 	return id
 }
 
-// ── input assembly (gentctl run) ────────────────────────────────────────────────
+// ── input assembly (genctl run) ────────────────────────────────────────────────
 
 // buildInput assembles the process input from --input and any --set overrides. The
 // --input value (a JSON/YAML literal, @file, or - for stdin) is the base; each
@@ -791,7 +791,7 @@ func longTime(rfc string) string {
 
 func runCancelCmd(server string, args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	id := instanceIDAndFlags(fs, args)
 
 	if err := call(*serverFlag+"/instances/"+url.PathEscape(id)+"/cancel", http.MethodPost, nil, nil); err != nil {
@@ -802,7 +802,7 @@ func runCancelCmd(server string, args []string) {
 
 func runRetryCmd(server string, args []string) {
 	fs := flag.NewFlagSet("retry", flag.ExitOnError)
-	serverFlag := fs.String("server", server, "gent server base URL ($GENT_SERVER)")
+	serverFlag := fs.String("server", server, "genroc server base URL ($GENROC_SERVER)")
 	forceFlag := fs.Bool("force", false, "override only_once retry protection")
 	id := instanceIDAndFlags(fs, args)
 
@@ -817,7 +817,7 @@ func runRetryCmd(server string, args []string) {
 }
 
 // runLastCmd prints the most recently started instance id (recorded by `run`), so
-// it can be spliced into other commands, e.g. `gentctl logs $(gentctl last)`.
+// it can be spliced into other commands, e.g. `genctl logs $(genctl last)`.
 func runLastCmd(args []string) {
 	fmt.Println(resolveInstanceID("@last"))
 }
@@ -988,7 +988,7 @@ func (m *multiFlag) Set(v string) error {
 	return nil
 }
 
-type gentConfig struct {
+type genrocConfig struct {
 	Server string `yaml:"server,omitempty"`
 }
 
@@ -997,24 +997,24 @@ func configFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "gent", "config.yaml"), nil
+	return filepath.Join(dir, "genroc", "config.yaml"), nil
 }
 
-func loadConfig() gentConfig {
+func loadConfig() genrocConfig {
 	path, err := configFilePath()
 	if err != nil {
-		return gentConfig{}
+		return genrocConfig{}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return gentConfig{}
+		return genrocConfig{}
 	}
-	var cfg gentConfig
+	var cfg genrocConfig
 	yaml.Unmarshal(data, &cfg)
 	return cfg
 }
 
-func saveConfig(cfg gentConfig) error {
+func saveConfig(cfg genrocConfig) error {
 	path, err := configFilePath()
 	if err != nil {
 		return err
@@ -1029,7 +1029,7 @@ func saveConfig(cfg gentConfig) error {
 	return os.WriteFile(path, data, 0600)
 }
 
-// ── last-instance state (gentctl run → @last) ───────────────────────────────────
+// ── last-instance state (genctl run → @last) ───────────────────────────────────
 
 // lastInstanceFilePath is where `run` records the most recently started instance
 // id, kept beside the config so a follow-up command can resolve `@last` (or a bare
@@ -1039,7 +1039,7 @@ func lastInstanceFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "gent", "last"), nil
+	return filepath.Join(dir, "genroc", "last"), nil
 }
 
 // saveLastInstance records id as the most recently started instance. Best-effort:
@@ -1083,7 +1083,7 @@ func resolveInstanceID(arg string) string {
 	}
 	id := loadLastInstance()
 	if id == "" {
-		fatal("@last: no instance recorded yet — run `gentctl run <process>` first")
+		fatal("@last: no instance recorded yet — run `genctl run <process>` first")
 	}
 	return id
 }
@@ -1107,8 +1107,8 @@ func instanceIDAndFlags(fs *flag.FlagSet, args []string) string {
 
 func runConfigCmd(args []string) {
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: gentctl config get <key>")
-		fmt.Fprintln(os.Stderr, "       gentctl config set <key> <value>")
+		fmt.Fprintln(os.Stderr, "Usage: genctl config get <key>")
+		fmt.Fprintln(os.Stderr, "       genctl config set <key> <value>")
 		os.Exit(1)
 	}
 	sub, key := args[0], args[1]
@@ -1127,7 +1127,7 @@ func runConfigCmd(args []string) {
 		}
 	case "set":
 		if len(args) < 3 {
-			fatal("usage: gentctl config set <key> <value>")
+			fatal("usage: genctl config set <key> <value>")
 		}
 		val := args[2]
 		cfg := loadConfig()
@@ -1149,39 +1149,39 @@ func runConfigCmd(args []string) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `Usage:
-  gentctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
-  gentctl validate -f file.yaml [-f file2.yaml ...]
-  gentctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]
-  gentctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
-  gentctl get      <instance-id> [--json]
-  gentctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--recursive] [--mode basic|detail|json] <instance-id>
-  gentctl cancel   <instance-id>
-  gentctl retry    [--force] <instance-id>
-  gentctl last
-  gentctl channel list   <process>
-  gentctl channel set    <process> <channel> <version>
-  gentctl channel delete <process> <channel>
-  gentctl promote  --from <channel> --to <channel> [--process <name>]
-  gentctl status   --channel <channel>
-  gentctl config   get <key>
-  gentctl config   set <key> <value>
+  genctl apply    -f file.yaml [-f file2.yaml ...] [--channel latest] [--auto-update-parents]
+  genctl validate -f file.yaml [-f file2.yaml ...]
+  genctl run      <process> [--channel C | --version N] [--input <json|@file|->] [--set k=v ...] [-q]
+  genctl instances [--status <status>] [--sort updated|created] [--limit <n>] [--all]
+  genctl get      <instance-id> [--json]
+  genctl logs     [--level <level>] [--since <ms>] [--limit <n>] [--recursive] [--mode basic|detail|json] <instance-id>
+  genctl cancel   <instance-id>
+  genctl retry    [--force] <instance-id>
+  genctl last
+  genctl channel list   <process>
+  genctl channel set    <process> <channel> <version>
+  genctl channel delete <process> <channel>
+  genctl promote  --from <channel> --to <channel> [--process <name>]
+  genctl status   --channel <channel>
+  genctl config   get <key>
+  genctl config   set <key> <value>
 
 Flags:
   -f        definition file (YAML or JSON, multi-doc --- supported)
   --input   process input: a JSON/YAML literal, @file, or - for stdin
   --set     input field key=value (repeatable; dotted keys nest, values type-inferred)
-  --server  gent server URL (overrides $GENT_SERVER and config file)
-  -q        with run, print only the new instance id (id=$(gentctl run NAME -q))
+  --server  genroc server URL (overrides $GENROC_SERVER and config file)
+  -q        with run, print only the new instance id (id=$(genctl run NAME -q))
 
 Instance id:
   get/logs/cancel/retry require an instance id; pass @last for the most recently
-  started instance (recorded by run), or run "gentctl last" to print it.
+  started instance (recorded by run), or run "genctl last" to print it.
 
 Config keys:
-  server    gent server base URL`)
+  server    genroc server base URL`)
 }
 
 func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "gentctl: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "genctl: "+format+"\n", args...)
 	os.Exit(1)
 }

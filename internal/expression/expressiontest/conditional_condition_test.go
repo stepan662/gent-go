@@ -3,7 +3,7 @@ package expressiontest
 import "testing"
 
 // nullableErrorSchema — error is a nullable object with string fields task/message/code,
-// mirroring the error context shape produced by the gent engine.
+// mirroring the error context shape produced by the genroc engine.
 var nullableErrorSchema = mustSchema(`{
 	"properties": {
 		"error": {

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"gent/internal/model"
-	"gent/internal/validation"
+	"genroc/internal/model"
+	"genroc/internal/validation"
 )
 
 func runGenerate(t *testing.T, defJSON string) validation.SchemaFile {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"gent/internal/schema"
+	"genroc/internal/schema"
 )
 
 // ErrUnsupported is returned when the expression uses a construct outside

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"gent/internal/api"
+	"genroc/internal/api"
 )
 
 func main() {

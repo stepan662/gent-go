@@ -8,24 +8,24 @@ const ROOT = new URL("../../", import.meta.url).pathname;
 
 let cachedBin: string | null = null;
 
-// gentctl persists its "last started instance" id under the user config dir
+// genctl persists its "last started instance" id under the user config dir
 // (os.UserConfigDir → $HOME/Library/... on macOS, $XDG_CONFIG_HOME on Linux). Point
 // both at a throwaway dir so CLI tests exercise @last without touching the real
 // machine config, and so a `run` in one test is visible to a later command in it.
-const CLI_HOME = mkdtempSync(join(tmpdir(), "gent_cli_home_"));
+const CLI_HOME = mkdtempSync(join(tmpdir(), "genroc_cli_home_"));
 
-export function buildGentctlBinary(): string {
+export function buildGenctlBinary(): string {
   if (cachedBin) return cachedBin;
-  // Build gentctl directly (like buildGentBinary builds gent) rather than `make
+  // Build genctl directly (like buildGenrocBinary builds genroc) rather than `make
   // build`, which also runs sqlc — and sqlc@v1.31.1 needs Go >= 1.26, triggering a
   // slow toolchain download on a fresh CI runner that blew the 10s test hook.
-  // gentctl is a pure client (no CGO needed), and gen/ is committed.
-  const bin = join(ROOT, "gentctl");
-  const result = spawnSync("go", ["build", "-o", bin, "./cmd/gentctl"], {
+  // genctl is a pure client (no CGO needed), and gen/ is committed.
+  const bin = join(ROOT, "genctl");
+  const result = spawnSync("go", ["build", "-o", bin, "./cmd/genctl"], {
     cwd: ROOT,
     stdio: ["ignore", "ignore", "inherit"],
   });
-  if (result.status !== 0) throw new Error("Failed to build gentctl binary");
+  if (result.status !== 0) throw new Error("Failed to build genctl binary");
   cachedBin = bin;
   return cachedBin;
 }
@@ -45,7 +45,7 @@ export function runCli(
   const result = spawnSync(bin, args, {
     env: {
       ...process.env,
-      GENT_SERVER: BASE_URL,
+      GENROC_SERVER: BASE_URL,
       HOME: CLI_HOME,
       XDG_CONFIG_HOME: join(CLI_HOME, ".config"),
       ...env,
@@ -64,7 +64,7 @@ export function runCli(
 export function writeDefs(defs: object[]): string {
   const path = join(
     tmpdir(),
-    `gent_cli_test_${Date.now()}_${Math.random().toString(36).slice(2)}.yaml`,
+    `genroc_cli_test_${Date.now()}_${Math.random().toString(36).slice(2)}.yaml`,
   );
   const yaml = defs.map((d) => jsonToYaml(d)).join("\n---\n");
   writeFileSync(path, yaml, "utf8");

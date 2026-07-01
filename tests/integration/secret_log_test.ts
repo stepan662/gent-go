@@ -3,7 +3,7 @@ import { client, startMockService, waitForInstance } from "../helpers/client.ts"
 
 // A secret config value used to build the endpoint URL must be redacted to "***"
 // in the stored audit log — the raw secret must never reach the logs table.
-// GENT_GLOBAL_SERVER_URL = http://localhost:14100 (fixture in helpers/server.ts).
+// GENROC_GLOBAL_SERVER_URL = http://localhost:14100 (fixture in helpers/server.ts).
 test("a secret config value in the endpoint URL is redacted in stored logs", async () => {
   const mock = await startMockService(14100, { response: { slept: 1 } });
   const name = `secret_url_log_${crypto.randomUUID()}`;

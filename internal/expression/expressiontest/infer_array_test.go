@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"gent/internal/expression"
-	"gent/internal/schema"
+	"genroc/internal/expression"
+	"genroc/internal/schema"
 )
 
 const arrayCtxJSON = `{

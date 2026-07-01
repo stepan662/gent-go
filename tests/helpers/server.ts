@@ -6,14 +6,14 @@ import { createClientTyped } from "./client.ts";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
-export async function buildGentBinary(): Promise<string> {
-  const bin = join(tmpdir(), `gent_${Date.now()}`);
-  const result = spawnSync("go", ["build", "-o", bin, "./cmd/gent"], {
+export async function buildGenrocBinary(): Promise<string> {
+  const bin = join(tmpdir(), `genroc_${Date.now()}`);
+  const result = spawnSync("go", ["build", "-o", bin, "./cmd/genroc"], {
     cwd: ROOT,
     env: { ...process.env, CGO_ENABLED: "1" },
     stdio: ["ignore", "ignore", "inherit"],
   });
-  if (result.status !== 0) throw new Error("Failed to build gent binary");
+  if (result.status !== 0) throw new Error("Failed to build genroc binary");
   return bin;
 }
 
@@ -32,36 +32,36 @@ function spawnProc(
   const retryArgs = immediateRetries ? ["--immediate-retries"] : [];
   // Optional lease overrides via env (used by the benchmark to tune the lease).
   const leaseArgs = [
-    ...(process.env.GENT_LEASE_DURATION ? ["--lease-duration", process.env.GENT_LEASE_DURATION] : []),
-    ...(process.env.GENT_LEASE_RENEW_INTERVAL ? ["--lease-renew-interval", process.env.GENT_LEASE_RENEW_INTERVAL] : []),
+    ...(process.env.GENROC_LEASE_DURATION ? ["--lease-duration", process.env.GENROC_LEASE_DURATION] : []),
+    ...(process.env.GENROC_LEASE_RENEW_INTERVAL ? ["--lease-renew-interval", process.env.GENROC_LEASE_RENEW_INTERVAL] : []),
   ];
   // Optional pool sizing via env (used by the stress test to keep a fleet within max_connections).
-  const poolArgs = process.env.GENT_PG_MAX_OPEN_CONNS
-    ? ["--pg-max-open-conns", process.env.GENT_PG_MAX_OPEN_CONNS]
+  const poolArgs = process.env.GENROC_PG_MAX_OPEN_CONNS
+    ? ["--pg-max-open-conns", process.env.GENROC_PG_MAX_OPEN_CONNS]
     : [];
   // Optional SQLite durability via env (used by the benchmark to compare engines at
-  // matched durability, e.g. GENT_SQLITE_SYNCHRONOUS=FULL). Ignored for Postgres.
-  const syncArgs = process.env.GENT_SQLITE_SYNCHRONOUS
-    ? ["--sqlite-synchronous", process.env.GENT_SQLITE_SYNCHRONOUS]
+  // matched durability, e.g. GENROC_SQLITE_SYNCHRONOUS=FULL). Ignored for Postgres.
+  const syncArgs = process.env.GENROC_SQLITE_SYNCHRONOUS
+    ? ["--sqlite-synchronous", process.env.GENROC_SQLITE_SYNCHRONOUS]
     : [];
   return spawn(bin, [...dbArgs, "--http", `:${port}`, "--log", "error", ...pollArgs, ...concArgs, ...retryArgs, ...leaseArgs, ...poolArgs, ...syncArgs], {
     stdio: "ignore",
     // Fixed config fixtures for the config e2e test. The test's process names are
-    // random, so we use the global tier (GENT_GLOBAL_<NAME> → config.<NAME>).
+    // random, so we use the global tier (GENROC_GLOBAL_<NAME> → config.<NAME>).
     env: {
       ...process.env,
-      GENT_GLOBAL_E2E_URL: "https://config.example.test",
-      GENT_GLOBAL_E2E_PORT: "8080",
-      GENT_GLOBAL_E2E_TOKEN: "supersecret-token-value",
+      GENROC_GLOBAL_E2E_URL: "https://config.example.test",
+      GENROC_GLOBAL_E2E_PORT: "8080",
+      GENROC_GLOBAL_E2E_TOKEN: "supersecret-token-value",
       // Config-sourced URL for secret_log_test's "secret config value in the URL"
       // case. A config value is baked in here at server start (a random port-0 can't
       // be known yet), so each file needing one gets its OWN fixed port — Vitest runs
       // test files in parallel, and two files sharing a port would collide.
-      GENT_GLOBAL_SERVER_URL: "http://localhost:14100",
+      GENROC_GLOBAL_SERVER_URL: "http://localhost:14100",
       // Dedicated fixed port for endpoint_template_test (avoids the 14100 clash).
-      GENT_GLOBAL_ENDPOINT_URL: "http://localhost:14101",
+      GENROC_GLOBAL_ENDPOINT_URL: "http://localhost:14101",
       // A secret config value for the API-redaction test.
-      GENT_GLOBAL_API_KEY: "supersecret-api-key",
+      GENROC_GLOBAL_API_KEY: "supersecret-api-key",
     },
   });
 }
@@ -76,16 +76,16 @@ async function waitUntilReady(port: number, timeoutMs = 10_000): Promise<void> {
     } catch {}
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`gent on port ${port} did not become ready within ${timeoutMs}ms`);
+  throw new Error(`genroc on port ${port} did not become ready within ${timeoutMs}ms`);
 }
 
-export interface GentProcess {
+export interface GenrocProcess {
   client: ReturnType<typeof createClientTyped>;
   stop: () => void;  // SIGTERM — clean shutdown
   crash: () => void; // SIGKILL — simulate a hard crash, lease stays in DB
 }
 
-export async function startGent(
+export async function startGenroc(
   bin: string,
   port: number,
   db: string,
@@ -93,7 +93,7 @@ export async function startGent(
   pollMs?: number,
   maxConcurrent?: number,
   immediateRetries?: boolean,
-): Promise<GentProcess> {
+): Promise<GenrocProcess> {
   const proc = spawnProc(bin, port, db, pgDSN, pollMs, maxConcurrent, immediateRetries);
   await waitUntilReady(port);
   return {
@@ -132,13 +132,13 @@ function workerArgs(port: number, o: WorkerOpts): string[] {
     ...(o.immediateRetries ? ["--immediate-retries"] : []),
     ...(o.pgMaxOpenConns !== undefined
       ? ["--pg-max-open-conns", String(o.pgMaxOpenConns)]
-      : process.env.GENT_PG_MAX_OPEN_CONNS
-        ? ["--pg-max-open-conns", process.env.GENT_PG_MAX_OPEN_CONNS]
+      : process.env.GENROC_PG_MAX_OPEN_CONNS
+        ? ["--pg-max-open-conns", process.env.GENROC_PG_MAX_OPEN_CONNS]
         : []),
   ];
 }
 
-// startSupervisedWorker runs one gent worker process and restarts it whenever it
+// startSupervisedWorker runs one genroc worker process and restarts it whenever it
 // exits — exactly what a process supervisor (systemd, k8s) does for a worker fleet.
 // A worker that overwhelms its lease renewer exits non-zero; the supervisor brings
 // it back with a fresh pid (so its abandoned leases expire and are reclaimed). This
@@ -178,7 +178,7 @@ export async function startSupervisedWorker(
 
 // ── Global shared server for vitest's globalSetup ─────────────────────────────
 
-let sharedServer: GentProcess | null = null;
+let sharedServer: GenrocProcess | null = null;
 
 async function ping(): Promise<boolean> {
   try {
@@ -193,9 +193,9 @@ async function ping(): Promise<boolean> {
 export async function setup() {
   if (await ping()) return;
   console.log("\nBuilding test server…");
-  const bin = await buildGentBinary();
-  const db = join(tmpdir(), `gent_${Date.now()}.db`);
-  sharedServer = await startGent(bin, PORT as number, db);
+  const bin = await buildGenrocBinary();
+  const db = join(tmpdir(), `genroc_${Date.now()}.db`);
+  sharedServer = await startGenroc(bin, PORT as number, db);
 }
 
 export function teardown() {

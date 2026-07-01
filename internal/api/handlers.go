@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"gent/internal/db"
-	"gent/internal/idgen"
-	"gent/internal/model"
-	"gent/internal/schema"
-	"gent/internal/validation"
+	"genroc/internal/db"
+	"genroc/internal/idgen"
+	"genroc/internal/model"
+	"genroc/internal/schema"
+	"genroc/internal/validation"
 )
 
 const defaultChannel = "latest"
@@ -325,7 +325,7 @@ func (h *Handlers) putDefinition(raw json.RawMessage) Reply {
 	}
 	// Reject registration if a required config var has no value in the server
 	// environment, the same rule ResolveConfig enforces at instance start — so a
-	// missing GENT_<PROCESS>_<NAME> surfaces here rather than on first start.
+	// missing GENROC_<PROCESS>_<NAME> surfaces here rather than on first start.
 	if _, err := req.ResolveConfig(os.LookupEnv); err != nil {
 		return errReply(err)
 	}
@@ -1381,9 +1381,9 @@ type taskChildKey struct {
 }
 
 // applyDepsToDefCopy returns a deep copy of def with resolved child versions baked in.
-// Self-refs (entry.Name == def.Name) keep version=0 since gentschema handles them
+// Self-refs (entry.Name == def.Name) keep version=0 since genrocschema handles them
 // separately and the engine resolves them via inst.ProcessVersion.
-// Used to produce a validation copy for gentschema — the raw def stored in DB is unchanged.
+// Used to produce a validation copy for genrocschema — the raw def stored in DB is unchanged.
 func applyDepsToDefCopy(def *model.ProcessDefinition, deps []db.DependencyRow) *model.ProcessDefinition {
 	data, _ := json.Marshal(def)
 	var copy model.ProcessDefinition
