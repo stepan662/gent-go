@@ -2,7 +2,7 @@ window.BENCHMARK_DATA = {
   "lastUpdate": 1782910438735,
   "repoUrl": "https://github.com/stepan662/genroc",
   "entries": {
-    "gent throughput": [
+    "genroc throughput": [
       {
         "commit": {
           "author": {
@@ -2754,9 +2754,7 @@ window.BENCHMARK_DATA = {
             "extra": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz · 4 cores · 16GB · linux x64 6.17.0-1018-azure"
           }
         ]
-      }
-    ],
-    "genroc throughput": [
+      },
       {
         "commit": {
           "author": {
