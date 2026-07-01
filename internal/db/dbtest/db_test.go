@@ -30,6 +30,18 @@ func TestMain(m *testing.M) {
 		sharedPgDB = pg
 		defer pg.Close()
 
+		// The stress tests use sharedPgDB directly (they never call testBackends)
+		// and only wipe process_instances between iterations. Their fixtures
+		// reference process "test" v1 / task "step1", and RetryProcess resolves a
+		// node's task from process_definitions — so the definition must exist.
+		// testBackends registers it too, but the `stress` CI job runs
+		// `go test -run TestStress`, which skips every testBackends-using test, so
+		// without this the definition is absent on a fresh DB and RetryProcess fails.
+		def := &model.ProcessDefinition{Name: "test", Tasks: []*model.Task{{ID: "step1"}}}
+		if err := pg.SaveDefinition(def, 1, nil, "test-hash", ""); err != nil {
+			log.Fatalf("register baseline definition for stress tests: %v", err)
+		}
+
 		raw, err := sql.Open("postgres", dsn)
 		if err != nil {
 			log.Fatalf("open raw postgres for tests: %v", err)

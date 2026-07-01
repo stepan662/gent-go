@@ -23,6 +23,7 @@ tasks:
         properties:
           result:
             type: string
+            secret: true
     output: "{{self.result}}"
     switch: end
 
