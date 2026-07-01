@@ -372,7 +372,8 @@ func (h *Handlers) startInstance(raw json.RawMessage) Reply {
 		input = *req.Input
 	}
 
-	if err := def.ValidateInput(input); err != nil {
+	input, err = def.ValidateInput(input)
+	if err != nil {
 		return errReply(fmt.Errorf("input validation: %w", err))
 	}
 
@@ -633,9 +634,11 @@ func (h *Handlers) resolveExternalTask(raw json.RawMessage) Reply {
 	// absent). The task definition is immutable, so validating the pre-lock snapshot is
 	// safe; ResolveExternalTask re-checks the parked state + token atomically.
 	if task.Action != nil {
-		if err := task.Action.ValidateOutput(req.Result); err != nil {
+		normalized, err := task.Action.ValidateOutput(req.Result)
+		if err != nil {
 			return errReply(fmt.Errorf("result validation: %w", err))
 		}
+		req.Result = normalized
 	}
 	if err := h.db.ResolveExternalTask(context.Background(), instanceID, req.Token, req.Result); err != nil {
 		return errReply(err)
@@ -681,9 +684,11 @@ func (h *Handlers) signalInstance(id string, raw json.RawMessage) Reply {
 	if target.Action == nil || target.Action.Type != model.ActionTypeExternal {
 		return errReply(fmt.Errorf("task %q is not an external task", req.TaskID))
 	}
-	if err := target.Action.ValidateOutput(req.Result); err != nil {
+	normalized, err := target.Action.ValidateOutput(req.Result)
+	if err != nil {
 		return errReply(fmt.Errorf("result validation: %w", err))
 	}
+	req.Result = normalized
 	delivered, err := h.db.DeliverSignal(context.Background(), id, req.TaskID, idgen.New(), req.Result)
 	if err != nil {
 		return errReply(err)

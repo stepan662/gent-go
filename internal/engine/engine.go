@@ -735,12 +735,15 @@ func (e *Engine) executeAction(ctx context.Context, inst *model.ProcessInstance,
 		return nil, stop(e.handleCallError(inst, task, msg, resp.ErrorCode))
 	}
 
-	// result_schema validates the raw result; it does not export it. The result is
-	// transient — available to this task's own output/switch as self.result. Only an
-	// `output` projection adds anything to outputs.<id>.
-	if err := task.Action.ValidateOutput(resp.Body); err != nil {
+	// result_schema validates the raw result and normalizes it (undeclared keys
+	// dropped, defaults filled); it does not export it. The result is transient —
+	// available to this task's own output/switch as self.result. Only an `output`
+	// projection adds anything to outputs.<id>.
+	normalized, err := task.Action.ValidateOutput(resp.Body)
+	if err != nil {
 		return nil, stop(e.handleCallError(inst, task, err.Error(), "output.invalid"))
 	}
+	resp.Body = normalized
 	inst.RetryCount = 0
 
 	// action_succeeded (debug): the response body in data, the HTTP status in meta.
@@ -1538,7 +1541,8 @@ func (e *Engine) buildSingleChild(ctx context.Context, inst *model.ProcessInstan
 	if err != nil {
 		return nil, stop(e.failInstance(inst, err.Error()))
 	}
-	if err := def.ValidateInput(input); err != nil {
+	input, err = def.ValidateInput(input)
+	if err != nil {
 		return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q child input validation: %v", task.ID, err)))
 	}
 	childCtx := map[string]any{
@@ -1607,7 +1611,8 @@ func (e *Engine) buildParallelChildren(ctx context.Context, inst *model.ProcessI
 		if err != nil {
 			return nil, stop(e.failInstance(inst, err.Error()))
 		}
-		if err := def.ValidateInput(input); err != nil {
+		input, err = def.ValidateInput(input)
+		if err != nil {
 			return nil, stop(e.failInstance(inst, fmt.Sprintf("task %q child_parallel[%q] input validation: %v", task.ID, key, err)))
 		}
 		childCtx := map[string]any{

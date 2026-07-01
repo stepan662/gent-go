@@ -108,13 +108,28 @@ func (n *SchemaNode) UnmarshalJSON(data []byte) error {
 
 // Schema is an immutable JSON Schema value backed by a SchemaNode.
 // Every transformation method returns a new instance; the receiver is never modified.
+//
+// A Schema also carries the root $defs against which $refs resolve. Sub-schemas
+// produced by navigation (Infer / At) keep the same root defs, so path-scoped
+// operations — ValidateAt, SecretAt, Infer — resolve $refs even though the
+// sub-node itself holds no $defs. This is what lets the class operate uniformly
+// on any subpath, not just the root object.
 type Schema struct {
 	node *SchemaNode
+	defs map[string]*SchemaNode
+}
+
+// defsOf returns a node's own $defs (its root defs when the node is a root).
+func defsOf(n *SchemaNode) map[string]*SchemaNode {
+	if n == nil {
+		return nil
+	}
+	return n.Defs
 }
 
 // FromNode wraps a SchemaNode. The caller must not modify it after calling FromNode.
 func FromNode(n *SchemaNode) Schema {
-	return Schema{node: n}
+	return Schema{node: n, defs: defsOf(n)}
 }
 
 // Node returns the underlying SchemaNode. The caller must not modify it.
@@ -128,7 +143,7 @@ func Parse(data []byte) (Schema, error) {
 	if err := json.Unmarshal(data, &n); err != nil {
 		return Schema{}, err
 	}
-	return Schema{node: &n}, nil
+	return Schema{node: &n, defs: n.Defs}, nil
 }
 
 // Load wraps a raw schema map. Unrecognised keywords are silently dropped via a
@@ -148,7 +163,7 @@ func Load(raw map[string]any) Schema {
 		return Schema{node: &SchemaNode{}}
 	}
 	n := SchemaNode(a)
-	return Schema{node: &n}
+	return Schema{node: &n, defs: n.Defs}
 }
 
 // Raw returns the schema as a plain map. Intended for compatibility and testing;
@@ -179,22 +194,25 @@ func (s Schema) Normalize() (Schema, error) {
 	if err != nil {
 		return Schema{}, err
 	}
-	return Schema{node: out}, nil
+	return Schema{node: out, defs: out.Defs}, nil
 }
 
 // Infer navigates a dot-path expression (e.g. "user.issues[0].value") and
-// returns the subschema for the value at that path. The schema should be
-// normalized before calling Infer so that $refs are resolvable.
+// returns the subschema for the value at that path, carrying the same root $defs
+// so the result stays navigable/validatable. The schema should be normalized
+// before calling Infer so that $refs are resolvable.
 func (s Schema) Infer(path string) (Schema, error) {
-	var defs map[string]*SchemaNode
-	if s.node != nil {
-		defs = s.node.Defs
-	}
-	result, err := Navigate(s.node, defs, path)
+	result, err := Navigate(s.node, s.defs, path)
 	if err != nil {
 		return Schema{}, err
 	}
-	return Schema{node: result}, nil
+	return Schema{node: result, defs: s.defs}, nil
+}
+
+// At is an alias for Infer, reading better where the intent is "the schema at
+// this subpath" rather than "the inferred type of this expression".
+func (s Schema) At(path string) (Schema, error) {
+	return s.Infer(path)
 }
 
 // IsSubset reports whether every value valid under s is also valid under super.
@@ -219,7 +237,34 @@ func (s Schema) WithDef(name string, def Schema) Schema {
 		cloned.Defs = newDefs
 	}
 	cloned.Defs[name] = def.node
-	return Schema{node: cloned}
+	return Schema{node: cloned, defs: cloned.Defs}
+}
+
+// IsSecret reports whether this schema (the value at the root) is marked secret,
+// looking through nullable / single-variant union wrappers.
+func (s Schema) IsSecret() bool {
+	return IsSecret(s.node)
+}
+
+// SecretAt reports whether the value at path is secret — either the path passes
+// through a node marked secret, or it ends at one. Reading from inside a secret
+// object is itself secret. Returns false if the path cannot be resolved.
+func (s Schema) SecretAt(path string) bool {
+	return PathHitsSecret(s.node, s.defs, path)
+}
+
+// Redact returns data with every field whose schema is marked secret replaced by
+// "***", descending via the same navigation the type inference uses.
+func (s Schema) Redact(data any) any {
+	return Redact(data, s.node, s.defs)
+}
+
+// CollectSecrets returns the string form of every value in data whose schema is
+// marked secret — the gather half of log redaction.
+func (s Schema) CollectSecrets(data any) []string {
+	var out []string
+	CollectSecrets(data, s.node, s.defs, &out)
+	return out
 }
 
 // MarshalJSON implements json.Marshaler.

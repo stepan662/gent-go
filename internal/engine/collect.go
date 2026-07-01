@@ -2,13 +2,10 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
-
-	"github.com/xeipuuv/gojsonschema"
 
 	"genroc/internal/model"
+	"genroc/internal/schema"
 )
 
 // collectChildOutputs is called when a parent instance is in WaitStateCollecting.
@@ -49,11 +46,11 @@ func (e *Engine) buildSingleChildOutput(siblings []*model.ProcessInstance) (any,
 		return nil, err
 	}
 	if schemaRaw, _ := child.ContextData["_spawn_result_schema"].(string); schemaRaw != "" {
-		var schema map[string]any
-		json.Unmarshal([]byte(schemaRaw), &schema) //nolint:errcheck
-		if err := validateChildOutput(schema, output); err != nil {
+		normalized, err := validateChildOutput(schemaRaw, output)
+		if err != nil {
 			return nil, fmt.Errorf("child process %q (%s) output validation: %v", child.ID, child.ProcessName, err)
 		}
+		output = normalized
 	}
 	return output, nil
 }
@@ -70,31 +67,24 @@ func (e *Engine) buildParallelChildOutput(siblings []*model.ProcessInstance) (an
 			return nil, err
 		}
 		if schemaRaw, _ := child.ContextData["_spawn_result_schema"].(string); schemaRaw != "" {
-			var schema map[string]any
-			json.Unmarshal([]byte(schemaRaw), &schema) //nolint:errcheck
-			if err := validateChildOutput(schema, output); err != nil {
+			normalized, err := validateChildOutput(schemaRaw, output)
+			if err != nil {
 				return nil, fmt.Errorf("child process %q (%s) output validation: %v", child.ID, child.ProcessName, err)
 			}
+			output = normalized
 		}
 		result[key] = output
 	}
 	return result, nil
 }
 
-func validateChildOutput(schema map[string]any, output any) error {
-	result, err := gojsonschema.Validate(
-		gojsonschema.NewGoLoader(schema),
-		gojsonschema.NewGoLoader(output),
-	)
+// validateChildOutput parses the child's stored (already-normalized) result_schema
+// and validates the child output against it, returning the normalized output
+// (undeclared keys dropped, defaults filled).
+func validateChildOutput(schemaRaw string, output any) (any, error) {
+	sc, err := schema.Parse([]byte(schemaRaw))
 	if err != nil {
-		return fmt.Errorf("schema validation error: %w", err)
+		return nil, fmt.Errorf("schema validation error: %w", err)
 	}
-	if !result.Valid() {
-		msgs := make([]string, len(result.Errors()))
-		for i, e := range result.Errors() {
-			msgs[i] = e.String()
-		}
-		return fmt.Errorf("%s", strings.Join(msgs, "; "))
-	}
-	return nil
+	return sc.Validate(output)
 }

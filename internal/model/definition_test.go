@@ -645,7 +645,7 @@ func TestProcessDefinition_ValidateInput_Nullable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := def.ValidateInput(tt.input)
+			_, err := def.ValidateInput(tt.input)
 			if tt.wantErr && err == nil {
 				t.Error("expected error, got nil")
 			}
@@ -709,7 +709,7 @@ func TestStep_ValidateOutput_Nullable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := task.Action.ValidateOutput(tt.output)
+			_, err := task.Action.ValidateOutput(tt.output)
 			if tt.wantErr && err == nil {
 				t.Error("expected error, got nil")
 			}

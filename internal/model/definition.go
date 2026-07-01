@@ -13,7 +13,6 @@ import (
 	"genroc/internal/schema"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/xeipuuv/gojsonschema"
 )
 
 // GotoEnd signals process termination. Stored verbatim in SwitchCase.Goto and
@@ -743,15 +742,17 @@ func checkSchemaDoc(field string, s *schema.SchemaNode) error {
 	if s == nil {
 		return nil
 	}
-	if _, err := gojsonschema.NewSchema(gojsonschema.NewGoLoader(s)); err != nil {
+	if err := schema.CheckDoc(s); err != nil {
 		return fmt.Errorf("%s is not a valid JSON Schema: %w", field, err)
 	}
 	return nil
 }
 
-// ValidateInput checks input data against InputSchema. No-op if InputSchema is nil.
-func (d *ProcessDefinition) ValidateInput(input any) error {
-	return validateSchema(d.InputSchema, input)
+// ValidateInput checks input against InputSchema and returns the normalized value
+// (undeclared properties dropped, defaults filled). Returns input unchanged when
+// InputSchema is nil.
+func (d *ProcessDefinition) ValidateInput(input any) (any, error) {
+	return schema.Validate(d.InputSchema, input)
 }
 
 // ResolveConfig reads each config var declared in ConfigSchema from the OS
@@ -798,7 +799,7 @@ func (d *ProcessDefinition) ResolveConfig(lookup func(string) (string, bool)) (m
 		}
 		out[name] = val
 	}
-	if err := validateSchema(d.ConfigSchema, out); err != nil {
+	if _, err := schema.Validate(d.ConfigSchema, out); err != nil {
 		// Schema-validation errors (enum/range) can echo the offending value, so
 		// scrub any secret values that reach the message.
 		msg := err.Error()
@@ -921,31 +922,11 @@ func coerceConfigValue(name, typ, raw string, secret bool) (any, error) {
 	}
 }
 
-// ValidateOutput checks output data against call.ResultSchema. No-op if unset.
-func (c *Action) ValidateOutput(output any) error {
-	return validateSchema(c.ResultSchema, output)
-}
-
-
-func validateSchema(s *schema.SchemaNode, data any) error {
-	if s == nil {
-		return nil
-	}
-	result, err := gojsonschema.Validate(
-		gojsonschema.NewGoLoader(s),
-		gojsonschema.NewGoLoader(data),
-	)
-	if err != nil {
-		return fmt.Errorf("schema validation error: %w", err)
-	}
-	if !result.Valid() {
-		msgs := make([]string, len(result.Errors()))
-		for i, e := range result.Errors() {
-			msgs[i] = e.String()
-		}
-		return fmt.Errorf("%s", strings.Join(msgs, "; "))
-	}
-	return nil
+// ValidateOutput checks output against call.ResultSchema and returns the
+// normalized value (undeclared properties dropped, defaults filled). Returns
+// output unchanged when ResultSchema is nil.
+func (c *Action) ValidateOutput(output any) (any, error) {
+	return schema.Validate(c.ResultSchema, output)
 }
 
 // v is the shared validator, configured to report JSON field names in errors.

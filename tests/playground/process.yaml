@@ -8,7 +8,7 @@ input_schema:
       type: string
       secret: true
     sleep:
-      type: number
+      type: integer
   required: [blob, sleep]
 
 tasks:
